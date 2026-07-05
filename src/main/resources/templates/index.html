@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hello World</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<div class="container">
+    <h1>Welcome to <span th:text="${title}">SCM</span></h1>
+
+    <p>This is a demo project about a classical Supply chain management workflow.</p>
+    <p>The goal is a simple and easy to understand implementation of a supply chain management workflow. The project is
+        based on Spring Boot, Thymeleaf, and Bootstrap.</p>
+
+    <h4>The roles:</h4>
+    <table class="summary-table w-50">
+        <tr>
+            <th class="w-25">Role</th>
+            <th>Description</th>
+        </tr>
+        <tr>
+            <td>Customer</td>
+            <td>Creates orders</td>
+        </tr>
+    </table>
+
+
+    Let's install some users
+    <p>
+        <a class="btn btn-success" th:href="@{/install}">Setup Users and cool products</a>
+    </p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+        integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+        crossorigin="anonymous"></script>
+</body>
+</html>

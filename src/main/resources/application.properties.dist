@@ -1,0 +1,29 @@
+### Performance Optimization - Faster Startup
+# JMX-Overhead vermeiden
+spring.jmx.enabled=false
+# Bis zu 200 Worker-Threads
+server.tomcat.threads.max=200
+# 10 permanente Threads
+server.tomcat.threads.min-spare=10
+# Virtual Threads (Java 21+)
+spring.threads.virtual.enabled=true
+# Show all auto-configuration classes (for debugging)
+debug=false
+application.timezone=Europe/Berlin
+
+# App Properties
+spring.application.name=Supply Chain Management
+app.name=${spring.application.name}
+app.version=1.0.0
+app.description=${app.name} demo project to show SCM processes
+
+# Database Properties
+spring.datasource.url=jdbc:mariadb://h3:3306/XXXXXXXXXXXXXX?serverVersion=11.8.6-MariaDB&charset=utf8mb4&useSSL=false&allowPublicKeyRetrieval=true
+spring.datasource.username=XXXXXXXXXXXXXXX
+spring.datasource.password=XXXXXXXXXXXXXXX
+
+# JPA Properties
+spring.jpa.database-platform=org.hibernate.dialect.MariaDBDialect
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+spring.jpa.properties.hibernate.format_sql=true
