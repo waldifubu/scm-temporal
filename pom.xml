@@ -61,6 +61,13 @@
             <scope>runtime</scope>
             <optional>true</optional>
         </dependency>
+        <!-- Source: https://mvnrepository.com/artifact/org.hibernate.orm/hibernate-community-dialects -->
+        <dependency>
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-community-dialects</artifactId>
+            <version>8.0.0.Alpha1</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>org.mariadb.jdbc</groupId>
             <artifactId>mariadb-java-client</artifactId>
@@ -104,6 +111,50 @@
             <artifactId>hibernate-validator</artifactId>
             <version>9.1.0.Final</version>
             <scope>compile</scope>
+        </dependency>
+
+        <!-- Source: https://mvnrepository.com/artifact/org.mapstruct/mapstruct -->
+        <dependency>
+            <groupId>org.mapstruct</groupId>
+            <artifactId>mapstruct</artifactId>
+            <version>1.7.0.Beta1</version>
+        </dependency>
+        <!-- Source: https://mvnrepository.com/artifact/org.projectlombok/lombok-mapstruct-binding -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok-mapstruct-binding</artifactId>
+            <version>0.2.0</version>
+            <scope>compile</scope>
+        </dependency>
+
+        <!-- Argon2PasswordEncoder needs BouncyCastle -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+            <version>1.84</version>
+        </dependency>
+
+        <!-- JWT stuff -->
+        <!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-api -->
+        <!-- Provides core JWT classes and interfaces, such as JwtBuilder, JwtParser, Claims, etc. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.13.0</version>
+        </dependency>
+        <!-- Contains the default implementation of the JJWT API, including the default JwtBuilder and JwtParser implementations. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.13.0</version>
+            <scope>runtime</scope>
+        </dependency>
+        <!-- Provides support for JSON processing using the Jackson library, allowing JJWT to serialize and deserialize JWTs in JSON format. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.13.0</version>
+            <scope>runtime</scope>
         </dependency>
     </dependencies>
 

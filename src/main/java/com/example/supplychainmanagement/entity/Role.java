@@ -1,6 +1,6 @@
 package com.example.supplychainmanagement.entity;
 
-import com.example.supplychainmanagement.entity.userTypes.User;
+import com.example.supplychainmanagement.entity.usertypes.User;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;

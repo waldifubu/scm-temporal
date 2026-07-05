@@ -1,4 +1,4 @@
-package com.example.supplychainmanagement.entity.userTypes;
+package com.example.supplychainmanagement.entity.usertypes;
 
 import com.example.supplychainmanagement.entity.Role;
 import com.fasterxml.jackson.annotation.JsonFormat;
@@ -40,11 +40,10 @@ public class User implements Serializable {
     @Column(nullable = false)
     private String lastName;
     @Email(message = "Email address seems not to be valid")
-    @Column(nullable = false,  unique = true)
+    @Column(nullable = false, unique = true)
     private String email;
-    @Column(nullable = false,   unique = true)
+    @Column(nullable = false, unique = true)
     private String username;
-    @JsonIgnore
     @Column(nullable = false)
     private String password;
     @Column(name = "user_type", insertable = false, updatable = false)
