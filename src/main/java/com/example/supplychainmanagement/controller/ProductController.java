@@ -38,7 +38,7 @@ public class ProductController {
         return productService.findByArticleNo(articleNo);
     }
 
-    @PostMapping
+    @PostMapping("/")
     public Mono<Product> createProduct(@RequestBody Product product) {
         return productService.create(product);
     }

@@ -8,14 +8,18 @@ DELETE FROM categories;
 DELETE FROM storehouses;
 DELETE FROM products;
 
+-- DELETE FROM components;
+-- DELETE FROM order_items;
+-- DELETE FROM orders;
+
 /* Roles */
-INSERT INTO roles (id,name) VALUES (1,'ROLE_CUSTOMER');
-INSERT INTO roles (id,name) VALUES (2,'ROLE_MANAGER');
-INSERT INTO roles (id,name) VALUES (3,'ROLE_SUPPLIER');
-INSERT INTO roles (id,name) VALUES (4,'ROLE_WAREHOUSE');
-INSERT INTO roles (id,name) VALUES (5,'ROLE_LOGISTICS');
-INSERT INTO roles (id,name) VALUES (6,'ROLE_DISTRIBUTOR');
-INSERT INTO roles (id,name) VALUES (7,'ROLE_ADMIN');
+INSERT INTO roles (id, rolename) VALUES (1,'ROLE_CUSTOMER');
+INSERT INTO roles (id, rolename) VALUES (2,'ROLE_MANAGER');
+INSERT INTO roles (id, rolename) VALUES (3,'ROLE_SUPPLIER');
+INSERT INTO roles (id, rolename) VALUES (4,'ROLE_WAREHOUSE');
+INSERT INTO roles (id, rolename) VALUES (5,'ROLE_LOGISTICS');
+INSERT INTO roles (id, rolename) VALUES (6,'ROLE_DISTRIBUTOR');
+INSERT INTO roles (id, rolename) VALUES (7,'ROLE_ADMIN');
 
 /* Categories */
 INSERT INTO categories (id, name) VALUES (1, 'Interieur');

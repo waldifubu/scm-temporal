@@ -4,6 +4,8 @@ import com.example.supplychainmanagement.entity.Role;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -42,7 +44,10 @@ public class User implements Serializable {
     private String email;
     @Column(nullable = false, unique = true)
     private String username;
+
+    @NotBlank
     @Column(nullable = false)
+    @Size(min = 6, message = "Password is too short")
     private String password;
     @Column(name = "user_type", insertable = false, updatable = false)
     private String userType;

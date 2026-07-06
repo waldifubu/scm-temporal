@@ -89,7 +89,7 @@ public class AuthServiceImpl implements AuthService {
             );
         }
 
-        var role = roleRepository.findByName(userRole.name()).orElseThrow(() -> new APIException(
+        var role = roleRepository.findByRolename(userRole).orElseThrow(() -> new APIException(
                 HttpStatus.BAD_REQUEST,
                 "Role not found in database!"
         ));
@@ -139,8 +139,7 @@ public class AuthServiceImpl implements AuthService {
     }
 
     private User saveWithUserType(User user) {
-        String persistedRoleName = user.getRoles().iterator().next().getName();
-        RoleEnum userRole = RoleEnum.fromNameOrLabel(persistedRoleName);
+        RoleEnum userRole = user.getRoles().iterator().next().getRolename();
 
         Class<? extends User> userTypeClass = USER_TYPE_CLASS_BY_ROLE.get(userRole);
         if (userTypeClass == null) {

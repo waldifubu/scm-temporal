@@ -2,7 +2,6 @@ package com.example.supplychainmanagement.security;
 
 
 import com.example.supplychainmanagement.entity.Role;
-import com.example.supplychainmanagement.model.enums.RoleEnum;
 import com.example.supplychainmanagement.repository.UserRepository;
 import lombok.AllArgsConstructor;
 import org.springframework.security.core.GrantedAuthority;
@@ -11,7 +10,6 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.Set;
@@ -24,9 +22,7 @@ public class CustomUserDetailsService implements UserDetailsService {
     private UserRepository userRepository;
 
     private static SimpleGrantedAuthority apply(Role role) {
-        RoleEnum roleEnum = RoleEnum.valueOfLabel(role.getName());
-        String authority = roleEnum != null ? roleEnum.name() : role.getName();
-        return new SimpleGrantedAuthority(authority);
+        return new SimpleGrantedAuthority(role.getRolename().name());
     }
 
     @Override
