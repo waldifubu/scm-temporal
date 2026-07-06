@@ -1,0 +1,153 @@
+{
+  "automaticBuild": true,
+  "roles": [
+    {
+      "id": 10,
+      "role": "customer",
+      "username": "customer1",
+      "firstname": "Cuddy",
+      "lastname": "Customer VW",
+      "email": "customer1@customer.com",
+      "password": "123456",
+      "color": "yellow"
+    },
+    {
+      "id": 11,
+      "role": "customer",
+      "username": "customer2",
+      "firstname": "Cuddy",
+      "lastname": "Customer Toyota",
+      "email": "customer2@customer.com",
+      "password": "123456",
+      "color": "#FFDC0F"
+    },
+    {
+      "id": 20,
+      "role": "manager",
+      "username": "manager1",
+      "firstname": "Manny",
+      "lastname": "Manager",
+      "email": "manager1@manager.com",
+      "password": "123456",
+      "color": "#64BE28"
+    },
+    {
+      "id": 21,
+      "role": "manager",
+      "username": "manager2",
+      "firstname": "Mandy",
+      "lastname": "Manager",
+      "email": "manager2@manager.com",
+      "password": "123456",
+      "color": "#35FF6B"
+    },
+    {
+      "id": 30,
+      "role": "supplier",
+      "username": "supplier1",
+      "firstname": "Samson",
+      "lastname": "Supplier",
+      "email": "supplier1@supplier.com",
+      "password": "123456",
+      "color": "#0DBEDC"
+    },
+    {
+      "id": 31,
+      "role": "supplier",
+      "username": "supplier2",
+      "firstname": "Susan",
+      "lastname": "Supplier",
+      "email": "supplier2@supplier.com",
+      "password": "123456",
+      "color": "#0F9BFF"
+    },
+    {
+      "id": 40,
+      "role": "warehouse",
+      "username": "warehouse1",
+      "firstname": "Walter",
+      "lastname": "Warehouse",
+      "email": "warehouse1@warehouse.com",
+      "password": "123456",
+      "color": "#9C27B0"
+    },
+    {
+      "id": 50,
+      "role": "logistics",
+      "username": "logistics1",
+      "firstname": "Luther",
+      "lastname": "Logistics",
+      "email": "logistics1@logistics.com",
+      "password": "123456",
+      "color": "#0D6EFD"
+    },
+    {
+      "id": 60,
+      "role": "distributor",
+      "username": "distributor1",
+      "firstname": "Daniel",
+      "lastname": "Distributor DHL",
+      "email": "distributor1@distributor.com",
+      "password": "123456",
+      "color": "#FA9600"
+    },
+    {
+      "id": 61,
+      "role": "distributor",
+      "username": "distributor2",
+      "firstname": "Dustin",
+      "lastname": "Distributor Nagel",
+      "email": "distributor2@distributor.com",
+      "password": "123456",
+      "color": "#FA96008F"
+    },
+    {
+      "id": 90,
+      "role": "admin",
+      "username": "admin1",
+      "firstname": "Anton",
+      "lastname": "Admin",
+      "email": "admin1@admin.com",
+      "password": "123456",
+      "color": "#C80019"
+    }
+  ],
+  "mappingSupplierToProduct": [
+    {
+      "productId": 1,
+      "supplierId": 30
+    },
+    {
+      "productId": 2,
+      "supplierId": 31
+    },
+    {
+      "productId": 3,
+      "supplierId": 30
+    },
+    {
+      "productId": 4,
+      "supplierId": 31
+    }
+  ],
+  "mappingDistributorToCustomer": [
+    {
+      "distributorId": 60,
+      "customerId": 1
+    },
+    {
+      "distributorId": 61,
+      "customerId": 2
+    }
+  ],
+  "weightToDistributor": [
+    {
+      "distributorId": 60,
+      "weight": 100
+    },
+    {
+      "distributorId": 61,
+      "weight": 2000
+    }
+  ]
+}

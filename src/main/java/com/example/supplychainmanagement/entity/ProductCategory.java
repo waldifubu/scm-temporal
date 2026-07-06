@@ -1,23 +1,22 @@
 package com.example.supplychainmanagement.entity;
 
-import com.example.supplychainmanagement.entity.users.User;
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.Set;
 
+@Entity
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
-@Entity
-@Table(name = "roles")
-public class Role {
+@Table(name = "categories")
+@JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "products"})
+public class ProductCategory {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -25,7 +24,9 @@ public class Role {
     @Column(nullable = false, unique = true)
     private String name;
 
-    @JsonIgnore
-    @ManyToMany(mappedBy = "roles")
-    private List<User> users =  new ArrayList<>();
+    @Column(length = 1000)
+    private String description;
+
+    @ManyToMany(mappedBy = "categories")
+    private Set<Product> products;
 }

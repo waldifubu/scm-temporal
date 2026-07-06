@@ -27,4 +27,5 @@ public class RegisterDto {
     private String password;
     @NotEmpty(message = "Role is required")
     private String role;
+    private String color;
 }

@@ -29,4 +29,18 @@ public enum RoleEnum {
         }
         return null;
     }
+
+    public static RoleEnum fromNameOrLabel(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        for (RoleEnum e : values()) {
+            if (e.name().equalsIgnoreCase(value) || e.label.equalsIgnoreCase(value)) {
+                return e;
+            }
+        }
+
+        return null;
+    }
 }

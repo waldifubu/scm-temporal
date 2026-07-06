@@ -1,12 +1,10 @@
-package com.example.supplychainmanagement.entity.usertypes;
+package com.example.supplychainmanagement.entity.users;
 
 import com.example.supplychainmanagement.entity.Role;
 import com.fasterxml.jackson.annotation.JsonFormat;
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Email;
 import lombok.*;
-import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.io.Serial;
@@ -50,12 +48,14 @@ public class User implements Serializable {
     private String userType;
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
     private LocalDateTime lastLogin;
-    @CreationTimestamp()
+    @Column(nullable = false, insertable = false, updatable = false, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
     private LocalDateTime createdAt;
     @UpdateTimestamp()
     private LocalDateTime updatedAt;
     @Column(nullable = false)
     private boolean isActive = true;
+
+    private String color;
 
     @ManyToMany(fetch = FetchType.LAZY)
     @JoinTable(

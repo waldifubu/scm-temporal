@@ -4,7 +4,7 @@ import com.example.supplychainmanagement.dto.auth.JwtAuthResponse;
 import com.example.supplychainmanagement.dto.auth.LoginDto;
 import com.example.supplychainmanagement.dto.auth.RegisterDto;
 import com.example.supplychainmanagement.entity.Role;
-import com.example.supplychainmanagement.entity.usertypes.*;
+import com.example.supplychainmanagement.entity.users.*;
 import com.example.supplychainmanagement.exception.APIException;
 import com.example.supplychainmanagement.model.enums.RoleEnum;
 import com.example.supplychainmanagement.repository.RoleRepository;
@@ -28,11 +28,22 @@ import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
+    private static final Map<RoleEnum, Class<? extends User>> USER_TYPE_CLASS_BY_ROLE = Map.of(
+            RoleEnum.ROLE_CUSTOMER, Customer.class,
+            RoleEnum.ROLE_MANAGER, Manager.class,
+            RoleEnum.ROLE_SUPPLIER, Supplier.class,
+            RoleEnum.ROLE_WAREHOUSE, Warehouse.class,
+            RoleEnum.ROLE_LOGISTICS, Logistics.class,
+            RoleEnum.ROLE_DISTRIBUTOR, Distributor.class,
+            RoleEnum.ROLE_ADMIN, Admin.class
+    );
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
@@ -64,13 +75,26 @@ public class AuthServiceImpl implements AuthService {
         user.setUsername(registerDto.getUsername());
         user.setEmail(registerDto.getEmail());
         user.setPassword(passwordEncoder.encode(registerDto.getPassword()));
+        if(registerDto.getColor() != null && !registerDto.getColor().isEmpty()){
+            user.setColor(registerDto.getColor());
+        }
 
         Set<Role> roles = new HashSet<>();
-        var userRole = roleRepository.findByName(registerDto.getRole()).orElseThrow(() -> new APIException(
+        var userRole = RoleEnum.fromNameOrLabel(registerDto.getRole());
+
+        if(null == userRole) {
+            throw new APIException(
+                    HttpStatus.BAD_REQUEST,
+                    "Invalid role!"
+            );
+        }
+
+        var role = roleRepository.findByName(userRole.name()).orElseThrow(() -> new APIException(
                 HttpStatus.BAD_REQUEST,
-                "Role not found!"
+                "Role not found in database!"
         ));
-        roles.add(userRole);
+
+        roles.add(role);
         user.setRoles(roles);
 
         return saveWithUserType(user);
@@ -116,45 +140,15 @@ public class AuthServiceImpl implements AuthService {
 
     private User saveWithUserType(User user) {
         String persistedRoleName = user.getRoles().iterator().next().getName();
-        RoleEnum userRole = RoleEnum.valueOfLabel(persistedRoleName);
+        RoleEnum userRole = RoleEnum.fromNameOrLabel(persistedRoleName);
 
-        switch (userRole) {
-            case ROLE_CUSTOMER -> {
-                Customer customer = new Customer();
-                BeanUtils.copyProperties(user, customer);
-                return userRepository.save(customer);
-            }
-            case ROLE_MANAGER -> {
-                Manager manager = new Manager();
-                BeanUtils.copyProperties(user, manager);
-                return userRepository.save(manager);
-            }
-            case ROLE_SUPPLIER -> {
-                Supplier supplier = new Supplier();
-                BeanUtils.copyProperties(user, supplier);
-                return userRepository.save(supplier);
-            }
-            case ROLE_WAREHOUSE -> {
-                Warehouse warehouse = new Warehouse();
-                BeanUtils.copyProperties(user, warehouse);
-                return userRepository.save(warehouse);
-            }
-            case ROLE_LOGISTICS -> {
-                Logistics logistics = new Logistics();
-                BeanUtils.copyProperties(user, logistics);
-                return userRepository.save(logistics);
-            }
-            case ROLE_DISTRIBUTOR -> {
-                Distributor distributor = new Distributor();
-                BeanUtils.copyProperties(user, distributor);
-                return userRepository.save(distributor);
-            }
-            case ROLE_ADMIN -> {
-                Admin admin = new Admin();
-                BeanUtils.copyProperties(user, admin);
-                return userRepository.save(admin);
-            }
-            default -> throw new IllegalStateException("Unexpected value: " + userRole);
+        Class<? extends User> userTypeClass = USER_TYPE_CLASS_BY_ROLE.get(userRole);
+        if (userTypeClass == null) {
+            throw new IllegalStateException("Unexpected value: " + userRole);
         }
+
+        User typedUser = BeanUtils.instantiateClass(userTypeClass);
+        BeanUtils.copyProperties(user, typedUser);
+        return userRepository.save(typedUser);
     }
 }

@@ -4,7 +4,7 @@ package com.example.supplychainmanagement.controller;
 import com.example.supplychainmanagement.dto.auth.JwtAuthResponse;
 import com.example.supplychainmanagement.dto.auth.LoginDto;
 import com.example.supplychainmanagement.dto.auth.RegisterDto;
-import com.example.supplychainmanagement.entity.usertypes.User;
+import com.example.supplychainmanagement.entity.users.User;
 import com.example.supplychainmanagement.security.AuthService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;

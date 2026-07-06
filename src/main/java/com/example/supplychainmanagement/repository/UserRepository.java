@@ -1,6 +1,6 @@
 package com.example.supplychainmanagement.repository;
 
-import com.example.supplychainmanagement.entity.usertypes.User;
+import com.example.supplychainmanagement.entity.users.User;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.Optional;
