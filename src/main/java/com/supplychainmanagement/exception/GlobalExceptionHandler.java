@@ -5,9 +5,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
@@ -19,7 +19,9 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 
-@RestControllerAdvice(annotations = RestController.class)
+// Deliberately unrestricted: errors delegated from the JwtAuthenticationFilter carry
+// no handler type, so an annotations-restricted advice would never match them.
+@RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(ResourceNotFoundException.class)
@@ -37,7 +39,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(APIException.class)
     public ResponseEntity<ErrorDetails> handleAPIException(APIException ex, WebRequest webRequest) {
         ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "API_ERROR");
-        return new ResponseEntity<>(errorDetails, HttpStatus.CONFLICT);
+        return new ResponseEntity<>(errorDetails, ex.getStatus());
     }
 
     @ExceptionHandler(UnsufficientException.class)
@@ -50,6 +52,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorDetails> handleAccountException(AccountException ex, WebRequest webRequest) {
         ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "ACCOUNT_NOT_FOUND");
         return new ResponseEntity<>(errorDetails, HttpStatus.NOT_FOUND);
+    }
+
+    @ExceptionHandler(BadCredentialsException.class)
+    public ResponseEntity<ErrorDetails> handleBadCredentials(BadCredentialsException ex, WebRequest webRequest) {
+        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "BAD_CREDENTIALS");
+        return new ResponseEntity<>(errorDetails, HttpStatus.UNAUTHORIZED);
     }
 
     @Override

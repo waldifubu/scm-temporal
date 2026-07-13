@@ -19,7 +19,7 @@ public class Component {
 
     @ManyToOne
     @JoinColumn(name = "product_id", nullable = false)
-    //@JsonIgnoreProperties("components")
+    //@JsonIgnoreProperties("components") //Product wíthout components will be displayed
     @JsonIgnore
     private Product product;
 

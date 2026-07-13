@@ -2,18 +2,12 @@ package com.supplychainmanagement.controller;
 
 
 import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.service.ProductService;
 import lombok.AllArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -31,12 +25,12 @@ public class ProductController {
     @PreAuthorize("hasAnyRole('ADMIN','CUSTOMER')")
     @GetMapping("/{id}")
     public Mono<Product> getProduct(@PathVariable Long id) {
-        return productService.findByArticleNo(id);
-        /*
-        return productService.findById(id)
-                .onErrorResume(ResourceNotFoundException.class, ignored -> productService.findByArticleNo(id));
-
-         */
+        try {
+            return productService.findById(id)
+                    .onErrorResume(ResourceNotFoundException.class, ignored -> productService.findByArticleNo(id));
+        } catch (APIException exception) {
+            return Mono.error(exception);
+        }
     }
 
     @GetMapping("/article/{articleNo}")
