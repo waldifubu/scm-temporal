@@ -10,6 +10,7 @@ import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -31,11 +32,26 @@ public class OrderServiceImpl implements OrderService {
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
+    private final RoleService roleService;
 
     @Override
     public Flux<Order> findAll() {
         return Mono.fromCallable(orderRepository::findAllBy)
                 .flatMapMany(Flux::fromIterable)
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Override
+    public Mono<Page<Order>> findAllByUser(org.springframework.security.core.userdetails.User authUser, Pageable pageable) {
+        if (roleService.isAdmin(authUser)) {
+            return findAll(pageable);
+        }
+
+        return Mono.fromCallable(() -> {
+                    var user = userRepository.findByEmail(authUser.getUsername())
+                            .orElseThrow(() -> new ResourceNotFoundException("User", "id", 0L));
+                    return orderRepository.findAllByCustomer(user, pageable);
+                })
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -47,9 +63,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public Flux<Order> findAllByStatus(OrderStatus orderStatus) {
-            return Mono.fromCallable(() -> orderRepository.findAllByStatus(orderStatus))
-                    .flatMapMany(Flux::fromIterable)
-                    .subscribeOn(Schedulers.boundedElastic());
+        return Mono.fromCallable(() -> orderRepository.findAllByStatus(orderStatus))
+                .flatMapMany(Flux::fromIterable)
+                .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override

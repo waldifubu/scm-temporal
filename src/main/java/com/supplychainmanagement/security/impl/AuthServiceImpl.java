@@ -26,6 +26,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Date;
@@ -54,9 +55,6 @@ public class AuthServiceImpl implements AuthService {
 
     @Value("${application.timezone:UTC}")
     private String applicationTimeZone;
-
-    @Value("${app.jwtCookieName}")
-    private String cookieName;
 
     @Override
     public User register(RegisterDto registerDto) {
@@ -107,7 +105,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public JwtAuthResponse login(LoginDto loginDto) {
-        userRepository.findByUsernameOrEmail(loginDto.getUsernameOrEmail(), loginDto.getUsernameOrEmail())
+        var dbUser = userRepository.findByUsernameOrEmail(loginDto.getUsernameOrEmail(), loginDto.getUsernameOrEmail())
                 .orElseThrow(() -> new APIException(
                         HttpStatus.BAD_REQUEST,
                         "Invalid username or email!"
@@ -135,11 +133,11 @@ public class AuthServiceImpl implements AuthService {
             );
         }
 
-        authentication.getAuthorities().forEach(authority -> System.out.println("Authority: " + authority.getAuthority()));
+//        authentication.getAuthorities().forEach(authority -> System.out.println("Authority: " + authority.getAuthority()));
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String token = jwtTokenProvider.generateToken(authentication);
-        System.out.println("Generated JWT Token: " + token);
+//        System.out.println("Generated JWT Token: " + token);
 
         Date expiresAt = jwtTokenProvider.getExpirationDate(token);
         ResponseCookie cookie = jwtTokenProvider.generateJwtCookie(token);
@@ -151,7 +149,16 @@ public class AuthServiceImpl implements AuthService {
 
         String role = authentication.getAuthorities().iterator().next().getAuthority();
         var detailsUser = (org.springframework.security.core.userdetails.User) authentication.getPrincipal();
+
+        assert detailsUser != null;
         String username = detailsUser.getUsername();
+
+        Long lastLogin = dbUser.getLastLogin() != null
+                ? dbUser.getLastLogin().atZone(zone).toInstant().toEpochMilli()
+                : null;
+
+        dbUser.setLastLogin(LocalDateTime.now());
+        userRepository.save(dbUser);
 
         return JwtAuthResponse.builder()
                 .tokenType("Bearer")
@@ -159,6 +166,7 @@ public class AuthServiceImpl implements AuthService {
                 .expiresAt(expiresAtZoned)
                 .expireAfterSeconds(expiresAt.getTime() / 1000)
                 .role(role)
+                .lastLogin(lastLogin)
                 .username(username)
                 .cookie(cookie.toString())
                 .build();
@@ -166,14 +174,7 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public JwtAuthResponse logout() {
-        var cookie = ResponseCookie.from(cookieName, "")
-                .httpOnly(true) // Prevent XSS
-                .secure(false)   // Send only over HTTPS
-                .path("/")      // Accessible across all paths
-                .maxAge(0) // Cookie expiration (seconds)
-                .sameSite("Lax") // CSRF protection
-                .build();
-
+        ResponseCookie cookie = jwtTokenProvider.removeJwtCookie();
         return JwtAuthResponse.builder().cookie(cookie.toString()).build();
     }
 

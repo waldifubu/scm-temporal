@@ -1,6 +1,7 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -15,10 +16,14 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findWithDetailsById(Long id);
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
-    List<Order> findAllBy();
+    Page<Order>  findAllByCustomer(User customer,  Pageable pageable);
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Page<Order> findAllBy(Pageable pageable);
+
+    // @TODO: Dangerous too use, because no limit
+    @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
+    List<Order> findAllBy();
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Optional<Order> findByOrderNo(Long orderNo);

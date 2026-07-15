@@ -1,5 +1,6 @@
 package com.supplychainmanagement.entity;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Positive;
@@ -31,4 +32,6 @@ public class OrderItem {
     @Positive(message = "Your amount must be positive")
     @Max(value = 10, message = "Your amount is above our limit")
     private Integer quantity;
+
+    private FulfillmentStatus fulfillmentStatus;
 }

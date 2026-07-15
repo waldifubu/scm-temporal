@@ -20,6 +20,7 @@ import java.util.Set;
 public class Product {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private Long id;
 
     @Column(nullable = false, unique = true)
@@ -51,7 +52,7 @@ public class Product {
             joinColumns = @JoinColumn(name = "product_id"),
             inverseJoinColumns = @JoinColumn(name = "category_id")
     )
-
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private Set<ProductCategory> categories;
 
     @JsonInclude(JsonInclude.Include.NON_NULL)

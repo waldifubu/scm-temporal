@@ -3,10 +3,11 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.exception.APIException;
-import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.ProductService;
 import lombok.AllArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -16,18 +17,32 @@ import reactor.core.publisher.Mono;
 @AllArgsConstructor
 public class ProductController {
     private final ProductService productService;
+    private final RoleService roleService;
 
     @GetMapping
     public Flux<Product> getProducts() {
         return productService.findAll();
     }
 
-    @PreAuthorize("hasAnyRole('ADMIN','CUSTOMER')")
-    @GetMapping("/{id}")
-    public Mono<Product> getProduct(@PathVariable Long id) {
+    @GetMapping("/{articleNo}")
+    @PreAuthorize("hasAnyRole('ADMIN','CUSTOMER','MANAGER')")
+    public Mono<Product> getProduct(@PathVariable Long articleNo,
+                                    @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         try {
+            /*
             return productService.findById(id)
                     .onErrorResume(ResourceNotFoundException.class, ignored -> productService.findByArticleNo(id));
+             */
+            boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
+            return productService.findByArticleNo(articleNo)
+                    .map(product -> {
+                        if (!isPrivilegedUser) {
+                            product.setCategories(null);
+                            product.setId(null);
+                            product.setComponents(null); // @JsonInclude(NON_NULL) drops the field from the JSON
+                        }
+                        return product;
+                    });
         } catch (APIException exception) {
             return Mono.error(exception);
         }

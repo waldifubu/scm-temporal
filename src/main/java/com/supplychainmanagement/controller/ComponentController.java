@@ -1,25 +1,20 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.component.ComponentResponseDto;
+import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
-import com.supplychainmanagement.dto.mapper.ComponentMapper;
-import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.service.ComponentService;
 import lombok.AllArgsConstructor;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @RestController
 @RequestMapping("/api/components")
 @AllArgsConstructor
+@PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
 public class ComponentController {
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;

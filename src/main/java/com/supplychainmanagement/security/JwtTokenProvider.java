@@ -30,8 +30,11 @@ public class JwtTokenProvider {
     @Value("${app.jwtExpirationMs}")
     private long jwtExpirationInMs;
 
-    @Value("${app.jwtCookieName}")
+    @Value("${app.cookie.name}")
     private String cookieName;
+
+    @Value("${app.cookie.secure}")
+    private boolean secure;
 
     public String generateToken(Authentication authentication) {
         String username = authentication.getName();
@@ -83,9 +86,19 @@ public class JwtTokenProvider {
     public ResponseCookie generateJwtCookie(String token) {
         return ResponseCookie.from(cookieName, token)
                 .httpOnly(true) // Prevent XSS
-                .secure(false)   // Send only over HTTPS
+                .secure(secure)   // Send only over HTTPS
                 .path("/")      // Accessible across all paths
                 .maxAge(jwtExpirationInMs / 1000) // Cookie expiration (seconds)
+                .sameSite("Lax") // CSRF protection
+                .build();
+    }
+
+    public ResponseCookie removeJwtCookie() {
+        return ResponseCookie.from(cookieName, "")
+                .httpOnly(true) // Prevent XSS
+                .secure(secure)   // Send only over HTTPS
+                .path("/")      // Accessible across all paths
+                .maxAge(0) // Cookie expiration (seconds)
                 .sameSite("Lax") // CSRF protection
                 .build();
     }

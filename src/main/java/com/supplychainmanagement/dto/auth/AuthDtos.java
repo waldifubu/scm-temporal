@@ -28,3 +28,5 @@ public final class AuthDtos {
             String fullName,
             List<String> roles) {}
 }
+
+// this.logger.debug(LogMessage.format("Logging out [%s]", auth));

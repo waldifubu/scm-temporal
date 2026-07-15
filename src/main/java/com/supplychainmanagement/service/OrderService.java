@@ -9,7 +9,10 @@ import reactor.core.publisher.Mono;
 
 public interface OrderService {
     Flux<Order> findAll();
+
     Mono<Page<Order>> findAll(Pageable pageable);
+
+    Mono<Page<Order>> findAllByUser(org.springframework.security.core.userdetails.User authUser, Pageable pageable);
 
     Flux<Order> findAllByStatus(OrderStatus orderStatus);
 

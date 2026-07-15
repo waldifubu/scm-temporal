@@ -9,6 +9,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.security.AuthService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -45,11 +46,8 @@ public class AuthApiController {
             JwtAuthResponse response = authService.login(loginDto);
 
 //            eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
-
-            //return new ResponseEntity<>(response, HttpStatus.OK);
-            // Return cookie in response
             return ResponseEntity.ok()
-                    .header("Set-Cookie", response.getCookie())
+                    .header(HttpHeaders.SET_COOKIE, response.getCookie())
                     .body(response);
         } catch (APIException apiException) {
             Map<String, String> response = new HashMap<>();
@@ -61,10 +59,12 @@ public class AuthApiController {
     @GetMapping("/logout")
     public ResponseEntity<?> logout() {
         try {
-            var response = authService.logout();
+            var logoutResult = authService.logout();
+            Map<String, String> response = new HashMap<>();
+            response.put("message", "Logout successful");
             return ResponseEntity.ok()
-                    .header("Set-Cookie", response.getCookie())
-                    .body("Logout successful");
+                    .header(HttpHeaders.SET_COOKIE, logoutResult.getCookie())
+                    .body(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
         }
