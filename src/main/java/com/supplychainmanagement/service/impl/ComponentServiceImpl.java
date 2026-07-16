@@ -15,6 +15,8 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.UUID;
+
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -37,15 +39,15 @@ public class ComponentServiceImpl implements ComponentService {
     }
 
     @Override
-    public Mono<Component> findBySku(String sku) {
+    public Mono<Component> findBySku(UUID sku) {
         return Mono.fromCallable(() -> componentRepository.findBySku(sku)
-                        .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with sku: " + sku)))
+                        .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with sku: " + sku.toString())))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Override
     public Mono<Component> findByArticleNo(String articleNo) {
-        return Mono.fromCallable(() -> componentRepository.findByArticleNo(articleNo)
+        return Mono.fromCallable(() -> componentRepository.findByExternalId(articleNo)
                         .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with articleNo: " + articleNo)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -72,7 +74,7 @@ public class ComponentServiceImpl implements ComponentService {
                     existingComponent.setManufacturer(component.getManufacturer());
                     existingComponent.setName(component.getName());
                     existingComponent.setSku(component.getSku());
-                    existingComponent.setArticleNo(component.getArticleNo());
+                    existingComponent.setExternalId(component.getExternalId());
                     existingComponent.setProduct(component.getProduct());
                     bindProduct(existingComponent);
 
@@ -101,9 +103,9 @@ public class ComponentServiceImpl implements ComponentService {
             throw new APIException(HttpStatus.CONFLICT, "SKU already exists!");
         }
 
-        if (component.getArticleNo() != null
-                && componentRepository.existsByArticleNo(component.getArticleNo())
-                && (existingComponent == null || !component.getArticleNo().equals(existingComponent.getArticleNo()))) {
+        if (component.getExternalId() != null
+                && componentRepository.existsByExternalId(component.getExternalId())
+                && (existingComponent == null || !component.getExternalId().equals(existingComponent.getExternalId()))) {
             throw new APIException(HttpStatus.CONFLICT, "Article number already exists!");
         }
     }

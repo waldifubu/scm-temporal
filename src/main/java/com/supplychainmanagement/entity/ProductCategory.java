@@ -16,7 +16,7 @@ import java.util.Set;
 @NoArgsConstructor
 @AllArgsConstructor
 @Table(name = "categories")
-@JsonIgnoreProperties({"hibernateLazyInitializer", "handler", "products"})
+@JsonIgnoreProperties({"products"})
 public class ProductCategory {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

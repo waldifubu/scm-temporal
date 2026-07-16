@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import java.util.UUID;
+
 @RestController
 @RequestMapping("/api/components")
 @AllArgsConstructor
@@ -24,14 +26,16 @@ public class ComponentController {
         return componentService.findAll().map(componentMapper::mapToDto);
     }
 
+    /*
     @GetMapping("/{id}")
     public Mono<ComponentResponseDto> getComponent(@PathVariable Long id) {
         return componentService.findById(id).map(componentMapper::mapToDto)
                 .onErrorResume(ResourceNotFoundException.class, Mono::error);
     }
+     */
 
     @GetMapping("/sku/{sku}")
-    public Mono<ComponentResponseDto> getComponentBySku(@PathVariable String sku) {
+    public Mono<ComponentResponseDto> getComponentBySku(@PathVariable UUID sku) {
         return componentService.findBySku(sku).map(componentMapper::mapToDto);
     }
 

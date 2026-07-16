@@ -49,6 +49,22 @@ public class OrderController {
         return orderService.findAllByStatus(status).map(this::toSummaryDto);
     }
 
+    @PostMapping("/{orderNo}/reject")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    public Mono<OrderSummaryDto> rejectOrder(@PathVariable Long orderNo) {
+        var order = orderService.findByOrderNo(orderNo);
+
+        return  order
+                .map(this::toSummaryDto);
+    }
+
+    /*
+    OrderApprovedEvent
+    OrderPickedEvent
+    OrderShippedEvent
+    OrderDeliveredEvent
+     */
+
 
 /*
     @GetMapping("/{id}")

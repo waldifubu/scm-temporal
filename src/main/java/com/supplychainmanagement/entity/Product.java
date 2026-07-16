@@ -5,6 +5,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnDefault;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
@@ -12,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 
 @Entity
 @Table(name = "products")
@@ -37,14 +39,14 @@ public class Product {
     private LocalDateTime createdAt;
 
     @UpdateTimestamp()
-    @Column(nullable = true, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    @Column(nullable = true, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     private LocalDateTime updatedAt;
 
     @Column(columnDefinition = "double default 19.99", nullable = false)
     private BigDecimal unitPrice = BigDecimal.ZERO;
 
     @Column(nullable = false)
-    private double weight;
+    private Double weight;
 
     @ManyToMany
     @JoinTable(
@@ -59,8 +61,16 @@ public class Product {
     @OneToMany(mappedBy = "product", fetch = FetchType.LAZY, orphanRemoval = true, cascade = CascadeType.ALL)
     private List<Component> components;
 
-    public Product() {
+    private UUID sku;
+
+    @ColumnDefault("true")
+    private boolean active = true;
+
+    @PrePersist
+    void applyDefaultStatus() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
+        weight = components.stream().mapToDouble(Component::getWeight).sum();
+        active = true;
     }
 }

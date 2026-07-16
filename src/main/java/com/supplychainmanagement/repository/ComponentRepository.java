@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface ComponentRepository extends JpaRepository<Component, Long> {
     @EntityGraph(attributePaths = "product")
@@ -14,11 +15,11 @@ public interface ComponentRepository extends JpaRepository<Component, Long> {
     @EntityGraph(attributePaths = "product")
     List<Component> findAllBy();
 
-    Optional<Component> findBySku(String sku);
+    Optional<Component> findBySku(UUID sku);
 
-    Optional<Component> findByArticleNo(String articleNo);
+    Optional<Component> findByExternalId(String articleNo);
 
-    boolean existsBySku(String sku);
+    boolean existsBySku(UUID sku);
 
-    boolean existsByArticleNo(String articleNo);
+    boolean existsByExternalId(String articleNo);
 }
