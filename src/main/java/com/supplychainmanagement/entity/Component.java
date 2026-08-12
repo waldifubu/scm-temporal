@@ -30,6 +30,8 @@ public class Component {
 
     private String name;
 
+    private String articleNo;
+
     private String description;
 
     @ColumnDefault("0.0")

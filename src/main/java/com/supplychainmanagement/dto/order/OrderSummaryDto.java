@@ -4,7 +4,7 @@ import com.supplychainmanagement.model.enums.OrderStatus;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.math.BigDecimal;
-import java.sql.Date;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 public record OrderSummaryDto(
@@ -12,7 +12,7 @@ public record OrderSummaryDto(
         Integer amountOfProducts,
         BigDecimal totalPrice,
         @JsonFormat(pattern = "yyyy-MM-dd")
-        Date dueDate,
+        LocalDate dueDate,
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
         LocalDateTime createdDate,
         OrderStatus status

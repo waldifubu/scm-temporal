@@ -26,12 +26,12 @@ public class RoleServiceImpl implements RoleService {
     @Override
     public boolean isAdmin(User authUser) {
         return authUser.getAuthorities().stream()
-                .anyMatch(authority -> Objects.equals(authority.getAuthority(), RoleEnum.ROLE_ADMIN.name()));
+                .anyMatch(authority -> Objects.equals(authority.getAuthority(), RoleEnum.ADMIN.name()));
     }
 
     @Override
     public boolean isPrivilegedUser(User authUser) {
-        Set<String> privilegedRoles = Set.of(RoleEnum.ROLE_ADMIN.name(), RoleEnum.ROLE_MANAGER.name());
+        Set<String> privilegedRoles = Set.of(RoleEnum.ADMIN.name(), RoleEnum.MANAGER.name());
         return authUser.getAuthorities().stream()
                 .anyMatch(authority -> privilegedRoles.contains(authority.getAuthority()));
     }
@@ -39,7 +39,7 @@ public class RoleServiceImpl implements RoleService {
     @Override
     public void convertToAdmin(com.supplychainmanagement.entity.users.User user) {
         Set<Role> roles = user.getRoles();
-        var adminRole = roleRepository.findByRolename(RoleEnum.ROLE_ADMIN).orElseThrow(() -> new APIException(
+        var adminRole = roleRepository.findByRolename(RoleEnum.ADMIN).orElseThrow(() -> new APIException(
                 HttpStatus.BAD_REQUEST,
                 "Role not found in database!"
         ));

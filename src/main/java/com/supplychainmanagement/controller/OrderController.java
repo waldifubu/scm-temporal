@@ -5,8 +5,8 @@ import com.supplychainmanagement.dto.order.OrderSummaryDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.model.enums.OrderStatus;
-import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.OrderService;
+import com.supplychainmanagement.service.RoleService;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -14,12 +14,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @RestController
-@RequestMapping("/api/orders")
+@RequestMapping({"/api/{version}/orders"})
 @AllArgsConstructor
 public class OrderController {
     private final OrderService orderService;
@@ -32,17 +33,16 @@ public class OrderController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order,
-            @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
+            @AuthenticationPrincipal User authUser) {
         Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
         var orders = orderService.findAllByUser(authUser, pageable);
 
-        return orders
-                .map(this::toSummaryPage);
+        return orders.map(this::toSummaryPage);
     }
 
     @GetMapping("/new")
-    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public Flux<OrderSummaryDto> getAllOrdersByStatus(
             @RequestParam(defaultValue = "CREATED") OrderStatus status
     ) {
@@ -50,11 +50,11 @@ public class OrderController {
     }
 
     @PostMapping("/{orderNo}/reject")
-    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public Mono<OrderSummaryDto> rejectOrder(@PathVariable Long orderNo) {
         var order = orderService.findByOrderNo(orderNo);
 
-        return  order
+        return order
                 .map(this::toSummaryDto);
     }
 
@@ -80,9 +80,10 @@ public class OrderController {
     }
 
     @PostMapping("")
-    @PreAuthorize("hasAnyRole('ADMIN','MANAGER','CUSTOMER')")
-    public Mono<OrderSummaryDto> createOrder(@RequestBody Order order) {
-        return orderService.create(order).map(this::toSummaryDto);
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
+    public Mono<OrderSummaryDto> createOrder(@RequestBody Order order,
+                                             @AuthenticationPrincipal User authUser) {
+        return orderService.create(order, authUser).map(this::toSummaryDto);
     }
 
     /*

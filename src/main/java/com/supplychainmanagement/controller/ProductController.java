@@ -13,7 +13,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @RestController
-@RequestMapping("/api/products")
+@RequestMapping({"/api/{version}/products"})
 @AllArgsConstructor
 public class ProductController {
     private final ProductService productService;
@@ -24,8 +24,8 @@ public class ProductController {
         return productService.findAll();
     }
 
-    @GetMapping("/{articleNo}")
-    @PreAuthorize("hasAnyRole('ADMIN','CUSTOMER','MANAGER')")
+    @GetMapping(value = "/{articleNo}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER')")
     public Mono<Product> getProduct(@PathVariable Long articleNo,
                                     @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         try {
@@ -35,22 +35,28 @@ public class ProductController {
              */
             boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
             return productService.findByArticleNo(articleNo)
-                    .map(product -> {
-                        if (!isPrivilegedUser) {
-                            product.setCategories(null);
-                            product.setId(null);
-                            product.setComponents(null); // @JsonInclude(NON_NULL) drops the field from the JSON
-                        }
-                        return product;
-                    });
+                    .map(product -> showProducts(product, isPrivilegedUser));
         } catch (APIException exception) {
             return Mono.error(exception);
         }
     }
 
-    @GetMapping("/article/{articleNo}")
-    public Mono<Product> getProductByArticleNo(@PathVariable long articleNo) {
-        return productService.findByArticleNo(articleNo);
+    @GetMapping(value = "/article/{articleNo}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER')")
+    public Mono<Product> getProductByArticleNo(@PathVariable long articleNo,
+                                               @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
+        boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
+        return productService.findByArticleNo(articleNo)
+                .map(product -> showProducts(product, isPrivilegedUser));
+    }
+
+    private Product showProducts(Product product, boolean isPrivilegedUser) {
+        if (!isPrivilegedUser) {
+            product.setCategories(null);
+            product.setId(null);
+            product.setComponents(null); // @JsonInclude(NON_NULL) drops the fields from the JSON
+        }
+        return product;
     }
 
     @PostMapping("")

@@ -1,6 +1,6 @@
 {
   "automaticBuild": true,
-  "roles": [
+  "users": [
     {
       "id": 10,
       "role": "customer",

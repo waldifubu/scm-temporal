@@ -26,7 +26,7 @@ public class Product {
     private Long id;
 
     @Column(nullable = false, unique = true)
-    private long articleNo;
+    private Long articleNo;
 
     @Column(nullable = false)
     private String name;

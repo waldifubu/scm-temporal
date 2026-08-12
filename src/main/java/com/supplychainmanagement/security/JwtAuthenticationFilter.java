@@ -10,6 +10,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.jspecify.annotations.NonNull;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -27,6 +28,7 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 import java.util.Arrays;
+import java.util.regex.Pattern;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
@@ -36,6 +38,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private final UserDetailsService userDetailsService; // You can use this to load user details based on the token
 
     private final HandlerExceptionResolver handlerExceptionResolver;
+
+    private static final Pattern PUBLIC_API_PATTERN = Pattern.compile("^/api/(?:v?[0-9\\.]+/)?auth(/.*)?$");
 
     @Value("${app.cookie.name}")
     private String cookieName;
@@ -79,18 +83,19 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String path = request.getRequestURI();
         return !path.startsWith("/api/")
                 || path.startsWith("/api/auth/")
+                || PUBLIC_API_PATTERN.matcher(path).matches()
                 || "OPTIONS".equalsIgnoreCase(request.getMethod());
     }
 
     @Override
     protected void doFilterInternal(
-            HttpServletRequest request,
-            HttpServletResponse response,
-            FilterChain filterChain
+            @NonNull HttpServletRequest request,
+            @NonNull HttpServletResponse response,
+            @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
         String token = getTokenFromCookie(request);
         if (token == null) {
-            token = getTokenFromRequest(request);
+            token = getTokenFromRequestHeader(request);
         }
 
         try {
@@ -158,7 +163,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         return token;
     }
 
-    public String getTokenFromRequest(HttpServletRequest request) {
+    public String getTokenFromRequestHeader(HttpServletRequest request) {
         // Get the JWT token from the request header
         String authorizationHeader = request.getHeader("Authorization");
 

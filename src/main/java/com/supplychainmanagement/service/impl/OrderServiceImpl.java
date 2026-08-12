@@ -7,11 +7,12 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
-import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.OrderService;
+import com.supplychainmanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -24,6 +25,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -84,7 +86,21 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public Mono<Order> create(Order order) {
+    public Mono<Order> create(Order order, org.springframework.security.core.userdetails.User user) {
+        var dbUser = userRepository.findByEmail(user.getUsername())
+                .orElseThrow(() -> new ResourceNotFoundException("User", user.getUsername(), 0L));
+
+        if (roleService.isPrivilegedUser(user)) {
+            order.setCustomer(order.getCustomer());
+        } else {
+            user.getAuthorities().stream()
+                    .filter(auth -> Objects.equals(auth.getAuthority(), RoleEnum.CUSTOMER.name()))
+                    .findFirst()
+                    .orElseThrow(() -> new APIException(HttpStatus.FORBIDDEN, "Only customers can create orders!"));
+
+            order.setCustomer(dbUser);
+        }
+
         return Mono.fromCallable(() -> {
                     order.setOrderNo(randomOrderNo());
                     validateOrderNo(order.getOrderNo(), null);
@@ -93,8 +109,9 @@ public class OrderServiceImpl implements OrderService {
                     recalculateOrder(order);
                     Order savedOrder = orderRepository.save(order);
 
-                    return orderRepository.findWithDetailsById(savedOrder.getId())
-                            .orElseThrow(() -> new ResourceNotFoundException("Order", "id", savedOrder.getId()));
+                    long createdId = savedOrder.getId();
+                    return orderRepository.findWithDetailsById(createdId)
+                            .orElseThrow(() -> new ResourceNotFoundException("Order", "id", createdId));
                 })
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -180,14 +197,14 @@ public class OrderServiceImpl implements OrderService {
         for (OrderItem orderItem : orderItems) {
             orderItem.setOrder(order);
             Product product = orderItem.getProduct();
-            if (product == null || product.getId() == null) {
+            if (product == null || product.getArticleNo() == null) {
                 throw new APIException(HttpStatus.BAD_REQUEST, "Product is required for each order item!");
             }
 
-            Product persistedProduct = productRepository.findById(product.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Product", "id", product.getId()));
-            Product fullyLoadedProduct = productRepository.findWithComponentsById(persistedProduct.getId())
-                    .orElseThrow(() -> new ResourceNotFoundException("Product", "id", persistedProduct.getId()));
+//            Product persistedProduct = productRepository.findByArticleNo(product.getArticleNo())
+//                    .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", product.getArticleNo()));
+            Product fullyLoadedProduct = productRepository.findWithComponentsByArticleNo(product.getArticleNo())
+                    .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", product.getArticleNo()));
             orderItem.setProduct(fullyLoadedProduct);
         }
     }

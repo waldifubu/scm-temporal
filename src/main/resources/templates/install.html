@@ -17,12 +17,15 @@
     <p>Installation of users and products is done.</p>
 
     <ul>
-    <li><p th:if="${runscript}" th:text="'Script ran successfully.'"></p></li>
-    <li><p th:unless="${runscript}" th:text="'Script did not run.'"></p></li>
+        <li>
+            <p th:if="${runscript}">SQL Script ran successfully.</p>
+            <p th:unless="${runscript}">SQL Script did not run.</p>
+        </li>
 
-    <li>
-        Created users and products successfully. Number of users: <span th:text="${createdUsers}">SCM</span> is ready to use.
-    </li>
+        <li>
+            Created users and products successfully. Number of users: <span th:text="${createdUsers}">SCM</span> is
+            ready to use.
+        </li>
     </ul>
 
     <p th:if="${message}" th:text="${message}"></p>

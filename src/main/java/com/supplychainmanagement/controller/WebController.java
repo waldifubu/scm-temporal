@@ -62,34 +62,34 @@ public class WebController {
         try (var configInputStream = new ClassPathResource("configuration.json").getInputStream()) {
             root = objectMapper.readTree(configInputStream);
         }
-        JsonNode roles = root.path("roles");
-        if (!roles.isArray()) {
-            throw new IllegalStateException("configuration.json: 'roles' must be an array.");
+        JsonNode users = root.path("users");
+        if (!users.isArray()) {
+            throw new IllegalStateException("configuration.json: 'users' must be an array.");
         }
 
         int createdUsers = 0;
-        for (JsonNode roleEntry : roles) {
-            String username = roleEntry.path("username").asText();
-            String email = roleEntry.path("email").asText();
+        for (JsonNode userEntry : users) {
+            String username = userEntry.path("username").asText();
+            String email = userEntry.path("email").asText();
 
             if (username.isBlank() || email.isBlank() || userRepository.existsByUsername(username) || userRepository.existsByEmail(email)) {
                 continue;
             }
 
-            String roleLabel = roleEntry.path("role").asText();
-            RoleEnum roleEnum = RoleEnum.valueOfLabel(roleLabel.toLowerCase(Locale.ROOT));
+            String roleLabel = userEntry.path("role").asText();
+            RoleEnum roleEnum = RoleEnum.valueOfLabel(roleLabel.toUpperCase(Locale.ROOT));
             if (roleEnum == null) {
                 throw new IllegalArgumentException("Unknown role in configuration.json: " + roleLabel);
             }
 
             RegisterDto registerDto = new RegisterDto();
-            registerDto.setFirstname(roleEntry.path("firstname").asText());
-            registerDto.setLastname(roleEntry.path("lastname").asText());
+            registerDto.setFirstname(userEntry.path("firstname").asText());
+            registerDto.setLastname(userEntry.path("lastname").asText());
             registerDto.setUsername(username);
             registerDto.setEmail(email);
-            registerDto.setPassword(roleEntry.path("password").asText());
-            registerDto.setRole(roleEnum.label);
-            registerDto.setColor(roleEntry.path("color").asText());
+            registerDto.setPassword(userEntry.path("password").asText());
+            registerDto.setRole(roleEnum.name());
+            registerDto.setColor(userEntry.path("color").asText());
 
             authService.register(registerDto);
             createdUsers++;

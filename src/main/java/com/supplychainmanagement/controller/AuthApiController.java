@@ -18,7 +18,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping({"/api/{version}/auth", "/api/auth"})
 @AllArgsConstructor
 public class AuthApiController {
 
@@ -39,15 +39,28 @@ public class AuthApiController {
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
-    @PostMapping("/login")
+    @PostMapping(value = "/login", version = "1.0")
+    @Deprecated
     public ResponseEntity<?> login(@RequestBody LoginDto loginDto) {
-
         try {
             JwtAuthResponse response = authService.login(loginDto);
 
 //            eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
             return ResponseEntity.ok()
                     .header(HttpHeaders.SET_COOKIE, response.getCookie())
+                    .body(response);
+        } catch (APIException apiException) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", apiException.getMessage());
+            return ResponseEntity.badRequest().body(response);
+        }
+    }
+
+    @PostMapping(value = "/login", version = "2.0")
+    public ResponseEntity<?> login20(@RequestBody LoginDto loginDto) {
+        try {
+            String response = "2.0 login successful for user: " + loginDto.getUsernameOrEmail();
+            return ResponseEntity.ok()
                     .body(response);
         } catch (APIException apiException) {
             Map<String, String> response = new HashMap<>();

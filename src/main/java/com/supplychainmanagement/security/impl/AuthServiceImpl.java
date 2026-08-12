@@ -29,22 +29,19 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
-import java.util.Date;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
     private static final Map<RoleEnum, Class<? extends User>> USER_TYPE_CLASS_BY_ROLE = Map.of(
-            RoleEnum.ROLE_CUSTOMER, Customer.class,
-            RoleEnum.ROLE_MANAGER, Manager.class,
-            RoleEnum.ROLE_SUPPLIER, Supplier.class,
-            RoleEnum.ROLE_WAREHOUSE, Warehouse.class,
-            RoleEnum.ROLE_LOGISTICS, Logistics.class,
-            RoleEnum.ROLE_DISTRIBUTOR, Distributor.class,
-            RoleEnum.ROLE_ADMIN, Admin.class
+            RoleEnum.CUSTOMER, Customer.class,
+            RoleEnum.MANAGER, Manager.class,
+            RoleEnum.SUPPLIER, Supplier.class,
+            RoleEnum.WAREHOUSE, Warehouse.class,
+            RoleEnum.LOGISTICS, Logistics.class,
+            RoleEnum.DISTRIBUTOR, Distributor.class,
+            RoleEnum.ADMIN, Admin.class
     );
 
     private final UserRepository userRepository;
@@ -83,7 +80,7 @@ public class AuthServiceImpl implements AuthService {
         }
 
         Set<Role> roles = new HashSet<>();
-        var userRole = RoleEnum.fromNameOrLabel(registerDto.getRole());
+        var userRole = RoleEnum.valueOfLabel(registerDto.getRole());
 
         if (null == userRole) {
             throw new APIException(
@@ -133,7 +130,7 @@ public class AuthServiceImpl implements AuthService {
             );
         }
 
-//        authentication.getAuthorities().forEach(authority -> System.out.println("Authority: " + authority.getAuthority()));
+        authentication.getAuthorities().forEach(authority -> System.out.println("Authority: " + authority.getAuthority()));
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String token = jwtTokenProvider.generateToken(authentication);
@@ -147,7 +144,7 @@ public class AuthServiceImpl implements AuthService {
         ZonedDateTime expiresAtZoned = expiresAtInstant.atZone(zone);
         System.out.println("Token expires at: " + expiresAtZoned);
 
-        String role = authentication.getAuthorities().iterator().next().getAuthority();
+        String role = authentication.getAuthorities().iterator().next().getAuthority().toString().toLowerCase(Locale.ROOT);
         var detailsUser = (org.springframework.security.core.userdetails.User) authentication.getPrincipal();
 
         assert detailsUser != null;
