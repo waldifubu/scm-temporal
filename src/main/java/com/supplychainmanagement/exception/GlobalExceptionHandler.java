@@ -1,5 +1,6 @@
 package com.supplychainmanagement.exception;
 
+import org.jspecify.annotations.NonNull;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -71,16 +72,16 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     @Override
-    protected ResponseEntity<Object> handleHttpMessageNotReadable(HttpMessageNotReadableException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request) {
+    protected ResponseEntity<Object> handleHttpMessageNotReadable(HttpMessageNotReadableException ex, @NonNull HttpHeaders headers, @NonNull HttpStatusCode status, @NonNull WebRequest request) {
         String message = ex.getMessage();
 
         if (ex.getCause() instanceof InvalidFormatException ifx
                 && ifx.getTargetType() != null && ifx.getTargetType().isEnum() && !ifx.getPath().isEmpty()) {
             message = String.format("Invalid enum value: '%s' for the field: '%s'. The value must be one of: %s.",
-                    ifx.getValue(), ifx.getPath().get(ifx.getPath().size() - 1).getPropertyName(), Arrays.toString(ifx.getTargetType().getEnumConstants()));
+                    ifx.getValue(), ifx.getPath().getLast().getPropertyName(), Arrays.toString(ifx.getTargetType().getEnumConstants()));
         }
 
-        ErrorDetails errorDetails = buildErrorDetails(message, request, "NOT_READABLE_EXCEPTION");
+        ErrorDetails errorDetails = buildPocessedErrorDetails(message, request, "NOT_READABLE_EXCEPTION");
         return new ResponseEntity<>(errorDetails, HttpStatus.BAD_REQUEST);
     }
 
@@ -93,10 +94,10 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 
     public ErrorDetails buildErrorDetails(Exception ex, WebRequest webRequest, String errorCode) {
-        return buildErrorDetails(ex.getMessage(), webRequest, errorCode);
+        return buildPocessedErrorDetails(ex.getMessage(), webRequest, errorCode);
     }
 
-    public ErrorDetails buildErrorDetails(String rawMessage, WebRequest webRequest, String errorCode) {
+    public ErrorDetails buildPocessedErrorDetails(String rawMessage, WebRequest webRequest, String errorCode) {
         String route = HtmlUtils.htmlEscape(webRequest.getDescription(false).replace("uri=", ""));
         String message = HtmlUtils.htmlEscape(rawMessage != null ? rawMessage : "");
         logger.error("Handling Exception: Route: " + route + " | Message: " + message);

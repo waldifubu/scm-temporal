@@ -1,6 +1,5 @@
 package com.supplychainmanagement.entity;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import jakarta.persistence.*;
 import lombok.Getter;
@@ -14,7 +13,7 @@ import java.util.UUID;
 @Getter
 @Setter
 @Entity
-@Table(name = "stocks",
+@Table(name = "stock",
         uniqueConstraints = {
                 @UniqueConstraint(
                         name = "uq_stock_storehouse_sku",
@@ -49,6 +48,7 @@ public class Stock {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt = LocalDateTime.now();
 
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(
             name = "storehouse_id",

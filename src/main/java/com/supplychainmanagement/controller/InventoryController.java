@@ -11,7 +11,7 @@ import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping("/api/inventory")
+@RequestMapping({"/api/{version}/inventory"})
 public class InventoryController {
 
     private final InventoryService inventoryService;
@@ -42,6 +42,14 @@ public class InventoryController {
     public ResponseEntity<Void> release(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
 
         inventoryService.releaseWithRetry(orderId, items);
+
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping("/orders/{orderId}/consume")
+    public ResponseEntity<Void> consume(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
+
+        inventoryService.consumeWithRetry(orderId, items);
 
         return ResponseEntity.ok().build();
     }

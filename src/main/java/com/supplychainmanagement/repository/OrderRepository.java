@@ -31,5 +31,5 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     boolean existsByOrderNo(Long orderNo);
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
-    List<Order> findAllByStatus(OrderStatus orderStatus);
+    Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 }

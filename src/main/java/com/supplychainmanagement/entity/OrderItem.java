@@ -31,7 +31,9 @@ public class OrderItem {
     @Column(name = "quantity", nullable = false)
     @Positive(message = "Your amount must be positive")
     @Max(value = 10, message = "Your amount is above our limit")
+    @Positive
     private Integer quantity;
 
+    @Enumerated(EnumType.STRING)
     private FulfillmentStatus fulfillmentStatus;
 }

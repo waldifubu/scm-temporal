@@ -62,10 +62,17 @@ public class User implements Serializable {
 
     private String color;
 
-    @ManyToMany(fetch = FetchType.LAZY)
+    @ManyToMany(fetch = FetchType.LAZY, cascade = {CascadeType.PERSIST, CascadeType.MERGE})
     @JoinTable(
             name = "users_roles",
             joinColumns = {@JoinColumn(name = "user_id", referencedColumnName = "id")},
             inverseJoinColumns = {@JoinColumn(name = "role_id", referencedColumnName = "id")})
     private Set<Role> roles;
+
+    @PreRemove
+    private void clearRolesBeforeDelete() {
+        if (roles != null) {
+            roles.clear();
+        }
+    }
 }

@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/components")
+@RequestMapping({"/api/{version}/components"})
 @AllArgsConstructor
 @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
 public class ComponentController {

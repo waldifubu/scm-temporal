@@ -2,7 +2,7 @@ package com.supplychainmanagement.entity;
 
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.NotNull;
+import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -13,10 +13,8 @@ import java.util.UUID;
 @Entity
 @Getter
 @Setter
-//@AllArgsConstructor
-//@RequiredArgsConstructor
-@NoArgsConstructor
-@Table(name = "reservation", uniqueConstraints = @UniqueConstraint(columnNames = {"order_id", "sku"}))
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@Table(name = "reservation", uniqueConstraints = @UniqueConstraint(columnNames = {"order_id", "sku", "storehouse_id"}))
 public class Reservation {
 
     @Id
@@ -45,21 +43,26 @@ public class Reservation {
     )
     private Storehouse storehouse;
 
-    public Reservation(String orderId, @NotNull UUID sku, int quantity, ReservationStatus reservationStatus) {
+    private Reservation(String orderId, UUID sku, int quantity, Storehouse storehouse,
+                        ReservationStatus reservationStatus) {
         this.orderId = orderId;
         this.sku = sku;
         this.quantity = quantity;
+        this.storehouse = storehouse;
         this.status = reservationStatus;
         this.expiresAt = LocalDateTime.now();
     }
 
-    public static Reservation active(String orderId, UUID sku, int quantity) {
-
+    public static Reservation active(String orderId, UUID sku, int quantity, Storehouse storehouse) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be greater than zero");
         }
 
-        return new Reservation(orderId, sku, quantity, ReservationStatus.ACTIVE);
+        if (storehouse == null) {
+            throw new IllegalArgumentException("Storehouse must not be null");
+        }
+
+        return new Reservation(orderId, sku, quantity, storehouse, ReservationStatus.ACTIVE);
     }
 
     public void release() {

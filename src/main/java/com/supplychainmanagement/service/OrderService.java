@@ -14,15 +14,17 @@ public interface OrderService {
 
     Mono<Page<Order>> findAllByUser(org.springframework.security.core.userdetails.User authUser, Pageable pageable);
 
-    Flux<Order> findAllByStatus(OrderStatus orderStatus);
+    Mono<Page<Order>> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 
     Mono<Order> findById(Long id);
 
     Mono<Order> findByOrderNo(Long orderNo);
 
-    Mono<Order> create(Order order, org.springframework.security.core.userdetails.User user);
+    Order create(Order order, org.springframework.security.core.userdetails.User user);
 
     Mono<Order> update(Long id, Order order);
+
+    Mono<Order> update(Long id, Order order, Long userId);
 
     Mono<Void> deleteById(Long id);
 }

@@ -46,7 +46,8 @@ public class RoleServiceImpl implements RoleService {
 
         roles.add(adminRole);
         user.setRoles(roles);
-        log.info(user.getUsername() + " has been converted to Admin");
+        user.setUserType(RoleEnum.ADMIN.name());
+        log.info("{} has been converted to Admin", user.getUsername());
         userRepository.save(user);
     }
 }

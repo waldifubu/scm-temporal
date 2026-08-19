@@ -118,11 +118,6 @@ public class AuthServiceImpl implements AuthService {
                     HttpStatus.BAD_REQUEST,
                     "Invalid username/email or password!"
             );
-        } catch (ExpiredJwtException bce) {
-            throw new APIException(
-                    HttpStatus.BAD_REQUEST,
-                    "Expired JWT Token!"
-            );
         } catch (Exception ex) {
             throw new APIException(
                     HttpStatus.INTERNAL_SERVER_ERROR,

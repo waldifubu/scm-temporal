@@ -57,7 +57,7 @@ public class ReservationServiceImpl {
              */
             Reservation reservation =
                     reservationRepository
-                            .findActive(orderId, item.sku())
+                            .findActive(orderId, item.sku(), item.storehouseId())
                             .orElseThrow(() ->
                                     new IllegalStateException(
                                             "Active reservation missing"));

@@ -3,8 +3,8 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.exception.APIException;
-import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.ProductService;
+import com.supplychainmanagement.service.RoleService;
 import lombok.AllArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -25,29 +25,16 @@ public class ProductController {
     }
 
     @GetMapping(value = "/{articleNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER')")
-    public Mono<Product> getProduct(@PathVariable Long articleNo,
-                                    @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER', 'WAREHOUSE')")
+    public Mono<Product> getProductByArticleNo(@PathVariable long articleNo,
+                                               @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         try {
-            /*
-            return productService.findById(id)
-                    .onErrorResume(ResourceNotFoundException.class, ignored -> productService.findByArticleNo(id));
-             */
             boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
             return productService.findByArticleNo(articleNo)
                     .map(product -> showProducts(product, isPrivilegedUser));
         } catch (APIException exception) {
             return Mono.error(exception);
         }
-    }
-
-    @GetMapping(value = "/article/{articleNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER')")
-    public Mono<Product> getProductByArticleNo(@PathVariable long articleNo,
-                                               @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
-        boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
-        return productService.findByArticleNo(articleNo)
-                .map(product -> showProducts(product, isPrivilegedUser));
     }
 
     private Product showProducts(Product product, boolean isPrivilegedUser) {

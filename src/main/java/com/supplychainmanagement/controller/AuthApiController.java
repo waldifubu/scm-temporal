@@ -5,10 +5,13 @@ import com.supplychainmanagement.dto.auth.JwtAuthResponse;
 import com.supplychainmanagement.dto.auth.LoginDto;
 import com.supplychainmanagement.dto.auth.RegisterDto;
 import com.supplychainmanagement.entity.users.User;
+import com.supplychainmanagement.event.UserLoginEvent;
+import com.supplychainmanagement.event.UserRegisteredEvent;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.security.AuthService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -16,15 +19,19 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.stream.Collectors;
+
+import static reactor.netty.http.HttpConnectionLiveness.log;
 
 @RestController
-@RequestMapping({"/api/{version}/auth", "/api/auth"})
 @AllArgsConstructor
+@RequestMapping({"/api/{version}/auth", "/api/auth"})
 public class AuthApiController {
 
+    private final ApplicationEventPublisher eventPublisher;
     private AuthService authService;
 
-    @PostMapping("/register")
+    @PostMapping(value = "/register", version = "1.0")
     public ResponseEntity<?> register(@Valid @RequestBody RegisterDto registerDto) {
         Map<String, String> response = new HashMap<>();
         User newUser;
@@ -35,7 +42,21 @@ public class AuthApiController {
             return ResponseEntity.badRequest().body(response);
         }
 
-        response.put("message", "User registered successfully with username: " + newUser.getUsername() + ", and id: " + newUser.getId());
+        response.put("message", "User successfully registered");
+        log.info("User registered with username: {} and id: {}", newUser.getUsername(), newUser.getId());
+
+        String roles = newUser.getRoles().stream()
+                .map(role -> role.getRolename().name())
+                .collect(Collectors.joining(", "));
+        if (roles.isEmpty()) {
+            roles = "No roles assigned";
+        }
+
+        eventPublisher.publishEvent(new UserRegisteredEvent(
+                newUser.getUsername(),
+                newUser.getEmail(),
+                roles
+        ));
         return new ResponseEntity<>(response, HttpStatus.CREATED);
     }
 
@@ -45,7 +66,7 @@ public class AuthApiController {
         try {
             JwtAuthResponse response = authService.login(loginDto);
 
-//            eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
+            eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
             return ResponseEntity.ok()
                     .header(HttpHeaders.SET_COOKIE, response.getCookie())
                     .body(response);
@@ -83,3 +104,4 @@ public class AuthApiController {
         }
     }
 }
+

@@ -1,22 +1,27 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.order.OrderDetailsDto;
+import com.supplychainmanagement.dto.order.OrderItemDto;
 import com.supplychainmanagement.dto.order.OrderSummaryDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
+import com.supplychainmanagement.event.OrderCreatedEvent;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.service.OrderService;
-import com.supplychainmanagement.service.RoleService;
+import com.supplychainmanagement.service.UserService;
 import lombok.AllArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 @RestController
@@ -24,11 +29,11 @@ import reactor.core.publisher.Mono;
 @AllArgsConstructor
 public class OrderController {
     private final OrderService orderService;
-    private final RoleService roleService;
+    private final UserService userService;
+    private final ApplicationEventPublisher eventPublisher;
 
-    @GetMapping("")
+    @GetMapping(path = "", version = "1.0")
     public Mono<PageResponse<OrderSummaryDto>> list(
-            //@AuthenticationPrincipal AppUserDetails user,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
@@ -41,21 +46,44 @@ public class OrderController {
         return orders.map(this::toSummaryPage);
     }
 
-    @GetMapping("/new")
+    @GetMapping(path = "/new", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public Flux<OrderSummaryDto> getAllOrdersByStatus(
+    public Mono<PageResponse<OrderSummaryDto>> getAllOrdersByStatus(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "dueDate") String sort,
+            @RequestParam(defaultValue = "ASC") String order,
             @RequestParam(defaultValue = "CREATED") OrderStatus status
     ) {
-        return orderService.findAllByStatus(status).map(this::toSummaryDto);
+        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
+        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        var orders = orderService.findAllByStatus(status, pageable);
+
+        return orders.map(this::toSummaryPage);
     }
 
-    @PostMapping("/{orderNo}/reject")
+    @PostMapping(path = "/{orderNo}/reject", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public Mono<OrderSummaryDto> rejectOrder(@PathVariable Long orderNo) {
-        var order = orderService.findByOrderNo(orderNo);
+    public Mono<OrderSummaryDto> rejectOrder(@PathVariable Long orderNo,
+                                             @AuthenticationPrincipal User authUser) {
+        return orderService.findByOrderNo(orderNo)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("Order not found: " + orderNo)))
+                .flatMap(o -> {
+                    if (o.getStatus() == OrderStatus.REJECTED) {
+                        return Mono.error(new IllegalArgumentException("Order is already rejected"));
+                    }
 
-        return order
+                    o.setStatus(OrderStatus.REJECTED);
+                    Long actingUserId = getAuthenticatedUserId(authUser);
+                    return orderService.update(o.getId(), o, actingUserId);
+                })
                 .map(this::toSummaryDto);
+    }
+
+    public Long getAuthenticatedUserId(User authUser) {
+        return userService.findByUsernameOrEmail(authUser.getUsername())
+                .map(com.supplychainmanagement.entity.users.User::getId)
+                .block();
     }
 
     /*
@@ -74,17 +102,34 @@ public class OrderController {
     }
 */
 
-    @GetMapping("/{orderNo}")
-    public Mono<OrderSummaryDto> getOrderByOrderNo(@PathVariable Long orderNo) {
-        return orderService.findByOrderNo(orderNo).map(this::toSummaryDto);
+    @GetMapping(path = "/{orderNo}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    public Mono<OrderDetailsDto> getOrderByOrderNo(@PathVariable Long orderNo,
+                                                   @AuthenticationPrincipal User authUser) {
+        return orderService.findByOrderNo(orderNo)
+                .switchIfEmpty(Mono.error(new IllegalArgumentException("Order not found: " + orderNo)))
+                .flatMap(o -> {
+                    if (o.getStatus() == OrderStatus.ACKNOWLEDGED) {
+                        return Mono.error(new IllegalArgumentException("Order is already acknowledged"));
+                    }
+
+                    o.setStatus(OrderStatus.ACKNOWLEDGED);
+                    Long actingUserId = getAuthenticatedUserId(authUser);
+                    return orderService.update(o.getId(), o, actingUserId);
+                })
+                .map(this::toDetailsDto);
     }
 
-    @PostMapping("")
+    @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
-    public Mono<OrderSummaryDto> createOrder(@RequestBody Order order,
-                                             @AuthenticationPrincipal User authUser) {
-        return orderService.create(order, authUser).map(this::toSummaryDto);
+    public ResponseEntity<OrderDetailsDto> createOrder(@RequestBody(required = true) Order order,
+                                                       @AuthenticationPrincipal User authUser) {
+        OrderDetailsDto createdOrder = toDetailsDto(orderService.create(order, authUser));
+        eventPublisher.publishEvent(new OrderCreatedEvent(String.valueOf(order.getOrderNo()), authUser.getUsername(), order.getOrderDate()));
+        return ResponseEntity.status(HttpStatus.CREATED).body(createdOrder);
     }
+
+
 
     /*
         @PutMapping("/{id}")
@@ -97,6 +142,7 @@ public class OrderController {
             return orderService.deleteById(id);
         }
     */
+
     private OrderSummaryDto toSummaryDto(Order order) {
         int qty = 0;
         if (order.getOrderItems() != null) {
@@ -111,6 +157,38 @@ public class OrderController {
                 order.getDueDate(),
                 order.getOrderDate(),
                 order.getStatus()
+        );
+    }
+
+    private OrderDetailsDto toDetailsDto(Order order) {
+        if (order.getOrderItems() == null) {
+            return new OrderDetailsDto(
+                    order.getOrderNo(),
+                    order.getTotal(),
+                    order.getStatus(),
+                    order.getDueDate(),
+                    order.getOrderDate(),
+                    order.getCustomer() != null ? order.getCustomer().getLastName() : null,
+                    java.util.Collections.emptyList()
+            );
+        }
+
+        var items = order.getOrderItems().stream()
+                .map(item -> new OrderItemDto(
+                        item.getId(),
+                        item.getQuantity(),
+                        item.getProduct() != null ? item.getProduct().getName() : null
+                ))
+                .toList();
+
+        return new OrderDetailsDto(
+                order.getOrderNo(),
+                order.getTotal(),
+                order.getStatus(),
+                order.getDueDate(),
+                order.getOrderDate(),
+                order.getCustomer() != null ? order.getCustomer().getLastName() : null,
+                items
         );
     }
 

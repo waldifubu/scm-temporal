@@ -9,6 +9,5 @@ public interface InventoryService {
 
     void releaseWithRetry(String orderId, List<ReserveItem> items);
 
-    void consume(String orderId, List<ReserveItem> items);
-
+    void consumeWithRetry(String orderId, List<ReserveItem> items);
 }

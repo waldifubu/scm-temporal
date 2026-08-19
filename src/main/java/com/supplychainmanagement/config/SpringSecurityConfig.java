@@ -33,8 +33,15 @@ public class SpringSecurityConfig {
                 .securityMatcher("/api/**")
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests((authorize) -> {
-                    // WICHTIG: Erlaubt Security-Kontext auch bei internen Forwards
-                    authorize.dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.REQUEST).permitAll();
+                    // WICHTIG: Controller-Methoden mit Mono/Flux-Rückgabetyp lösen einen zweiten,
+                    // internen ASYNC-Dispatch aus, um die Antwort fertigzustellen. JwtAuthenticationFilter
+                    // (OncePerRequestFilter) überspringt sich bei diesem zweiten Durchlauf standardmäßig,
+                    // wodurch der Request dort "anonym" ankommt. Ohne ASYNC/ERROR hier würde die
+                    // AuthorizationFilter-Fallback-Regel dafür Authentifizierung verlangen und mit
+                    // "Full authentication is required to access this resource" abbrechen — obwohl der
+                    // ursprüngliche Request bereits erfolgreich authentifiziert war.
+                    authorize.dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.REQUEST,
+                            DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
                     // Role based
 /*
                             authorize.requestMatchers(HttpMethod.POST, "/api/**").hasRole("ADMIN");
@@ -54,8 +61,8 @@ public class SpringSecurityConfig {
                     authorize.requestMatchers("/api/auth/**").permitAll();
                     authorize.requestMatchers("/api/{version:[0-9]+\\.[0-9]+}/auth/**").permitAll();
                     authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
-//                    authorize.anyRequest().authenticated();
-                    authorize.anyRequest().permitAll();
+                    authorize.anyRequest().authenticated();
+//                    authorize.anyRequest().permitAll();
                 })
                 // Stelle sicher, dass Session Creation Policy stateless ist (bei JWT)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -63,7 +70,7 @@ public class SpringSecurityConfig {
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class)
 
-                ;
+        ;
         return http.build();
     }
 
@@ -78,9 +85,9 @@ public class SpringSecurityConfig {
 //                    authorize.requestMatchers("/actuator/**").hasRole("ADMIN");
                     authorize.anyRequest().permitAll();
                 })
-                .httpBasic(Customizer.withDefaults())
+//                .httpBasic(Customizer.withDefaults())
                 .formLogin(form -> form.loginPage("/login")
-                        .loginProcessingUrl("/login").defaultSuccessUrl("/users"))
+                        .loginProcessingUrl("/login").defaultSuccessUrl("/"))
                 .logout(logout -> logout.logoutSuccessUrl("/"));
 
         return http.build();

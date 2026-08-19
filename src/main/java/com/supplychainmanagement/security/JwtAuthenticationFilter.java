@@ -122,7 +122,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             username = jwtTokenProvider.getUsername(token); // parses and verifies the token, throws on expired/invalid
         } catch (ExpiredJwtException ex) {
             logger.warn(ex.getMessage());
-            throw new BadCredentialsException("JWT token expired", ex);
+            throw new APIException(HttpStatus.GONE, "JWT token expired: "+ex.getMessage());
         } catch (IllegalArgumentException ex) {
             logger.warn(ex.getMessage());
             throw new BadCredentialsException("Invalid JWT token", ex);
