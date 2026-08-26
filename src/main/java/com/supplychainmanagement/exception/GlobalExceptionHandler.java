@@ -6,7 +6,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.access.AccessDeniedException;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.BadCredentialsException;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -59,6 +63,47 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorDetails> handleBadCredentials(BadCredentialsException ex, WebRequest webRequest) {
         ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "BAD_CREDENTIALS");
         return new ResponseEntity<>(errorDetails, HttpStatus.UNAUTHORIZED);
+    }
+
+    @ExceptionHandler(WrongRoleException.class)
+    public ResponseEntity<ErrorDetails> handleWrongRole(WrongRoleException ex, WebRequest webRequest) {
+        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "WRONG_ROLE");
+        return new ResponseEntity<>(errorDetails, HttpStatus.FORBIDDEN);
+    }
+
+    /**
+     * On denial, {@code @PreAuthorize} throws an {@code AuthorizationDeniedException}
+     * (a subclass of {@link AccessDeniedException}) out of the controller method. It therefore
+     * never reaches Spring Security's ExceptionTranslationFilter and has to be resolved here in
+     * the MVC layer - without this handler it falls through to the catch-all below and turns into
+     * a 500 carrying the message "Access Denied".
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ErrorDetails> handleAccessDenied(AccessDeniedException ex, WebRequest webRequest) {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        // Unauthenticated means 401, not 403: the caller does not have the wrong role, they have
+        // no role at all. Without this distinction a missing or expired token would get the same
+        // response as a token with insufficient privileges.
+        if (!isAuthenticated(authentication)) {
+            ErrorDetails errorDetails = buildPocessedErrorDetails(
+                    "Authentication is required to access this resource", webRequest, "UNAUTHENTICATED");
+            return new ResponseEntity<>(errorDetails, HttpStatus.UNAUTHORIZED);
+        }
+
+        // Deliberately keep the concrete @PreAuthorize expression away from the client - it belongs
+        // in the server log (buildErrorDetails logs it via ex.getMessage()).
+        logger.warn("Authorization denied for principal '" + authentication.getName() + "': " + ex.getMessage());
+
+        ErrorDetails errorDetails = buildErrorDetails(
+                WrongRoleException.withoutKnownRequirement(), webRequest, "WRONG_ROLE");
+        return new ResponseEntity<>(errorDetails, HttpStatus.FORBIDDEN);
+    }
+
+    private boolean isAuthenticated(Authentication authentication) {
+        return authentication != null
+                && authentication.isAuthenticated()
+                && !(authentication instanceof AnonymousAuthenticationToken);
     }
 
     @Override

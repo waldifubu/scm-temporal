@@ -34,15 +34,15 @@ public class WebConfig implements WebMvcConfigurer {
                 .useVersionResolver(request -> {
                     String uri = request.getRequestURI();
 
-                    // 1. Nicht-API-Routen (UI, Thymeleaf, HTML, CSS) sofort ignorieren
+                    // 1. Ignore non-API routes (UI, Thymeleaf, HTML, CSS) right away
                     if (!uri.startsWith("/api/")) {
-                        return null; // Liefert keine Version -> Spring verarbeitet die Route als normale Web-Route
+                        return null; // No version -> Spring handles the route as a regular web route
                     }
 
-                    // 2. Sichere Pfad-Prüfung für API-Routen
+                    // 2. Safe path check for API routes
                     String[] segments = uri.split("/");
 
-                    // Beispiel: "/api/1.0/auth/login" -> segments[1] = "api", segments[2] = "1.0"
+                    // Example: "/api/1.0/auth/login" -> segments[1] = "api", segments[2] = "1.0"
                     if (segments.length > 2 && "api".equalsIgnoreCase(segments[1])) {
                         String candidate = segments[2];
                         if (candidate.matches("[0-9]+\\.[0-9]+")) {
@@ -50,7 +50,8 @@ public class WebConfig implements WebMvcConfigurer {
                         }
                     }
 
-                    // Falls /api/ aufgerufen wurde, aber keine Version vorhanden ist
+                    // Called /api/ but no version present
+                    // @TODO: eventually return defaultVersion when no version was supplied
                     return null;
                 });
     }

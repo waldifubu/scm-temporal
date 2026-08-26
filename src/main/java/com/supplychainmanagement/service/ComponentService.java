@@ -1,23 +1,27 @@
 package com.supplychainmanagement.service;
 
 import com.supplychainmanagement.entity.Component;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
+import java.util.List;
 import java.util.UUID;
 
+/**
+ * Deliberately synchronous - see {@link OrderService}: with Mono/Flux return types the
+ * {@code @Transactional} proxy committed before the actual database work had even started.
+ */
 public interface ComponentService {
-    Flux<Component> findAll();
 
-    Mono<Component> findById(Long id);
+    List<Component> findAll();
 
-    Mono<Component> findBySku(UUID sku);
+    Component findById(Long id);
 
-    Mono<Component> findByArticleNo(String articleNo);
+    Component findBySku(UUID sku);
 
-    Mono<Component> create(Component component);
+    Component findByArticleNo(String articleNo);
 
-    Mono<Component> update(Long id, Component component);
+    Component create(Component component);
 
-    Mono<Void> deleteById(Long id);
+    Component update(Long id, Component component);
+
+    void deleteById(Long id);
 }

@@ -5,8 +5,8 @@ import org.springframework.data.domain.Page;
 import java.util.List;
 
 /**
- * Schlankes Seiten-DTO, das vom Frontend-dataProvider gelesen wird.
- * {@code total} liefert die Gesamtanzahl fuer die react-admin-Paginierung.
+ * Slim page DTO consumed by the frontend dataProvider.
+ * {@code total} carries the overall count for react-admin pagination.
  */
 public record PageResponse<T>(
         List<T> content,

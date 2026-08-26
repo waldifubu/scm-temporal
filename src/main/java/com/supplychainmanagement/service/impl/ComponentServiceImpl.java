@@ -11,10 +11,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -25,75 +23,60 @@ public class ComponentServiceImpl implements ComponentService {
     private final ProductRepository productRepository;
 
     @Override
-    public Flux<Component> findAll() {
-        return Mono.fromCallable(componentRepository::findAllBy)
-                .flatMapMany(Flux::fromIterable)
-                .subscribeOn(Schedulers.boundedElastic());
+    public List<Component> findAll() {
+        return componentRepository.findAllBy();
     }
 
     @Override
-    public Mono<Component> findById(Long id) {
-        return Mono.fromCallable(() -> componentRepository.findWithProductById(id)
-                        .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id)))
-                .subscribeOn(Schedulers.boundedElastic());
+    public Component findById(Long id) {
+        return componentRepository.findWithProductById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
     }
 
     @Override
-    public Mono<Component> findBySku(UUID sku) {
-        return Mono.fromCallable(() -> componentRepository.findBySku(sku)
-                        .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with sku: " + sku.toString())))
-                .subscribeOn(Schedulers.boundedElastic());
+    public Component findBySku(UUID sku) {
+        return componentRepository.findBySku(sku)
+                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with sku: " + sku.toString()));
     }
 
     @Override
-    public Mono<Component> findByArticleNo(String articleNo) {
-        return Mono.fromCallable(() -> componentRepository.findByExternalId(articleNo)
-                        .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with articleNo: " + articleNo)))
-                .subscribeOn(Schedulers.boundedElastic());
+    public Component findByArticleNo(String articleNo) {
+        return componentRepository.findByExternalId(articleNo)
+                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with articleNo: " + articleNo));
     }
 
     @Override
     @Transactional
-    public Mono<Component> create(Component component) {
-        return Mono.fromCallable(() -> {
-                    validateUniqueIdentifiers(component, null);
-                    bindProduct(component);
-                    return componentRepository.save(component);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+    public Component create(Component component) {
+        validateUniqueIdentifiers(component, null);
+        bindProduct(component);
+        return componentRepository.save(component);
     }
 
     @Override
     @Transactional
-    public Mono<Component> update(Long id, Component component) {
-        return Mono.fromCallable(() -> {
-                    Component existingComponent = componentRepository.findById(id)
-                            .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
+    public Component update(Long id, Component component) {
+        Component existingComponent = componentRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
 
-                    validateUniqueIdentifiers(component, existingComponent);
-                    existingComponent.setManufacturer(component.getManufacturer());
-                    existingComponent.setName(component.getName());
-                    existingComponent.setSku(component.getSku());
-                    existingComponent.setExternalId(component.getExternalId());
-                    existingComponent.setProduct(component.getProduct());
-                    bindProduct(existingComponent);
+        validateUniqueIdentifiers(component, existingComponent);
+        existingComponent.setManufacturer(component.getManufacturer());
+        existingComponent.setName(component.getName());
+        existingComponent.setSku(component.getSku());
+        existingComponent.setExternalId(component.getExternalId());
+        existingComponent.setProduct(component.getProduct());
+        bindProduct(existingComponent);
 
-                    return componentRepository.save(existingComponent);
-                })
-                .subscribeOn(Schedulers.boundedElastic());
+        return componentRepository.save(existingComponent);
     }
 
     @Override
     @Transactional
-    public Mono<Void> deleteById(Long id) {
-        return Mono.fromRunnable(() -> {
-                    if (!componentRepository.existsById(id)) {
-                        throw new ResourceNotFoundException("Component", "id", id);
-                    }
-                    componentRepository.deleteById(id);
-                })
-                .subscribeOn(Schedulers.boundedElastic())
-                .then();
+    public void deleteById(Long id) {
+        if (!componentRepository.existsById(id)) {
+            throw new ResourceNotFoundException("Component", "id", id);
+        }
+        componentRepository.deleteById(id);
     }
 
     private void validateUniqueIdentifiers(Component component, Component existingComponent) {

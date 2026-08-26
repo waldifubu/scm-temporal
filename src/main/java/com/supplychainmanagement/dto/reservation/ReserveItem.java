@@ -11,16 +11,17 @@ public record ReserveItem(
         UUID sku,
 
         @Min(1)
-        int quantity,
+        Integer quantity,
 
         Long storehouseId
 
         /*
-        Verfügbarer Bestand:
-        Entfernung zum Kunden
-        Lieferzeit
-        Priorität
-        Kosten
+        Candidate criteria for picking a storehouse:
+        available stock
+        distance to the customer
+        delivery time
+        priority
+        cost
          */
 ) {
 }

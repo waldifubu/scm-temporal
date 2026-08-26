@@ -17,7 +17,7 @@ import org.springframework.web.util.UrlPathHelper;
 import java.io.IOException;
 
 @Component
-@Order(Ordered.HIGHEST_PRECEDENCE) // Muss vor Spring MVC und Spring Security laufen
+@Order(Ordered.HIGHEST_PRECEDENCE) // Must run before Spring MVC and Spring Security
 public class ApiVersionDefaultFilter extends OncePerRequestFilter {
 
     // If value doesn't exists, we take 1.0
@@ -30,7 +30,7 @@ public class ApiVersionDefaultFilter extends OncePerRequestFilter {
 
         String uri = request.getRequestURI();
 
-        // Greift NUR, wenn /api/ aufgerufen wird UND KEINE Version enthalten ist (z.B. /api/products/1001)
+        // Applies ONLY to /api/ calls that carry NO version (e.g. /api/products/1001)
         if (uri.startsWith("/api/") && !uri.matches("^/api/[0-9]+\\.[0-9]+/.*")) {
             HttpServletRequest wrappedRequest = getWrappedRequest(request, uri);
 

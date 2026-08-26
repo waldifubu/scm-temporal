@@ -2,6 +2,7 @@ package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.exception.WrongRoleException;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.RoleRepository;
 import com.supplychainmanagement.repository.UserRepository;
@@ -12,8 +13,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.stereotype.Service;
 
-import java.util.Objects;
+import java.util.Arrays;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Log4j2
 @AllArgsConstructor
@@ -25,15 +27,30 @@ public class RoleServiceImpl implements RoleService {
 
     @Override
     public boolean isAdmin(User authUser) {
-        return authUser.getAuthorities().stream()
-                .anyMatch(authority -> Objects.equals(authority.getAuthority(), RoleEnum.ADMIN.name()));
+        return hasAnyAuthority(authUser, RoleEnum.ADMIN);
     }
 
     @Override
     public boolean isPrivilegedUser(User authUser) {
-        Set<String> privilegedRoles = Set.of(RoleEnum.ADMIN.name(), RoleEnum.MANAGER.name());
+        return hasAnyAuthority(authUser, RoleEnum.ADMIN, RoleEnum.MANAGER);
+    }
+
+    @Override
+    public boolean hasAnyAuthority(User authUser, RoleEnum... roles) {
+        if (authUser == null || authUser.getAuthorities() == null) {
+            return false;
+        }
+
+        Set<String> accepted = Arrays.stream(roles).map(RoleEnum::name).collect(Collectors.toSet());
         return authUser.getAuthorities().stream()
-                .anyMatch(authority -> privilegedRoles.contains(authority.getAuthority()));
+                .anyMatch(authority -> accepted.contains(authority.getAuthority()));
+    }
+
+    @Override
+    public void requireAnyAuthority(User authUser, RoleEnum... roles) {
+        if (!hasAnyAuthority(authUser, roles)) {
+            throw WrongRoleException.requiring(roles);
+        }
     }
 
     @Override

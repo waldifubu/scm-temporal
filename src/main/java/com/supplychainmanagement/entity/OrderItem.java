@@ -1,8 +1,9 @@
 package com.supplychainmanagement.entity;
 
-import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.FullfillmentStatus;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -29,11 +30,10 @@ public class OrderItem {
     private Product product;
 
     @Column(name = "quantity", nullable = false)
-    @Positive(message = "Your amount must be positive")
     @Max(value = 10, message = "Your amount is above our limit")
-    @Positive
+    @Min(value = 1, message = "Your amount must be at least 1")
     private Integer quantity;
 
     @Enumerated(EnumType.STRING)
-    private FulfillmentStatus fulfillmentStatus;
+    private FullfillmentStatus fullfillmentStatus = FullfillmentStatus.WAITING;
 }

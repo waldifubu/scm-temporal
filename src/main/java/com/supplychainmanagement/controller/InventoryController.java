@@ -1,55 +1,69 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
+import com.supplychainmanagement.entity.Reservation;
+import com.supplychainmanagement.service.FullfillmentService;
 import com.supplychainmanagement.service.InventoryService;
+import com.supplychainmanagement.service.OrderService;
+import com.supplychainmanagement.service.ProductService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @RestController
 @RequiredArgsConstructor
-@RequestMapping({"/api/{version}/inventory"})
+@RequestMapping({"/api/{version}"})
 public class InventoryController {
 
     private final InventoryService inventoryService;
+    private final FullfillmentService fullfillmentService;
+    private final OrderService orderService;
+    private final ProductService productService;
 
+    @PostMapping(path = "/orders/{orderId}/reserve", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public ResponseEntity<List<Reservation>> reserve(@PathVariable Long orderId,
+                                                     @AuthenticationPrincipal User authUser) {
+        var order = orderService.findByOrderNo(orderId);
 
-    /*
-    [
-  {
-    "sku": "ABC-100",
-    "quantity": 5
-  },
-  {
-    "sku": "XYZ-200",
-    "quantity": 2
-  }
-]
-     */
-    @PostMapping("/orders/{orderId}/reserve")
-    public ResponseEntity<Void> reserve(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
+        ReservationResult result = fullfillmentService.reserveItems(order, authUser.getUsername());
 
-        inventoryService.reserveWithRetry(orderId, items);
+        HttpStatus status = result.created() ? HttpStatus.CREATED : HttpStatus.OK;
+        return ResponseEntity.status(status).body(result.reservations());
+    }
+
+    @PostMapping(path = "/orders/{orderId}/release", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public ResponseEntity<Void> release(@PathVariable Long orderId) {
+        var order = orderService.findByOrderNo(orderId);
+
+        fullfillmentService.releaseItems(order);
 
         return ResponseEntity.ok().build();
     }
 
-
-    @PostMapping("/orders/{orderId}/release")
-    public ResponseEntity<Void> release(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
-
-        inventoryService.releaseWithRetry(orderId, items);
-
-        return ResponseEntity.ok().build();
-    }
-
-    @PostMapping("/orders/{orderId}/consume")
+    @PostMapping(path = "/orders/{orderId}/consume", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public ResponseEntity<Void> consume(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
 
         inventoryService.consumeWithRetry(orderId, items);
+
+        return ResponseEntity.ok().build();
+    }
+
+    @PostMapping(path = "/picking/{orderId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<Void> picking(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
+
+        //inventoryService.consumeWithRetry(orderId, items);
 
         return ResponseEntity.ok().build();
     }

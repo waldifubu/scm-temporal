@@ -1,21 +1,26 @@
 package com.supplychainmanagement.service;
 
 import com.supplychainmanagement.entity.Product;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
 
+import java.util.List;
+
+/**
+ * Deliberately synchronous - see {@link OrderService}: with Mono/Flux return types the
+ * {@code @Transactional} proxy committed before the actual database work had even started.
+ */
 public interface ProductService {
-    Flux<Product> findAll();
 
-    Mono<Product> findById(Long id);
+    List<Product> findAll();
 
-    Mono<Product> findByArticleNo(long articleNo);
+    Product findById(Long id);
 
-    Flux<Product> searchByName(String name);
+    Product findByArticleNo(long articleNo);
 
-    Mono<Product> create(Product product);
+    List<Product> searchByName(String name);
 
-    Mono<Product> update(Long id, Product product);
+    Product create(Product product);
 
-    Mono<Void> deleteById(Long id);
+    Product update(Long id, Product product);
+
+    void deleteById(Long id);
 }

@@ -5,8 +5,8 @@ import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.security.AuthService;
 import com.supplychainmanagement.utils.InitializeData;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Controller;
@@ -24,13 +24,16 @@ public class WebController {
     private final InitializeData initializeData;
     private final AuthService authService;
     private final UserRepository userRepository;
+    private final ObjectMapper objectMapper;
     @Value("${app.name}")
     private String appName;
 
-    public WebController(InitializeData initializeData, AuthService authService, UserRepository userRepository) {
+    public WebController(InitializeData initializeData, AuthService authService, UserRepository userRepository,
+                         ObjectMapper objectMapper) {
         this.initializeData = initializeData;
         this.authService = authService;
         this.userRepository = userRepository;
+        this.objectMapper = objectMapper;
     }
 
     @GetMapping("/")
@@ -57,7 +60,6 @@ public class WebController {
     }
 
     private int createUsers() throws Exception {
-        ObjectMapper objectMapper = new ObjectMapper();
         JsonNode root;
         try (var configInputStream = new ClassPathResource("configuration.json").getInputStream()) {
             root = objectMapper.readTree(configInputStream);
@@ -69,27 +71,27 @@ public class WebController {
 
         int createdUsers = 0;
         for (JsonNode userEntry : users) {
-            String username = userEntry.path("username").asText();
-            String email = userEntry.path("email").asText();
+            String username = userEntry.path("username").asString();
+            String email = userEntry.path("email").asString();
 
             if (username.isBlank() || email.isBlank() || userRepository.existsByUsername(username) || userRepository.existsByEmail(email)) {
                 continue;
             }
 
-            String roleLabel = userEntry.path("role").asText();
+            String roleLabel = userEntry.path("role").asString();
             RoleEnum roleEnum = RoleEnum.valueOfLabel(roleLabel.toUpperCase(Locale.ROOT));
             if (roleEnum == null) {
                 throw new IllegalArgumentException("Unknown role in configuration.json: " + roleLabel);
             }
 
             RegisterDto registerDto = new RegisterDto();
-            registerDto.setFirstname(userEntry.path("firstname").asText());
-            registerDto.setLastname(userEntry.path("lastname").asText());
+            registerDto.setFirstname(userEntry.path("firstname").asString());
+            registerDto.setLastname(userEntry.path("lastname").asString());
             registerDto.setUsername(username);
             registerDto.setEmail(email);
-            registerDto.setPassword(userEntry.path("password").asText());
+            registerDto.setPassword(userEntry.path("password").asString());
             registerDto.setRole(roleEnum.name());
-            registerDto.setColor(userEntry.path("color").asText());
+            registerDto.setColor(userEntry.path("color").asString());
 
             authService.register(registerDto);
             createdUsers++;

@@ -2,6 +2,7 @@ package com.supplychainmanagement.service;
 
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
+import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.entity.Order;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -12,4 +13,8 @@ public interface FullfillmentService {
     Page<ProductionResultDto> produce(Pageable pageable);
 
     List<AvailableOrderItemDto> checkItems(Order order);
+
+    ReservationResult reserveItems(Order order, String username);
+
+    void releaseItems(Order order);
 }

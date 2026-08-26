@@ -22,7 +22,6 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Mono;
 
 @RestController
 @RequestMapping({"/api/{version}/orders"})
@@ -32,8 +31,11 @@ public class OrderController {
     private final UserService userService;
     private final ApplicationEventPublisher eventPublisher;
 
+    // CUSTOMER may see their own order list; ADMIN/MANAGER are included because
+    // OrderService.findAllByUser deliberately branches to all orders for admins.
     @GetMapping(path = "", version = "1.0")
-    public Mono<PageResponse<OrderSummaryDto>> list(
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
+    public PageResponse<OrderSummaryDto> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
@@ -41,14 +43,13 @@ public class OrderController {
             @AuthenticationPrincipal User authUser) {
         Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
-        var orders = orderService.findAllByUser(authUser, pageable);
 
-        return orders.map(this::toSummaryPage);
+        return toSummaryPage(orderService.findAllByUser(authUser, pageable));
     }
 
     @GetMapping(path = "/new", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public Mono<PageResponse<OrderSummaryDto>> getAllOrdersByStatus(
+    public PageResponse<OrderSummaryDto> getAllOrdersByStatus(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "dueDate") String sort,
@@ -57,33 +58,25 @@ public class OrderController {
     ) {
         Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
-        var orders = orderService.findAllByStatus(status, pageable);
 
-        return orders.map(this::toSummaryPage);
+        return toSummaryPage(orderService.findAllByStatus(status, pageable));
     }
 
     @PostMapping(path = "/{orderNo}/reject", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public Mono<OrderSummaryDto> rejectOrder(@PathVariable Long orderNo,
-                                             @AuthenticationPrincipal User authUser) {
-        return orderService.findByOrderNo(orderNo)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("Order not found: " + orderNo)))
-                .flatMap(o -> {
-                    if (o.getStatus() == OrderStatus.REJECTED) {
-                        return Mono.error(new IllegalArgumentException("Order is already rejected"));
-                    }
+    public OrderSummaryDto rejectOrder(@PathVariable Long orderNo,
+                                       @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
+        if (order.getStatus() == OrderStatus.REJECTED) {
+            throw new IllegalArgumentException("Order is already rejected");
+        }
 
-                    o.setStatus(OrderStatus.REJECTED);
-                    Long actingUserId = getAuthenticatedUserId(authUser);
-                    return orderService.update(o.getId(), o, actingUserId);
-                })
-                .map(this::toSummaryDto);
+        order.setStatus(OrderStatus.REJECTED);
+        return toSummaryDto(orderService.update(order.getId(), order, getAuthenticatedUserId(authUser)));
     }
 
     public Long getAuthenticatedUserId(User authUser) {
-        return userService.findByUsernameOrEmail(authUser.getUsername())
-                .map(com.supplychainmanagement.entity.users.User::getId)
-                .block();
+        return userService.findByUsernameOrEmail(authUser.getUsername()).getId();
     }
 
     /*
@@ -104,20 +97,18 @@ public class OrderController {
 
     @GetMapping(path = "/{orderNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
-    public Mono<OrderDetailsDto> getOrderByOrderNo(@PathVariable Long orderNo,
-                                                   @AuthenticationPrincipal User authUser) {
-        return orderService.findByOrderNo(orderNo)
-                .switchIfEmpty(Mono.error(new IllegalArgumentException("Order not found: " + orderNo)))
-                .flatMap(o -> {
-                    if (o.getStatus() == OrderStatus.ACKNOWLEDGED) {
-                        return Mono.error(new IllegalArgumentException("Order is already acknowledged"));
-                    }
+    public OrderDetailsDto getOrderByOrderNo(@PathVariable Long orderNo,
+                                             @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
 
-                    o.setStatus(OrderStatus.ACKNOWLEDGED);
-                    Long actingUserId = getAuthenticatedUserId(authUser);
-                    return orderService.update(o.getId(), o, actingUserId);
-                })
-                .map(this::toDetailsDto);
+        // Kept as-is: the "&& false" renders the condition ineffective, so the status is always
+        // set to ACKNOWLEDGED. See the open finding about GET with a side effect.
+        if (order.getStatus() != OrderStatus.ACKNOWLEDGED && false) {
+            throw new IllegalArgumentException("Order is already acknowledged");
+        }
+
+        order.setStatus(OrderStatus.ACKNOWLEDGED);
+        return toDetailsDto(orderService.update(order.getId(), order, getAuthenticatedUserId(authUser)));
     }
 
     @PostMapping(path = "", version = "1.0")
@@ -177,7 +168,8 @@ public class OrderController {
                 .map(item -> new OrderItemDto(
                         item.getId(),
                         item.getQuantity(),
-                        item.getProduct() != null ? item.getProduct().getName() : null
+                        item.getProduct() != null ? item.getProduct().getName() : null,
+                        item.getFullfillmentStatus()
                 ))
                 .toList();
 

@@ -22,4 +22,18 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
 
     @Query("SELECT s FROM Stock s WHERE s.sku = :sku AND s.onHand > s.reserved ORDER BY s.updatedAt ASC")
     List<Stock> findAvailableBySkuOrderByUpdatedAtAsc(@Param("sku") UUID sku);
+
+    /**
+     * Storehouses holding at least {@code quantity} unreserved units of {@code sku}, oldest stock
+     * first (FEFO-style, matching {@link #findAvailableBySkuOrderByUpdatedAtAsc}).
+     * <p>
+     * The availability predicate {@code onHand - reserved} belongs in the WHERE clause: evaluating
+     * it in Java would mean loading every candidate row and asking each storehouse separately.
+     */
+    @Query("""
+            SELECT s FROM Stock s
+            WHERE s.sku = :sku AND (s.onHand - s.reserved) >= :quantity
+            ORDER BY s.updatedAt ASC
+            """)
+    List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("quantity") int quantity);
 }

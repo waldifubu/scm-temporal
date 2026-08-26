@@ -11,4 +11,9 @@ public class UnsufficientException extends RuntimeException {
     public UnsufficientException(String message, double amount) {
         super(message + ". Requested amount: "+ amount);
     }
+
+    /** For cases covering several items, where a single "requested amount" would not fit. */
+    public UnsufficientException(String message) {
+        super(message);
+    }
 }

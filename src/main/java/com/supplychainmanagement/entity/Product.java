@@ -61,6 +61,7 @@ public class Product {
     @OneToMany(mappedBy = "product", fetch = FetchType.LAZY, orphanRemoval = true, cascade = CascadeType.ALL)
     private List<Component> components;
 
+    @Column(nullable = false, unique = true)
     private UUID sku;
 
     @ColumnDefault("true")

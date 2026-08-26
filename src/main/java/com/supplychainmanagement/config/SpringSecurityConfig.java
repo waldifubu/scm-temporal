@@ -2,13 +2,14 @@ package com.supplychainmanagement.config;
 
 import com.supplychainmanagement.security.JwtAuthenticationEntryPoint;
 import com.supplychainmanagement.security.JwtAuthenticationFilter;
+import com.supplychainmanagement.vaadin.views.LoginView;
+import com.vaadin.flow.spring.security.VaadinSecurityConfigurer;
 import jakarta.servlet.DispatcherType;
 import lombok.AllArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -33,15 +34,20 @@ public class SpringSecurityConfig {
                 .securityMatcher("/api/**")
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests((authorize) -> {
-                    // WICHTIG: Controller-Methoden mit Mono/Flux-Rückgabetyp lösen einen zweiten,
-                    // internen ASYNC-Dispatch aus, um die Antwort fertigzustellen. JwtAuthenticationFilter
-                    // (OncePerRequestFilter) überspringt sich bei diesem zweiten Durchlauf standardmäßig,
-                    // wodurch der Request dort "anonym" ankommt. Ohne ASYNC/ERROR hier würde die
-                    // AuthorizationFilter-Fallback-Regel dafür Authentifizierung verlangen und mit
-                    // "Full authentication is required to access this resource" abbrechen — obwohl der
-                    // ursprüngliche Request bereits erfolgreich authentifiziert war.
-                    authorize.dispatcherTypeMatchers(DispatcherType.FORWARD, DispatcherType.REQUEST,
-                            DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
+                    // IMPORTANT: controller methods returning Mono/Flux trigger a second, internal
+                    // ASYNC dispatch to complete the response. JwtAuthenticationFilter
+                    // (OncePerRequestFilter) skips itself on that second pass by default, so the request
+                    // arrives there "anonymous". Without ASYNC/ERROR listed here, the AuthorizationFilter
+                    // fallback rule would demand authentication for it and fail with
+                    // "Full authentication is required to access this resource" - even though the
+                    // original request was authenticated successfully.
+                    //
+                    // Permit ASYNC and ERROR ONLY: the actual call arrives as REQUEST and MUST go through
+                    // the rules below. With REQUEST (or FORWARD) in this list, the rule would match every
+                    // single call - it is evaluated first and the first match wins - rendering everything
+                    // after it, including anyRequest().authenticated(), dead code. Authorization happens
+                    // on the REQUEST dispatch; the ASYNC pass merely delivers the finished response.
+                    authorize.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
                     // Role based
 /*
                             authorize.requestMatchers(HttpMethod.POST, "/api/**").hasRole("ADMIN");
@@ -64,7 +70,7 @@ public class SpringSecurityConfig {
                     authorize.anyRequest().authenticated();
 //                    authorize.anyRequest().permitAll();
                 })
-                // Stelle sicher, dass Session Creation Policy stateless ist (bei JWT)
+                // Make sure the session creation policy is stateless (required for JWT)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 //                .httpBasic(Customizer.withDefaults())
                 .exceptionHandling(exception -> exception.authenticationEntryPoint(jwtAuthenticationEntryPoint))
@@ -76,9 +82,26 @@ public class SpringSecurityConfig {
 
     @Bean
     @Order(2)
+    public SecurityFilterChain vaadinFilterChain(HttpSecurity http) throws Exception {
+        // Dedicated chain for Vaadin (vaadin.url-mapping=/app/*), mirroring apiFilterChain.
+        // Reason: HttpSecurity#authorizeHttpRequests runs its customizer IMMEDIATELY, while
+        // VaadinSecurityConfigurer registers its own requestMatchers rules lazily in init()
+        // during http.build() - which therefore always happens AFTER our own anyRequest() call,
+        // no matter how the calls are ordered in the source. In a shared chain that leads to
+        // "Can't configure requestMatchers after anyRequest". With securityMatcher, Vaadin gets
+        // its own isolated registry and also takes care of CSRF for its UIDL protocol itself.
+        http.securityMatcher("/app/**");
+        http.with(VaadinSecurityConfigurer.vaadin(), configurer -> {
+            configurer.loginView(LoginView.class).defaultSuccessUrl("/app/products");
+        });
+        return http.build();
+    }
+
+    @Bean
+    @Order(3)
     public SecurityFilterChain webFilterChain(HttpSecurity http) throws Exception {
-        // Klassische Server-Side-Web-App (Thymeleaf): alle Routen offen,
-        // CSRF-Schutz bleibt aktiv (Standard) — Thymeleaf fügt das Token bei th:action automatisch ein.
+        // Classic server-side web app (Thymeleaf): all routes open, CSRF protection stays on
+        // (the default) - Thymeleaf inserts the token automatically on th:action.
         http.authorizeHttpRequests((authorize) -> {
                     authorize.requestMatchers("/", "/login", "/register", "/css/**", "/js/**", "/images/**").permitAll();
                     authorize.requestMatchers("/actuator", "/actuator/health", "/actuator/info").permitAll();

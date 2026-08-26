@@ -11,6 +11,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.security.AuthService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -21,8 +22,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.stream.Collectors;
 
-import static reactor.netty.http.HttpConnectionLiveness.log;
-
+@Slf4j
 @RestController
 @AllArgsConstructor
 @RequestMapping({"/api/{version}/auth", "/api/auth"})

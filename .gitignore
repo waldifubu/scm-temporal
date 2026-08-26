@@ -58,3 +58,21 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Node / Vaadin-Frontend-Build ###
+node_modules/
+/src/main/frontend/generated/
+/src/main/bundles/
+/vite.generated.ts
+/types.d.ts
+/.vaadin/
+/frontend/generated/
+
+### Laufzeit-Artefakte ###
+/logs/
+*.exe
+
+### Local config ###
+/src/main/resources/application.properties
+/src/main/resources/application-dev.properties
+/src/main/resources/application-prod.properties
