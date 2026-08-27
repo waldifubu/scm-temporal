@@ -2,6 +2,7 @@ package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.model.enums.ReservationStatus;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
@@ -10,6 +11,7 @@ import java.util.UUID;
 
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
 
+    @EntityGraph(attributePaths = "storehouse")
     Optional<Reservation> findByOrderIdAndSkuAndStorehouseIdAndStatus(
             String orderId,
             UUID sku,
@@ -35,6 +37,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
                 ReservationStatus.ACTIVE);
     }
 
+    @EntityGraph(attributePaths = "storehouse")
     List<Reservation> findByOrderIdAndStatus(
             String orderId,
             ReservationStatus status);
