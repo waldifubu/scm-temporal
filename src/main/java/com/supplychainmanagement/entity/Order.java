@@ -15,7 +15,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.Set;
 
 @Entity
 @Getter
@@ -31,8 +31,14 @@ public class Order {
     @Column(nullable = true, unique = true)
     private Long orderNo;
 
+    /**
+     * Ordered by id so the line items always reach the UI in the same sequence. Without it a Set
+     * mapping is loaded into a HashSet-backed collection, whose iteration order is arbitrary and
+     * can differ between requests. The ORDER BY makes Hibernate use a LinkedHashSet instead.
+     */
     @OneToMany(mappedBy = "order", fetch = FetchType.LAZY, orphanRemoval = true, cascade = CascadeType.ALL)
-    private List<OrderItem> orderItems;
+    @OrderBy("id")
+    private Set<OrderItem> orderItems;
 
     @CreationTimestamp()
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")

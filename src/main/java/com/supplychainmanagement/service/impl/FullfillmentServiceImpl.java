@@ -2,7 +2,9 @@ package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
+import com.supplychainmanagement.dto.reservation.ReservationOutcome;
 import com.supplychainmanagement.dto.reservation.ReservationResult;
+import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.*;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
@@ -11,6 +13,7 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.exception.UnsufficientException;
 import com.supplychainmanagement.model.enums.FullfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.*;
 import com.supplychainmanagement.service.FullfillmentService;
 import com.supplychainmanagement.service.InventoryService;
@@ -185,6 +188,11 @@ public class FullfillmentServiceImpl implements FullfillmentService {
         List<AvailableOrderItemDto> availableItems = new ArrayList<>();
 
         for (OrderItem orderItem : order.getOrderItems()) {
+            if(orderItem.getFullfillmentStatus() != null && orderItem.getFullfillmentStatus() != FullfillmentStatus.WAITING) {
+                // Skip items that are already reserved or in progress
+                continue;
+            }
+
             UUID sku = orderItem.getProduct().getSku();
             Integer requiredQuantity = orderItem.getQuantity();
 
@@ -195,7 +203,9 @@ public class FullfillmentServiceImpl implements FullfillmentService {
                     requiredQuantity,
                     match != null ? match.getAvailable() : 0,
                     match != null,
-                    match != null ? match.getStorehouse().getId() : null));
+                    match != null ? match.getStorehouse().getId() : null,
+                    orderItem.getFullfillmentStatus()
+            ));
         }
 
         return availableItems;
@@ -219,10 +229,15 @@ public class FullfillmentServiceImpl implements FullfillmentService {
      * commits on its own. That is deliberate - the idempotency guard and the retry loop depend on
      * seeing committed state - but it means a failure after the reservation leaves the stock
      * reserved while the order stays untouched. The idempotency guard makes a repeat call safe.
+     * <p>
+     * Reports only the reservations this call created. What was already reserved is left out on
+     * purpose: a repeated call is a no-op and has nothing to show for itself. The
+     * {@link ReservationOutcome} tells the caller whether an empty result means "done" or
+     * "still waiting for stock".
      */
     @Override
     @Transactional
-    public ReservationResult reserveItems(Order order, String username) {
+    public ReservationSummary reserveItems(Order order, String username) {
         List<AvailableOrderItemDto> availableItems = checkItems(order);
 
         // Only lines that a single storehouse can cover are handed to the reservation. The rest are
@@ -267,7 +282,10 @@ public class FullfillmentServiceImpl implements FullfillmentService {
             throw new APIException(HttpStatus.BAD_REQUEST, "Failed to reserve items for order " + order.getId() + ": " + e.getMessage());
         }
 
-        Set<UUID> reservedSkus = result.reservations().stream()
+        // Driven by the active reservations, not by the ones just created: a repeat call after a
+        // first one that committed its reservation but failed before the order was written has to
+        // be able to catch the order status up, and it creates nothing to go by.
+        Set<UUID> reservedSkus = result.active().stream()
                 .map(Reservation::getSku)
                 .collect(Collectors.toSet());
 
@@ -295,7 +313,25 @@ public class FullfillmentServiceImpl implements FullfillmentService {
         reservedOrderItems.forEach(orderItem -> orderItem.setFullfillmentStatus(FullfillmentStatus.RESERVED));
         orderItemRepository.saveAll(reservedOrderItems);
 
-        return result;
+        return new ReservationSummary(result.created(), outcomeOf(order, result));
+    }
+
+    /**
+     * A line still sitting in WAITING is outstanding - every line covered by this call has just been
+     * advanced to RESERVED. Deliberately not measured against the active reservations: a line that
+     * is already picked has had its reservation consumed, so it no longer counts as active while
+     * being anything but outstanding.
+     */
+    private ReservationOutcome outcomeOf(Order order, ReservationResult result) {
+        if (!result.created().isEmpty()) {
+            return ReservationOutcome.CREATED;
+        }
+
+        boolean anyOutstanding = order.getOrderItems().stream()
+                .anyMatch(orderItem -> orderItem.getFullfillmentStatus() == null
+                        || orderItem.getFullfillmentStatus() == FullfillmentStatus.WAITING);
+
+        return anyOutstanding ? ReservationOutcome.PENDING : ReservationOutcome.COMPLETE;
     }
 
     /**
@@ -349,6 +385,93 @@ public class FullfillmentServiceImpl implements FullfillmentService {
         releasedOrderItems.forEach(orderItem -> orderItem.setFullfillmentStatus(FullfillmentStatus.WAITING));
         orderItemRepository.saveAll(releasedOrderItems);
     }
+
+    /**
+     * The @EntityGraph on the query is what makes the result safe to serialize: {@code storehouse}
+     * is a LAZY association and is fetched up front, while the session is still open.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<Reservation> pickingOrders(ReservationStatus reservationStatus, Pageable pageable) {
+        return reservationRepository.findAllByStatus(reservationStatus, pageable);
+    }
+
+    /**
+     * Picks the single reservation with that id. Which reservation is meant is the only thing this
+     * method decides - the picking itself is {@link #pickingReservation}.
+     */
+    @Override
+    public Reservation pickingReservationById(Long reservationId) {
+        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.ACTIVE)
+                .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id", reservationId));
+
+        return pickingReservation(findOrder(reservation.getOrderId()), reservation);
+    }
+
+
+    /**
+     * Picks every active reservation of the order. Not idempotent per call the way reserving is:
+     * a reservation already consumed is no longer ACTIVE and simply does not turn up again.
+     * <p>
+     * A failure on one line aborts the whole loop - the lines picked before it stay picked, since
+     * each of them was written in its own transaction.
+     */
+    @Override
+    public List<Reservation> pickingReservationByOrderNo(String orderNo) {
+        Order order = findOrder(orderNo);
+
+        return reservationRepository.findByOrderIdAndStatus(orderNo, ReservationStatus.ACTIVE).stream()
+                .map(reservation -> pickingReservation(order, reservation))
+                .toList();
+    }
+
+    /**
+     * The actual picking of one reservation, shared by both entry points above: the line item goes
+     * to PICKING, the reserved stock is consumed, the reservation becomes CONSUMED, and only then
+     * does the line item reach PICKED.
+     * <p>
+     * The order is handed in rather than looked up from {@code reservation.getOrderId()}: picking a
+     * whole order would otherwise repeat the same lookup for every single line.
+     */
+    private Reservation pickingReservation(Order order, Reservation reservation) {
+        OrderItem orderItem = orderItemRepository.findByOrderAndProductSku(order, reservation.getSku())
+                .orElseThrow(() -> new ResourceNotFoundException("OrderItem", "orderId and sku", 0L));
+
+        orderItem.setFullfillmentStatus(FullfillmentStatus.PICKING);
+        orderItemRepository.save(orderItem);
+
+        try {
+            inventoryService.consumeWithRetry(String.valueOf(order.getId()), List.of(new ReserveItem(reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
+        } catch (Exception e) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Failed to consume items for reservation " + reservation.getId() + ": " + e.getMessage());
+        }
+
+        reservation.setStatus(ReservationStatus.CONSUMED);
+        var newReservation = reservationRepository.save(reservation);
+        if (newReservation.getStatus() != ReservationStatus.CONSUMED) {
+            throw new APIException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to update reservation status for reservation " + reservation.getId());
+        }
+
+        // Only after the reservation is really consumed, so a line never reads as PICKED while its
+        // stock is still reserved.
+        orderItem.setFullfillmentStatus(FullfillmentStatus.PICKED);
+        orderItemRepository.save(orderItem);
+
+        return newReservation;
+    }
+
+    /**
+     * {@code Reservation.orderId} is a String while {@code Order.id} is numeric - the conversion and
+     * the lookup live in one place instead of at every call site.
+     */
+    private Order findOrder(String orderId) {
+        Long id = Long.valueOf(orderId);
+
+        return orderRepository.findById(id)
+                .orElseGet(() -> orderRepository.findByOrderNo(id)
+                        .orElseThrow(() -> new ResourceNotFoundException("Order", "id", id)));
+    }
+
 
     private Storehouse getAvailableStorehouse(UUID sku, Integer requiredQuantity) {
         for (Storehouse storehouse : getAllStorehouses()) {

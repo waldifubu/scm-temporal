@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.reservation.ReservationOutcome;
 import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
@@ -30,8 +31,11 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -88,8 +92,22 @@ class FullfillmentServiceReserveItemsTest {
         order.setId(42L);
         order.setOrderNo(1042L);
         order.setStatus(OrderStatus.CREATED);
-        order.setOrderItems(List.of(item));
+        order.setOrderItems(itemsOf(item));
         return order;
+    }
+
+    /**
+     * LinkedHashSet rather than {@code Set.of}: the iteration order of an immutable set is
+     * randomised per JVM run, which would make any test that cares about the order lines are looked
+     * at fail at random.
+     */
+    private Set<OrderItem> itemsOf(OrderItem... items) {
+        return new LinkedHashSet<>(Arrays.asList(items));
+    }
+
+    /** The line {@link #orderRequesting} put in - a Set has no getFirst. */
+    private OrderItem firstItem(Order order) {
+        return order.getOrderItems().iterator().next();
     }
 
     private User actingUser() {
@@ -140,7 +158,7 @@ class FullfillmentServiceReserveItemsTest {
         secondItem.setQuantity(2);
 
         Order order = orderRequesting(5);
-        order.setOrderItems(List.of(order.getOrderItems().getFirst(), secondItem));
+        order.setOrderItems(itemsOf(firstItem(order), secondItem));
 
         assertThatThrownBy(() -> service.reserveItems(order, USERNAME))
                 .isInstanceOf(UnsufficientException.class)
@@ -151,7 +169,11 @@ class FullfillmentServiceReserveItemsTest {
     /**
      * A repeated call on an already reserved order must stay idempotent. checkItems reports the
      * line as unavailable in that situation - the stock is held by this very order - so the
-     * availability guard has to step aside and let the reservation return what already exists.
+     * availability guard has to step aside instead of failing the call.
+     * <p>
+     * Nothing is created a second time, and nothing is reported either: what an earlier call
+     * reserved does not belong in this call's answer. Every line is covered, so the outcome is
+     * COMPLETE rather than PENDING - that is what tells the empty result apart from "still waiting".
      */
     @Test
     void staysIdempotentWhenTheOrderAlreadyHoldsReservations() {
@@ -163,13 +185,84 @@ class FullfillmentServiceReserveItemsTest {
         when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(existing), false));
+                .thenReturn(new ReservationResult(List.of(), List.of(existing)));
 
-        var result = service.reserveItems(orderRequesting(5), USERNAME);
+        var summary = service.reserveItems(orderRequesting(5), USERNAME);
 
-        assertThat(result.created()).isFalse();
-        assertThat(result.reservations()).containsExactly(existing);
+        assertThat(summary.created()).isEmpty();
+        assertThat(summary.outcome()).isEqualTo(ReservationOutcome.COMPLETE);
         verify(inventoryService).reserveWithRetry(anyString(), anyList());
+    }
+
+    /**
+     * Some lines are covered, others are not: the order is not done, so the caller has to be able to
+     * tell this empty result from the COMPLETE one above and try again later.
+     */
+    @Test
+    void reportsPendingWhenLinesRemainOutstanding() {
+        UUID outstandingSku = UUID.randomUUID();
+
+        Product outstanding = new Product();
+        outstanding.setArticleNo(1002L);
+        outstanding.setSku(outstandingSku);
+        OrderItem outstandingItem = new OrderItem();
+        outstandingItem.setProduct(outstanding);
+        outstandingItem.setQuantity(2);
+        outstandingItem.setFullfillmentStatus(FullfillmentStatus.WAITING);
+
+        Order order = orderRequesting(5);
+        order.setOrderItems(itemsOf(firstItem(order), outstandingItem));
+
+        Storehouse storehouse = new Storehouse();
+        storehouse.setId(7L);
+        Reservation existing = Reservation.active("42", SKU, 5, storehouse);
+
+        // neither line is available: the first because this order already holds its stock, the
+        // second because there is none
+        when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of());
+        when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
+        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+                .thenReturn(new ReservationResult(List.of(), List.of(existing)));
+
+        var summary = service.reserveItems(order, USERNAME);
+
+        assertThat(summary.created()).isEmpty();
+        assertThat(summary.outcome()).isEqualTo(ReservationOutcome.PENDING);
+        assertThat(outstandingItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.WAITING);
+    }
+
+    /** The headline rule: what an earlier call reserved stays out of this call's answer. */
+    @Test
+    void reportsOnlyWhatThisCallCreated() {
+        UUID outstandingSku = UUID.randomUUID();
+
+        Product outstanding = new Product();
+        outstanding.setArticleNo(1002L);
+        outstanding.setSku(outstandingSku);
+        OrderItem outstandingItem = new OrderItem();
+        outstandingItem.setProduct(outstanding);
+        outstandingItem.setQuantity(2);
+
+        Order order = orderRequesting(3);
+        order.setOrderItems(itemsOf(firstItem(order), outstandingItem));
+
+        Storehouse storehouse = new Storehouse();
+        storehouse.setId(7L);
+        Reservation existing = Reservation.active("42", SKU, 3, storehouse);
+        Reservation added = Reservation.active("42", outstandingSku, 2, storehouse);
+
+        when(stockRepository.findEligibleBySku(SKU, 3)).thenReturn(List.of());
+        when(stockRepository.findEligibleBySku(outstandingSku, 2)).thenReturn(List.of(stock(5, 0)));
+        when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
+        when(productRepository.findByArticleNo(1002L)).thenReturn(Optional.of(outstanding));
+        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+                .thenReturn(new ReservationResult(List.of(added), List.of(existing, added)));
+
+        var summary = service.reserveItems(order, USERNAME);
+
+        assertThat(summary.created()).containsExactly(added);
+        assertThat(summary.created()).doesNotContain(existing);
+        assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
     }
 
     /**
@@ -190,8 +283,8 @@ class FullfillmentServiceReserveItemsTest {
         uncoveredItem.setFullfillmentStatus(FullfillmentStatus.WAITING);
 
         Order order = orderRequesting(3);
-        OrderItem coveredItem = order.getOrderItems().getFirst();
-        order.setOrderItems(List.of(coveredItem, uncoveredItem));
+        OrderItem coveredItem = firstItem(order);
+        order.setOrderItems(itemsOf(coveredItem, uncoveredItem));
 
         when(stockRepository.findEligibleBySku(coveredSku, 3)).thenReturn(List.of(stock(10, 2)));
         when(stockRepository.findEligibleBySku(uncoveredSku, 2)).thenReturn(List.of());
@@ -201,7 +294,7 @@ class FullfillmentServiceReserveItemsTest {
         storehouse.setId(7L);
         Reservation created = Reservation.active("42", coveredSku, 3, storehouse);
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(created), true));
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(order, USERNAME);
 
@@ -227,9 +320,9 @@ class FullfillmentServiceReserveItemsTest {
         outstandingItem.setQuantity(2);
 
         Order order = orderRequesting(3);
-        OrderItem reservedItem = order.getOrderItems().getFirst();
+        OrderItem reservedItem = firstItem(order);
         reservedItem.setFullfillmentStatus(FullfillmentStatus.RESERVED);
-        order.setOrderItems(List.of(reservedItem, outstandingItem));
+        order.setOrderItems(itemsOf(reservedItem, outstandingItem));
         order.setStatus(OrderStatus.IN_FULFILLMENT);
 
         Storehouse storehouse = new Storehouse();
@@ -244,7 +337,7 @@ class FullfillmentServiceReserveItemsTest {
 
         Reservation added = Reservation.active("42", outstandingSku, 2, storehouse);
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(existing, added), true));
+                .thenReturn(new ReservationResult(List.of(added), List.of(existing, added)));
 
         service.reserveItems(order, USERNAME);
 
@@ -258,14 +351,19 @@ class FullfillmentServiceReserveItemsTest {
 
     @Test
     void reservesWhenEveryLineIsCovered() {
+        Storehouse storehouse = new Storehouse();
+        storehouse.setId(7L);
+        Reservation created = Reservation.active("42", SKU, 3, storehouse);
+
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of(stock(10, 2)));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(), true));
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
-        var result = service.reserveItems(orderRequesting(3), USERNAME);
+        var summary = service.reserveItems(orderRequesting(3), USERNAME);
 
-        assertThat(result.created()).isTrue();
+        assertThat(summary.created()).containsExactly(created);
+        assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
         verify(inventoryService).reserveWithRetry(anyString(), anyList());
         verify(orderItemRepository).saveAll(anyList());
     }
@@ -281,7 +379,7 @@ class FullfillmentServiceReserveItemsTest {
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
         when(userRepository.findByUsernameOrEmail(USERNAME, USERNAME)).thenReturn(Optional.of(actingUser()));
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(created), true));
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(orderRequesting(3), USERNAME);
 
@@ -315,7 +413,7 @@ class FullfillmentServiceReserveItemsTest {
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
         when(userRepository.findByUsernameOrEmail(email, email)).thenReturn(Optional.of(actingUser()));
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(created), true));
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(orderRequesting(3), email);
 
@@ -333,8 +431,10 @@ class FullfillmentServiceReserveItemsTest {
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of());
         when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
+        // Empty on both counts: the reservation neither created anything nor found anything active,
+        // so there is no line the order status could be advanced for.
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
-                .thenReturn(new ReservationResult(List.of(), false));
+                .thenReturn(new ReservationResult(List.of(), List.of()));
 
         Order order = orderRequesting(5);
         service.reserveItems(order, USERNAME);

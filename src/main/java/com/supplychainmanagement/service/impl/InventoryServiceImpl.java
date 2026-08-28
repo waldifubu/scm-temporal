@@ -37,7 +37,9 @@ public class InventoryServiceImpl implements InventoryService {
             if (existing.isEmpty()) {
                 throw ex;
             }
-            return new ReservationResult(existing, false);
+            // The concurrent call did the inserting, not this one: nothing was created here, even
+            // though the order is covered afterwards.
+            return new ReservationResult(List.of(), existing);
         }
     }
 

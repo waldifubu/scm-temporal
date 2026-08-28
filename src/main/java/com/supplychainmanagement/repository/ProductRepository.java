@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface ProductRepository extends JpaRepository<Product, Long> {
     @EntityGraph(attributePaths = {"components", "categories"})
@@ -24,4 +25,6 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     @EntityGraph(attributePaths = {"components", "categories"})
     Optional<Product> findWithComponentsByArticleNo(Long articleNo);
+
+    Optional<Product> findBySku(UUID sku);
 }

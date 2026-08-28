@@ -27,8 +27,9 @@ public class InventoryReservationTransactionService {
 
     /**
      * Reserves every item it can and skips the rest, so an order whose stock is only partly
-     * available still holds what is there. Returns all reservations active for the order
-     * afterwards - previously existing ones included.
+     * available still holds what is there. Reports the reservations it created itself separately
+     * from the ones active for the order afterwards - a repeated call must not present what an
+     * earlier one already reserved.
      * <p>
      * The idempotency guard works per SKU rather than per order: an item already reserved for this
      * order is skipped, an item still missing is attempted. That makes a repeated call pick up
@@ -43,9 +44,9 @@ public class InventoryReservationTransactionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ReservationResult reserve(String orderId, List<ReserveItem> items) {
         List<Reservation> active = new ArrayList<>(reservationRepository.findActive(orderId));
+        List<Reservation> created = new ArrayList<>();
         Set<UUID> reservedSkus = active.stream().map(Reservation::getSku).collect(Collectors.toSet());
 
-        boolean createdAny = false;
         for (ReserveItem item : items) {
             if (reservedSkus.contains(item.sku())) {
                 continue;
@@ -71,11 +72,11 @@ public class InventoryReservationTransactionService {
             stockRepository.save(stock);
             reservationRepository.save(reservation);
             active.add(reservation);
+            created.add(reservation);
             reservedSkus.add(item.sku());
-            createdAny = true;
         }
 
-        return new ReservationResult(active, createdAny);
+        return new ReservationResult(created, active);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

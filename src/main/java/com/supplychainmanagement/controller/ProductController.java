@@ -30,6 +30,14 @@ public class ProductController {
                 .toList();
     }
 
+    @GetMapping(value = "/sku/{sku}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER', 'WAREHOUSE')")
+    public ProductDto getProductBySku(@PathVariable String sku,
+                                            @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
+        boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
+        return productMapper.mapToDto(productService.findBySku(sku), isPrivilegedUser);
+    }
+
     @GetMapping(value = "/{articleNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER', 'WAREHOUSE')")
     public ProductDto getProductByArticleNo(@PathVariable long articleNo,

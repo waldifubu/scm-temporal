@@ -25,9 +25,11 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -200,7 +202,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private void bindOrderItems(Order order) {
-        List<OrderItem> orderItems = order.getOrderItems();
+        Set<OrderItem> orderItems = order.getOrderItems();
         if (orderItems == null) {
             return;
         }
@@ -223,16 +225,22 @@ public class OrderServiceImpl implements OrderService {
      * Instead the collection is synchronised in place: existing items are reused and updated by
      * their id, vanished ones drop out as orphans, new ones are added. The collection instance
      * itself stays the same.
+     * <p>
+     * That the collection is a Set changes nothing about the merge: {@link OrderItem} inherits
+     * identity equality, so two distinct line items never collapse into one, not even when they
+     * carry the same product and quantity. The merge is keyed by id, not by equality.
      */
-    private void applyOrderItems(Order existingOrder, List<OrderItem> incomingItems) {
+    private void applyOrderItems(Order existingOrder, Set<OrderItem> incomingItems) {
         if (incomingItems == null) {
             return;
         }
 
+        // LinkedHashSet rather than HashSet: only relevant for an order that has no collection yet,
+        // but it keeps the line items in the order they came in instead of an arbitrary one.
         if (existingOrder.getOrderItems() == null) {
-            existingOrder.setOrderItems(new ArrayList<>());
+            existingOrder.setOrderItems(new LinkedHashSet<>());
         }
-        List<OrderItem> currentItems = existingOrder.getOrderItems();
+        Set<OrderItem> currentItems = existingOrder.getOrderItems();
 
         Map<Long, OrderItem> currentById = new HashMap<>();
         for (OrderItem currentItem : currentItems) {
@@ -271,7 +279,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private void recalculateOrder(Order order) {
-        List<OrderItem> orderItems = order.getOrderItems();
+        Set<OrderItem> orderItems = order.getOrderItems();
         if (orderItems == null || orderItems.isEmpty()) {
             order.setAmountOfItems(0);
             order.setTotal(BigDecimal.ZERO);

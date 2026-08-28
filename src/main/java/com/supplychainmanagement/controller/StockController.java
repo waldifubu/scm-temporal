@@ -63,6 +63,14 @@ public class StockController {
         }
     }
 
+    /**
+     * Returns a list of stock entries for the given SKU and optional storehouse ID.
+     * If storehouseId is 0, it returns stock from all storehouses.
+     *
+     * @param sku
+     * @param storehouseId
+     * @return
+     */
     @GetMapping(value = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
     public ResponseEntity<List<Stock>> stock(

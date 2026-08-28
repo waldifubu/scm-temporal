@@ -40,7 +40,7 @@ public class Component {
     @Column(unique = true)
     private String externalId;
 
-    @Column(nullable = true, unique = true)
+    @Column(nullable = false, unique = true)
     private UUID sku;
 
     @PrePersist

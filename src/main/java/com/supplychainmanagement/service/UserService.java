@@ -29,4 +29,6 @@ public interface UserService {
     void deleteById(Long id);
 
     User findByUsernameOrEmail(String usernameOrEmail);
+
+    Long getAuthenticatedUserId(org.springframework.security.core.userdetails.User authUser);
 }

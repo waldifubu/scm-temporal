@@ -19,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -67,7 +68,7 @@ class FullfillmentServiceReleaseItemsTest {
         Order order = new Order();
         order.setId(42L);
         order.setOrderNo(1042L);
-        order.setOrderItems(List.of(orderItem));
+        order.setOrderItems(Set.of(orderItem));
 
         Reservation reservation = Reservation.active(ORDER_ID, SKU, 3, storehouse);
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(reservation));

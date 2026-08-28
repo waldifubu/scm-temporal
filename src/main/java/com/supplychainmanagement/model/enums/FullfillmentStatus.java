@@ -8,11 +8,6 @@ public enum FullfillmentStatus {
     WAITING,
 
     /**
-     * System is checking and reserving required inventory items.
-     */
-    RESERVING,
-
-    /**
      * All required items have been successfully reserved
      * and are guaranteed for this order.
      */

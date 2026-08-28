@@ -72,11 +72,7 @@ public class OrderController {
         }
 
         order.setStatus(OrderStatus.REJECTED);
-        return toSummaryDto(orderService.update(order.getId(), order, getAuthenticatedUserId(authUser)));
-    }
-
-    public Long getAuthenticatedUserId(User authUser) {
-        return userService.findByUsernameOrEmail(authUser.getUsername()).getId();
+        return toSummaryDto(orderService.update(order.getId(), order, userService.getAuthenticatedUserId(authUser)));
     }
 
     /*
@@ -101,14 +97,12 @@ public class OrderController {
                                              @AuthenticationPrincipal User authUser) {
         Order order = orderService.findByOrderNo(orderNo);
 
-        // Kept as-is: the "&& false" renders the condition ineffective, so the status is always
-        // set to ACKNOWLEDGED. See the open finding about GET with a side effect.
-        if (order.getStatus() != OrderStatus.ACKNOWLEDGED && false) {
+        if (order.getStatus() == OrderStatus.ACKNOWLEDGED) {
             throw new IllegalArgumentException("Order is already acknowledged");
         }
 
         order.setStatus(OrderStatus.ACKNOWLEDGED);
-        return toDetailsDto(orderService.update(order.getId(), order, getAuthenticatedUserId(authUser)));
+        return toDetailsDto(orderService.update(order.getId(), order, userService.getAuthenticatedUserId(authUser)));
     }
 
     @PostMapping(path = "", version = "1.0")

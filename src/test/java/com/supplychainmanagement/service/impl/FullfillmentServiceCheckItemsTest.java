@@ -16,6 +16,7 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,7 +66,7 @@ class FullfillmentServiceCheckItemsTest {
         item.setQuantity(quantity);
 
         Order order = new Order();
-        order.setOrderItems(List.of(item));
+        order.setOrderItems(Set.of(item));
         return order;
     }
 

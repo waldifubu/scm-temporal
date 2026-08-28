@@ -204,4 +204,8 @@ public class UserServiceImpl implements UserService {
         typedUser.setRoles(user.getRoles());
         return userRepository.save(typedUser);
     }
+
+    public Long getAuthenticatedUserId(org.springframework.security.core.userdetails.User authUser) {
+        return findByUsernameOrEmail(authUser.getUsername()).getId();
+    }
 }
