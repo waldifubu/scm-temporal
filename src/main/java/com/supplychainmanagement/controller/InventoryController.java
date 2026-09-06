@@ -1,21 +1,20 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
-import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.Reservation;
-import com.supplychainmanagement.model.enums.ReservationStatus;
-import com.supplychainmanagement.service.FullfillmentService;
+import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.InventoryService;
 import com.supplychainmanagement.service.OrderService;
-import com.supplychainmanagement.service.ProductService;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
@@ -24,8 +23,7 @@ import java.util.List;
 @RequestMapping({"/api/{version}"})
 public class InventoryController {
 
-    private final InventoryService inventoryService;
-    private final FullfillmentService fullfillmentService;
+    private final FulfillmentService fulfillmentService;
     private final OrderService orderService;
 
     /**
@@ -41,7 +39,7 @@ public class InventoryController {
                                                      @AuthenticationPrincipal User authUser) {
         var order = orderService.findByOrderNo(orderId);
 
-        ReservationSummary summary = fullfillmentService.reserveItems(order, authUser.getUsername());
+        ReservationSummary summary = fulfillmentService.reserveItems(order, authUser.getUsername());
 
         HttpStatus status = switch (summary.outcome()) {
             case CREATED -> HttpStatus.CREATED;
@@ -56,11 +54,13 @@ public class InventoryController {
     public ResponseEntity<Void> release(@PathVariable Long orderId) {
         var order = orderService.findByOrderNo(orderId);
 
-        fullfillmentService.releaseItems(order);
+        fulfillmentService.releaseItems(order);
 
         return ResponseEntity.ok().build();
     }
 
+
+    //@TODO: Never used atm.
     /*
     @PostMapping(path = "/orders/{orderId}/consume", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
@@ -70,6 +70,5 @@ public class InventoryController {
 
         return ResponseEntity.ok().build();
     }
-     */
-
+    */
 }

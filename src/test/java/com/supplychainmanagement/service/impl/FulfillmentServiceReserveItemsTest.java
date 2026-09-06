@@ -12,7 +12,7 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.exception.UnsufficientException;
-import com.supplychainmanagement.model.enums.FullfillmentStatus;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.OrderRepository;
@@ -50,9 +50,10 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class FullfillmentServiceReserveItemsTest {
+class FulfillmentServiceReserveItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
+    private static final String ORDER_ID = "42";
     private static final String USERNAME = "manager";
     private static final Long USER_ID = 99L;
 
@@ -74,7 +75,7 @@ class FullfillmentServiceReserveItemsTest {
     private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks
-    private FullfillmentServiceImpl service;
+    private FulfillmentServiceImpl service;
 
     private Product product() {
         Product product = new Product();
@@ -108,6 +109,15 @@ class FullfillmentServiceReserveItemsTest {
     /** The line {@link #orderRequesting} put in - a Set has no getFirst. */
     private OrderItem firstItem(Order order) {
         return order.getOrderItems().iterator().next();
+    }
+
+    /**
+     * An active reservation for one line, built the way the reserve path builds it. reserveItems
+     * itself only reads the sku off it, but the line is what a reservation is keyed to now, so the
+     * fixtures name it rather than leaving it null.
+     */
+    private Reservation reservationFor(OrderItem orderItem, UUID sku, int quantity, Storehouse storehouse) {
+        return Reservation.active(orderItem, ORDER_ID, sku, quantity, storehouse);
     }
 
     private User actingUser() {
@@ -179,7 +189,9 @@ class FullfillmentServiceReserveItemsTest {
     void staysIdempotentWhenTheOrderAlreadyHoldsReservations() {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation existing = Reservation.active("42", SKU, 5, storehouse);
+
+        Order order = orderRequesting(5);
+        Reservation existing = reservationFor(firstItem(order), SKU, 5, storehouse);
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of());
         when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
@@ -187,7 +199,7 @@ class FullfillmentServiceReserveItemsTest {
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(), List.of(existing)));
 
-        var summary = service.reserveItems(orderRequesting(5), USERNAME);
+        var summary = service.reserveItems(order, USERNAME);
 
         assertThat(summary.created()).isEmpty();
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.COMPLETE);
@@ -208,14 +220,14 @@ class FullfillmentServiceReserveItemsTest {
         OrderItem outstandingItem = new OrderItem();
         outstandingItem.setProduct(outstanding);
         outstandingItem.setQuantity(2);
-        outstandingItem.setFullfillmentStatus(FullfillmentStatus.WAITING);
+        outstandingItem.setFulfillmentStatus(FulfillmentStatus.WAITING);
 
         Order order = orderRequesting(5);
         order.setOrderItems(itemsOf(firstItem(order), outstandingItem));
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation existing = Reservation.active("42", SKU, 5, storehouse);
+        Reservation existing = reservationFor(firstItem(order), SKU, 5, storehouse);
 
         // neither line is available: the first because this order already holds its stock, the
         // second because there is none
@@ -228,7 +240,7 @@ class FullfillmentServiceReserveItemsTest {
 
         assertThat(summary.created()).isEmpty();
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.PENDING);
-        assertThat(outstandingItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.WAITING);
+        assertThat(outstandingItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
     }
 
     /** The headline rule: what an earlier call reserved stays out of this call's answer. */
@@ -248,8 +260,8 @@ class FullfillmentServiceReserveItemsTest {
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation existing = Reservation.active("42", SKU, 3, storehouse);
-        Reservation added = Reservation.active("42", outstandingSku, 2, storehouse);
+        Reservation existing = reservationFor(firstItem(order), SKU, 3, storehouse);
+        Reservation added = reservationFor(outstandingItem, outstandingSku, 2, storehouse);
 
         when(stockRepository.findEligibleBySku(SKU, 3)).thenReturn(List.of());
         when(stockRepository.findEligibleBySku(outstandingSku, 2)).thenReturn(List.of(stock(5, 0)));
@@ -280,7 +292,7 @@ class FullfillmentServiceReserveItemsTest {
         OrderItem uncoveredItem = new OrderItem();
         uncoveredItem.setProduct(uncovered);
         uncoveredItem.setQuantity(2);
-        uncoveredItem.setFullfillmentStatus(FullfillmentStatus.WAITING);
+        uncoveredItem.setFulfillmentStatus(FulfillmentStatus.WAITING);
 
         Order order = orderRequesting(3);
         OrderItem coveredItem = firstItem(order);
@@ -292,7 +304,7 @@ class FullfillmentServiceReserveItemsTest {
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation created = Reservation.active("42", coveredSku, 3, storehouse);
+        Reservation created = reservationFor(coveredItem, coveredSku, 3, storehouse);
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
@@ -303,8 +315,8 @@ class FullfillmentServiceReserveItemsTest {
         verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
         assertThat(captor.getValue()).extracting(ReserveItem::sku).containsExactly(coveredSku);
 
-        assertThat(coveredItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.RESERVED);
-        assertThat(uncoveredItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.WAITING);
+        assertThat(coveredItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
+        assertThat(uncoveredItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
     }
 
     /** A repeat call must attempt only the line that is still missing. */
@@ -321,13 +333,13 @@ class FullfillmentServiceReserveItemsTest {
 
         Order order = orderRequesting(3);
         OrderItem reservedItem = firstItem(order);
-        reservedItem.setFullfillmentStatus(FullfillmentStatus.RESERVED);
+        reservedItem.setFulfillmentStatus(FulfillmentStatus.RESERVED);
         order.setOrderItems(itemsOf(reservedItem, outstandingItem));
         order.setStatus(OrderStatus.IN_FULFILLMENT);
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation existing = Reservation.active("42", SKU, 3, storehouse);
+        Reservation existing = reservationFor(reservedItem, SKU, 3, storehouse);
 
         // the already reserved line reads as unavailable - its stock is booked to this order
         when(stockRepository.findEligibleBySku(SKU, 3)).thenReturn(List.of());
@@ -335,7 +347,7 @@ class FullfillmentServiceReserveItemsTest {
         when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
         when(productRepository.findByArticleNo(1002L)).thenReturn(Optional.of(outstanding));
 
-        Reservation added = Reservation.active("42", outstandingSku, 2, storehouse);
+        Reservation added = reservationFor(outstandingItem, outstandingSku, 2, storehouse);
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(added), List.of(existing, added)));
 
@@ -345,22 +357,24 @@ class FullfillmentServiceReserveItemsTest {
         verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
         assertThat(captor.getValue()).extracting(ReserveItem::sku).containsExactly(outstandingSku);
 
-        assertThat(reservedItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.RESERVED);
-        assertThat(outstandingItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.RESERVED);
+        assertThat(reservedItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
+        assertThat(outstandingItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
     }
 
     @Test
     void reservesWhenEveryLineIsCovered() {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation created = Reservation.active("42", SKU, 3, storehouse);
+
+        Order order = orderRequesting(3);
+        Reservation created = reservationFor(firstItem(order), SKU, 3, storehouse);
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of(stock(10, 2)));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
-        var summary = service.reserveItems(orderRequesting(3), USERNAME);
+        var summary = service.reserveItems(order, USERNAME);
 
         assertThat(summary.created()).containsExactly(created);
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
@@ -373,7 +387,9 @@ class FullfillmentServiceReserveItemsTest {
     void publishesTheStatusChangeWithTheActingUser() {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation created = Reservation.active("42", SKU, 3, storehouse);
+
+        Order order = orderRequesting(3);
+        Reservation created = reservationFor(firstItem(order), SKU, 3, storehouse);
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of(stock(10, 2)));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
@@ -381,7 +397,7 @@ class FullfillmentServiceReserveItemsTest {
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
-        service.reserveItems(orderRequesting(3), USERNAME);
+        service.reserveItems(order, USERNAME);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(captor.capture());
@@ -407,7 +423,9 @@ class FullfillmentServiceReserveItemsTest {
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation created = Reservation.active("42", SKU, 3, storehouse);
+
+        Order order = orderRequesting(3);
+        Reservation created = reservationFor(firstItem(order), SKU, 3, storehouse);
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of(stock(10, 2)));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
@@ -415,7 +433,7 @@ class FullfillmentServiceReserveItemsTest {
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
-        service.reserveItems(orderRequesting(3), email);
+        service.reserveItems(order, email);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(eventPublisher).publishEvent(captor.capture());
@@ -427,7 +445,9 @@ class FullfillmentServiceReserveItemsTest {
     void doesNotPublishAStatusChangeWhenNothingCouldBeReserved() {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation existing = Reservation.active("42", SKU, 5, storehouse);
+
+        Order order = orderRequesting(5);
+        Reservation existing = reservationFor(firstItem(order), SKU, 5, storehouse);
 
         when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of());
         when(reservationRepository.findActive("42")).thenReturn(List.of(existing));
@@ -436,10 +456,36 @@ class FullfillmentServiceReserveItemsTest {
         when(inventoryService.reserveWithRetry(anyString(), anyList()))
                 .thenReturn(new ReservationResult(List.of(), List.of()));
 
-        Order order = orderRequesting(5);
         service.reserveItems(order, USERNAME);
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CREATED);
         verifyNoInteractions(eventPublisher, orderRepository);
+    }
+
+    /**
+     * The reservation's foreign key hangs off this: the line's id has to survive the trip through
+     * AvailableOrderItemDto into the ReserveItem, otherwise the reservation cannot be linked to its
+     * order line at all.
+     */
+    @Test
+    void handsTheOrderItemIdToTheReservation() {
+        Order order = orderRequesting(3);
+        OrderItem item = firstItem(order);
+        item.setId(11L);
+
+        Storehouse storehouse = new Storehouse();
+        storehouse.setId(7L);
+        Reservation created = reservationFor(item, SKU, 3, storehouse);
+
+        when(stockRepository.findEligibleBySku(any(), anyInt())).thenReturn(List.of(stock(10, 2)));
+        when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product()));
+        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
+
+        service.reserveItems(order, USERNAME);
+
+        ArgumentCaptor<List<ReserveItem>> captor = ArgumentCaptor.forClass(List.class);
+        verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
+        assertThat(captor.getValue()).extracting(ReserveItem::orderItemId).containsExactly(11L);
     }
 }

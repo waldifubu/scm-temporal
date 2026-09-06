@@ -46,7 +46,7 @@ public class Product {
     private BigDecimal unitPrice = BigDecimal.ZERO;
 
     @Column(nullable = false)
-    private Double weight;
+    private BigDecimal weight;
 
     @ManyToMany
     @JoinTable(
@@ -71,7 +71,9 @@ public class Product {
     void applyDefaultStatus() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
-        weight = components.stream().mapToDouble(Component::getWeight).sum();
+        weight = components.stream()
+                .map(Component::getWeight)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         active = true;
     }
 }

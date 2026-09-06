@@ -1,6 +1,6 @@
 package com.supplychainmanagement.model.enums;
 
-public enum FullfillmentStatus {
+public enum FulfillmentStatus {
     /**
      * Fulfillment process has not started yet.
      * Order is waiting for warehouse processing.

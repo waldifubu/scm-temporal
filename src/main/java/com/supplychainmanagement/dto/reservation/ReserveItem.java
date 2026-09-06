@@ -7,6 +7,13 @@ import java.util.UUID;
 
 public record ReserveItem(
 
+        /*
+        The order line this item belongs to. Carried along so the reservation can be linked to it
+        without looking it back up from (orderId, sku).
+         */
+        @NotNull
+        Long orderItemId,
+
         @NotNull
         UUID sku,
 

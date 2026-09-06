@@ -7,6 +7,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.ColumnDefault;
 
+import java.math.BigDecimal;
 import java.util.Random;
 import java.util.UUID;
 
@@ -35,7 +36,7 @@ public class Component {
     private String description;
 
     @ColumnDefault("0.0")
-    private Double weight;
+    private BigDecimal weight;
 
     @Column(unique = true)
     private String externalId;
@@ -45,8 +46,8 @@ public class Component {
 
     @PrePersist
     void applyDefaultStatus() {
-        if (this.weight == null || this.weight == 0) {
-            this.weight = 10.0 + new Random().nextDouble() * 20; // Set a random weight value between 10 and 30
+        if (this.weight == null || this.weight.compareTo(BigDecimal.ZERO) == 0) {
+            this.weight = BigDecimal.valueOf(10.0 + new Random().nextDouble() * 20); // Set a random weight value between 10 and 30
         }
     }
 }

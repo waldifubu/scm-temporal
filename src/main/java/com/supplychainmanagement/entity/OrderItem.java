@@ -1,10 +1,9 @@
 package com.supplychainmanagement.entity;
 
-import com.supplychainmanagement.model.enums.FullfillmentStatus;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
-import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -35,5 +34,5 @@ public class OrderItem {
     private Integer quantity;
 
     @Enumerated(EnumType.STRING)
-    private FullfillmentStatus fullfillmentStatus = FullfillmentStatus.WAITING;
+    private FulfillmentStatus fulfillmentStatus = FulfillmentStatus.WAITING;
 }

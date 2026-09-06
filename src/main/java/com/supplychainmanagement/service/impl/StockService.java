@@ -1,10 +1,13 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.entity.Stock;
+import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.repository.StockRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
 import lombok.AllArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -64,7 +67,7 @@ public class StockService {
     }
 
     @Transactional
-    public Stock transferStock(UUID sku, Long storehouseFrom, Long storehouseTo, Integer quantity) {
+    public Stock transferItemToStock(UUID sku, Long storehouseFrom, Long storehouseTo, Integer quantity) {
         if (quantity == null || quantity <= 0) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Quantity must be greater than zero");
         }
@@ -81,7 +84,7 @@ public class StockService {
                 .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Source stock not found"));
 
         if (sourceStock.getAvailable() < quantity) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Not enough available quantity in source stock");
+            throw new APIException(HttpStatus.BAD_REQUEST, "Not enough available qty in source stock");
         }
 
         Stock targetStock = stockRepository.findByStorehouseIdAndSku(storehouseTo, sku)
@@ -104,5 +107,22 @@ public class StockService {
         stockRepository.save(targetStock);
 
         return targetStock;
+    }
+
+    public Page<Stock> findAllByStorehouseId(Long id, Pageable pageable) {
+        return stockRepository.findByStorehouseId(id, pageable);
+    }
+
+    private List<Storehouse> getAllStorehouses() {
+        return storehouseRepository.findAll();
+    }
+
+    private Storehouse getAvailableStorehouse(UUID sku, Integer requiredQuantity) {
+        for (Storehouse storehouse : getAllStorehouses()) {
+            if (isAvailable(sku, requiredQuantity, storehouse.getId())) {
+                return storehouse;
+            }
+        }
+        return null;
     }
 }

@@ -7,6 +7,7 @@ import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.StockRepository;
+import com.supplychainmanagement.service.ProductionService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -29,7 +30,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class FullfillmentServiceCheckItemsTest {
+class FulfillmentServiceCheckItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
 
@@ -39,7 +40,7 @@ class FullfillmentServiceCheckItemsTest {
     private OrderItemRepository orderItemRepository;
 
     @InjectMocks
-    private FullfillmentServiceImpl service;
+    private ProductionService service;
 
     private Storehouse storehouse(Long id) {
         Storehouse storehouse = new Storehouse();

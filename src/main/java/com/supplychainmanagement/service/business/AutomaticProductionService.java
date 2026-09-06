@@ -3,8 +3,9 @@ package com.supplychainmanagement.service.business;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.model.enums.OrderStatus;
-import com.supplychainmanagement.service.FullfillmentService;
+import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.OrderService;
+import com.supplychainmanagement.service.ProductionService;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
@@ -22,13 +23,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class AutomaticProductionService {
 
-    final FullfillmentService fullfillmentService;
+    private final ProductionService productionService;
+    private final FulfillmentService fulfillmentService;
     private final OrderService orderService;
 
     //    @Scheduled(initialDelay = 30, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void assemble() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
-        Page<ProductionResultDto> pageProducts = fullfillmentService.produce(pageable);
+        Page<ProductionResultDto> pageProducts = productionService.produce(pageable);
         log.info("Tried assembling  {}", LocalDateTime.now());
         log.info("Products: {}", pageProducts.getContent());
     }
@@ -37,7 +39,7 @@ public class AutomaticProductionService {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         var orders = orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable);
         orders.forEach(order -> {
-                    ReservationSummary reservationSummary = fullfillmentService.reserveItems(order, "system");
+                    ReservationSummary reservationSummary = fulfillmentService.reserveItems(order, "system");
                     log.info("Reserved for order {}: {}", order.getOrderNo(), reservationSummary.created());
                 }
         );

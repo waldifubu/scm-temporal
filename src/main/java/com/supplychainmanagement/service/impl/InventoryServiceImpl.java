@@ -76,7 +76,7 @@ public class InventoryServiceImpl implements InventoryService {
 
     private void backoff(int attempt) {
         try {
-            Thread.sleep(50L * attempt);
+            Thread.sleep(100L * attempt);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);

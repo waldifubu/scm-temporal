@@ -1,6 +1,8 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Stock;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -24,7 +26,7 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
     List<Stock> findAvailableBySkuOrderByUpdatedAtAsc(@Param("sku") UUID sku);
 
     /**
-     * Storehouses holding at least {@code quantity} unreserved units of {@code sku}, oldest stock
+     * Storehouses holding at least {@code qty} unreserved units of {@code sku}, oldest stock
      * first (FEFO-style, matching {@link #findAvailableBySkuOrderByUpdatedAtAsc}).
      * <p>
      * The availability predicate {@code onHand - reserved} belongs in the WHERE clause: evaluating
@@ -35,5 +37,9 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
             WHERE s.sku = :sku AND (s.onHand - s.reserved) >= :quantity
             ORDER BY s.updatedAt ASC
             """)
-    List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("quantity") int quantity);
+    List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("qty") int quantity);
+
+    List<Stock> findByStorehouseId(Long id);
+
+    Page<Stock> findByStorehouseId(Long id, Pageable pageable);
 }

@@ -98,7 +98,7 @@ public class OrderController {
         Order order = orderService.findByOrderNo(orderNo);
 
         if (order.getStatus() == OrderStatus.ACKNOWLEDGED) {
-            throw new IllegalArgumentException("Order is already acknowledged");
+//            throw new IllegalArgumentException("Order is already acknowledged");
         }
 
         order.setStatus(OrderStatus.ACKNOWLEDGED);
@@ -163,7 +163,7 @@ public class OrderController {
                         item.getId(),
                         item.getQuantity(),
                         item.getProduct() != null ? item.getProduct().getName() : null,
-                        item.getFullfillmentStatus()
+                        item.getFulfillmentStatus()
                 ))
                 .toList();
 

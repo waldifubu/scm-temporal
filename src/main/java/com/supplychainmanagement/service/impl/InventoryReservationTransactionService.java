@@ -4,6 +4,7 @@ import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Stock;
+import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.StockRepository;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +25,7 @@ public class InventoryReservationTransactionService {
 
     private final StockRepository stockRepository;
     private final ReservationRepository reservationRepository;
+    private final OrderItemRepository orderItemRepository;
 
     /**
      * Reserves every item it can and skips the rest, so an order whose stock is only partly
@@ -62,6 +64,9 @@ public class InventoryReservationTransactionService {
             stock.reserve(item.quantity());
 
             Reservation reservation = Reservation.active(
+                    // A proxy is enough: writing the foreign key needs the id, not the row.
+                    // getReferenceById issues no select, so the reserve path keeps its query count.
+                    orderItemRepository.getReferenceById(item.orderItemId()),
                     orderId,
                     item.sku(),
                     item.quantity(),

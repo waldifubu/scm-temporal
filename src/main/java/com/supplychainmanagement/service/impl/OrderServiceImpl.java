@@ -228,7 +228,7 @@ public class OrderServiceImpl implements OrderService {
      * <p>
      * That the collection is a Set changes nothing about the merge: {@link OrderItem} inherits
      * identity equality, so two distinct line items never collapse into one, not even when they
-     * carry the same product and quantity. The merge is keyed by id, not by equality.
+     * carry the same product and qty. The merge is keyed by id, not by equality.
      */
     private void applyOrderItems(Order existingOrder, Set<OrderItem> incomingItems) {
         if (incomingItems == null) {
@@ -258,8 +258,8 @@ public class OrderServiceImpl implements OrderService {
 
             target.setOrder(existingOrder);
             target.setQuantity(incomingItem.getQuantity());
-            if (incomingItem.getFullfillmentStatus() != null) {
-                target.setFullfillmentStatus(incomingItem.getFullfillmentStatus());
+            if (incomingItem.getFulfillmentStatus() != null) {
+                target.setFulfillmentStatus(incomingItem.getFulfillmentStatus());
             }
             target.setProduct(resolveProduct(incomingItem.getProduct()));
             mergedItems.add(target);
@@ -291,7 +291,7 @@ public class OrderServiceImpl implements OrderService {
         for (OrderItem orderItem : orderItems) {
             Integer quantity = orderItem.getQuantity();
             if (quantity == null) {
-                throw new APIException(HttpStatus.BAD_REQUEST, "Order item quantity is required!");
+                throw new APIException(HttpStatus.BAD_REQUEST, "Order item qty is required!");
             }
 
             amountOfItems += quantity;

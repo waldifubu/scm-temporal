@@ -5,7 +5,7 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Storehouse;
-import com.supplychainmanagement.model.enums.FullfillmentStatus;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.service.InventoryService;
@@ -35,7 +35,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class FullfillmentServiceReleaseItemsTest {
+class FulfillmentServiceReleaseItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
     private static final String ORDER_ID = "42";
@@ -48,7 +48,7 @@ class FullfillmentServiceReleaseItemsTest {
     private InventoryService inventoryService;
 
     @InjectMocks
-    private FullfillmentServiceImpl service;
+    private FulfillmentServiceImpl service;
 
     private OrderItem orderItem;
 
@@ -61,16 +61,18 @@ class FullfillmentServiceReleaseItemsTest {
         product.setSku(SKU);
 
         orderItem = new OrderItem();
+        // The id matters here: releaseItems reads it off the reservation to build the ReserveItem.
+        orderItem.setId(5L);
         orderItem.setProduct(product);
         orderItem.setQuantity(3);
-        orderItem.setFullfillmentStatus(FullfillmentStatus.RESERVED);
+        orderItem.setFulfillmentStatus(FulfillmentStatus.RESERVED);
 
         Order order = new Order();
         order.setId(42L);
         order.setOrderNo(1042L);
         order.setOrderItems(Set.of(orderItem));
 
-        Reservation reservation = Reservation.active(ORDER_ID, SKU, 3, storehouse);
+        Reservation reservation = Reservation.active(orderItem, ORDER_ID, SKU, 3, storehouse);
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(reservation));
 
         return order;
@@ -82,7 +84,7 @@ class FullfillmentServiceReleaseItemsTest {
 
         service.releaseItems(order);
 
-        assertThat(orderItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.WAITING);
+        assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
         verify(orderItemRepository).saveAll(anyList());
     }
 
@@ -111,7 +113,7 @@ class FullfillmentServiceReleaseItemsTest {
         assertThatThrownBy(() -> service.releaseItems(order))
                 .isInstanceOf(IllegalStateException.class);
 
-        assertThat(orderItem.getFullfillmentStatus()).isEqualTo(FullfillmentStatus.RESERVED);
+        assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
         verify(orderItemRepository, never()).saveAll(any());
     }
 }
