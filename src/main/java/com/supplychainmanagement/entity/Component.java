@@ -36,6 +36,7 @@ public class Component {
     private String description;
 
     @ColumnDefault("0.0")
+    @Column(precision = 10, scale = 3)
     private BigDecimal weight;
 
     @Column(unique = true)

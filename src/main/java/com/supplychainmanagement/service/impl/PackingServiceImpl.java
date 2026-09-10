@@ -22,6 +22,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.Comparator;
 import java.util.Objects;
 
 @Service
@@ -76,9 +77,11 @@ public class PackingServiceImpl implements PackingService {
         shipmentPackage.setHeight(request.height());
         shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
 
-        for (PackItem packItem : request.items()) {
-            packLine(shipmentPackage, packItem, orderNo);
-        }
+        // Processed in a stable order because packLine locks each line: two concurrent requests
+        // touching the same two lines in opposite orders would otherwise deadlock each other.
+        request.items().stream()
+                .sorted(Comparator.comparing(PackItem::orderItemId))
+                .forEach(packItem -> packLine(shipmentPackage, packItem, orderNo));
 
         // Every line was skipped, so there is nothing to ship - an empty package is not a result.
         if (shipmentPackage.getItems().isEmpty()) {
@@ -96,7 +99,9 @@ public class PackingServiceImpl implements PackingService {
      * {@link #createPackage} is what turns "nothing was ready at all" into an error.
      */
     private void packLine(ShipmentPackage shipmentPackage, PackItem packItem, Long orderNo) {
-        OrderItem orderItem = orderItemRepository.findById(packItem.orderItemId()).orElseThrow(
+        // Locked, not just read: see OrderItemRepository.findForUpdateById. The lock is held until
+        // createPackage commits, so a concurrent packer waits and then sees the updated total.
+        OrderItem orderItem = orderItemRepository.findForUpdateById(packItem.orderItemId()).orElseThrow(
                 () -> new IllegalArgumentException("OrderItem not found: " + packItem.orderItemId())
         );
 
@@ -116,7 +121,10 @@ public class PackingServiceImpl implements PackingService {
 
         // Measured against what earlier packages of this line already hold, not against the ordered
         // quantity alone - the latter would let two half packages add up to more than was ordered.
-        int alreadyPacked = shipmentPackageRepository.sumQuantityByOrderItemId(orderItem.getId());
+        // The package being built counts too: its items are not written yet, so the query cannot see
+        // them, and the same line listed twice in one request would otherwise pass twice.
+        int alreadyPacked = shipmentPackageRepository.sumQuantityByOrderItemId(orderItem.getId())
+                + packedInThisPackage(shipmentPackage, orderItem);
         int newPackedTotal = alreadyPacked + requestedQuantity;
         if (newPackedTotal > orderItem.getQuantity()) {
             throw new IllegalStateException(
@@ -138,6 +146,13 @@ public class PackingServiceImpl implements PackingService {
         orderItem.setFulfillmentStatus(newPackedTotal == orderItem.getQuantity()
                 ? FulfillmentStatus.PACKED
                 : FulfillmentStatus.PACKING);
+    }
+
+    private int packedInThisPackage(ShipmentPackage shipmentPackage, OrderItem orderItem) {
+        return shipmentPackage.getItems().stream()
+                .filter(item -> Objects.equals(item.getOrderItem().getId(), orderItem.getId()))
+                .mapToInt(PackageItem::getQuantity)
+                .sum();
     }
 
     private String generatePackageNumber() {

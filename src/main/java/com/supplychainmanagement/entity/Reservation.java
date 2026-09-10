@@ -11,7 +11,25 @@ import java.util.UUID;
 @Getter
 @Setter
 @RequiredArgsConstructor
-@Table(name = "reservation", uniqueConstraints = @UniqueConstraint(columnNames = {"order_id", "sku", "storehouse_id"}))
+/*
+ * One line, at most one reservation - and it is the table that says so, not just the mapping.
+ * <p>
+ * It replaces a constraint over (order_id, sku, storehouse_id), which read "one reservation per
+ * order, article and storehouse". That was the weaker rule: it would have allowed the same line to
+ * be held in two storehouses, while a line is covered by exactly one storehouse or not at all
+ * (see ProductionServiceImpl.findEligibleStock). Deliberately no splitting across storehouses.
+ * <p>
+ * Named explicitly rather than left to `unique = true` on the @JoinColumn: that produces a
+ * generated name, which is awkward to reference in a migration and invisible when reading the
+ * table. The name matches the one the migration in issues.txt creates.
+ */
+@Table(
+        name = "reservation",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_reservation_order_item",
+                columnNames = "order_item_id"
+        )
+)
 public class Reservation {
 
     @Id
@@ -19,9 +37,9 @@ public class Reservation {
     private Long id;
 
     /**
-     * The order line this reservation was made for. A line holds at most one reservation at a time -
-     * a released one is deleted, a consumed one blocks a new one - so the relation is 1:1, enforced
-     * by the unique constraint on the FK column.
+     * The order line this reservation was made for. A line holds at most one reservation - a released
+     * one is deleted, a consumed one blocks a new one - so the relation is 1:1, enforced by
+     * uk_reservation_order_item above.
      * <p>
      * Deliberately unidirectional: OrderItem does not point back. A back reference would drag
      * Order -> orderItems -> reservation -> orderItem into every response that serializes a
@@ -31,7 +49,7 @@ public class Reservation {
      * OneToOne Hibernate cannot do lazy without bytecode enhancement.
      */
     @OneToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "order_item_id", unique = true)
+    @JoinColumn(name = "order_item_id")
     private OrderItem orderItem;
 
     @Column(nullable = false, length = 64)

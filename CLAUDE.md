@@ -117,10 +117,20 @@ The chain is split by responsibility, not by entity. Which service owns which st
   `String orderId` (matches `Reservation.orderId`, which is a String, not the numeric `Order.id`).
 - **`InventoryReservationTransactionService`** does the real DB work in its own `REQUIRES_NEW`
   transactions (`reserve`/`release`/`consume`), each iterating `ReserveItem`s and mutating `Stock`
-  + `Reservation` together. `reserve` has an idempotency guard (re-check `findActive(orderId)`
-  before inserting) plus `InventoryServiceImpl` catches `DataIntegrityViolationException` as a
-  race-condition fallback — the DB's unique constraint on `(order_id, sku, storehouse_id)` is the
-  last line of defense, not the primary guard.
+  + `Reservation` together. `reserve` has an idempotency guard keyed by **order line**
+  (`findActive(orderId)` up front, skip whatever already holds a reservation) plus
+  `InventoryServiceImpl` catches `DataIntegrityViolationException` as a race-condition fallback —
+  the unique constraint on `order_item_id` is the last line of defense, not the primary guard.
+  Do not key any of this by SKU again. An order carries every article at most once - enforced by
+  `uk_order_item_order_product` on `order_items`, and upheld by
+  `OrderServiceImpl.mergeDuplicateProducts`, which folds a repeated article into the first line and
+  adds up the quantities rather than rejecting the request - so SKU and line coincide. Keying by line is still the
+  right choice: it says what a reservation belongs to instead of relying on that rule holding. The guard, the release/consume lookup and the RESERVED marking in `reserveItems` were all
+  keyed by SKU and would all have failed together.
+- **One line, at most one reservation.** A line is covered by a single storehouse or not at all -
+  `ProductionServiceImpl.findEligibleStock` looks for one storehouse holding the *full* quantity and
+  reports the line as unavailable otherwise. There is deliberately no splitting across storehouses,
+  which is why uniqueness sits on `order_item_id` alone.
 - **`Reservation` points at its `OrderItem`** through a unidirectional, LAZY `@OneToOne` on
   `order_item_id`. `orderId`, `sku` and `quantity` are kept denormalized alongside it on purpose:
   `Stock` is keyed by `(sku, storehouse)`, so the hot reserve/release path needs no join through

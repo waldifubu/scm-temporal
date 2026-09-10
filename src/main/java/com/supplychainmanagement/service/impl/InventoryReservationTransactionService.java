@@ -2,6 +2,7 @@ package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
+import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.repository.OrderItemRepository;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -33,11 +35,11 @@ public class InventoryReservationTransactionService {
      * from the ones active for the order afterwards - a repeated call must not present what an
      * earlier one already reserved.
      * <p>
-     * The idempotency guard works per SKU rather than per order: an item already reserved for this
-     * order is skipped, an item still missing is attempted. That makes a repeated call pick up
-     * where the previous one stopped, and it also covers the case where checkItems picks a
-     * different storehouse the second time around - without it, the DB unique constraint
-     * (order_id, sku, storehouse_id) would be the only thing standing in the way.
+     * The idempotency guard works per order line: a line already holding a reservation is skipped,
+     * one still missing is attempted. That makes a repeated call pick up where the previous one
+     * stopped, and it covers the case where checkItems picks a different storehouse the second time
+     * around. Per line and not per SKU, because an order may well contain the same article twice -
+     * over the SKU the second of those lines was silently skipped and never reserved.
      * <p>
      * An item that cannot be reserved is skipped, not thrown on: a single unavailable line must not
      * roll back the lines that succeeded. {@code Stock.reserve} validates before it mutates, so
@@ -47,10 +49,19 @@ public class InventoryReservationTransactionService {
     public ReservationResult reserve(String orderId, List<ReserveItem> items) {
         List<Reservation> active = new ArrayList<>(reservationRepository.findActive(orderId));
         List<Reservation> created = new ArrayList<>();
-        Set<UUID> reservedSkus = active.stream().map(Reservation::getSku).collect(Collectors.toSet());
+
+        // Keyed by order line, not by SKU. Over the SKU an order could hold one reservation per
+        // article, so a second line of the same product was skipped and never got one - and the
+        // storehouse never entered the comparison either. Rows without an order item are legacy
+        // ones from before the FK and simply do not take part in the guard.
+        Set<Long> reservedOrderItemIds = active.stream()
+                .map(Reservation::getOrderItem)
+                .filter(Objects::nonNull)
+                .map(OrderItem::getId)
+                .collect(Collectors.toSet());
 
         for (ReserveItem item : items) {
-            if (reservedSkus.contains(item.sku())) {
+            if (reservedOrderItemIds.contains(item.orderItemId())) {
                 continue;
             }
 
@@ -78,7 +89,7 @@ public class InventoryReservationTransactionService {
             reservationRepository.save(reservation);
             active.add(reservation);
             created.add(reservation);
-            reservedSkus.add(item.sku());
+            reservedOrderItemIds.add(item.orderItemId());
         }
 
         return new ReservationResult(created, active);
@@ -97,8 +108,8 @@ public class InventoryReservationTransactionService {
 
             stockRepository.save(stock);
             // A released reservation is deleted rather than merely stored as RELEASED: because of
-            // the unique constraint (order_id, sku, storehouse_id) the row would otherwise block
-            // any future reservation for the same order/sku/storehouse combination for good.
+            // the unique constraint on order_item_id the row would otherwise block any future
+            // reservation for that line for good.
             reservationRepository.delete(reservation);
             released.add(reservation);
         }
@@ -125,9 +136,14 @@ public class InventoryReservationTransactionService {
                 .orElseThrow(() -> new IllegalArgumentException("Stock not found: " + item.sku()));
     }
 
+    /**
+     * By order line, for the same reason the guard above is: (orderId, sku, storehouseId) is not
+     * unique once an order carries the same article on two lines, and the Optional behind it would
+     * have broken with a NonUniqueResultException.
+     */
     private Reservation findActiveReservation(String orderId, ReserveItem item) {
-        return reservationRepository.findActive(orderId, item.sku(), item.storehouseId())
+        return reservationRepository.findActiveByOrderItem(item.orderItemId())
                 .orElseThrow(() -> new IllegalStateException(
-                        "Active reservation missing for SKU: " + item.sku()));
+                        "Active reservation missing for order item: " + item.orderItemId()));
     }
 }

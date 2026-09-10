@@ -119,15 +119,20 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // Driven by the active reservations, not by the ones just created: a repeat call after a
         // first one that committed its reservation but failed before the order was written has to
         // be able to catch the order status up, and it creates nothing to go by.
-        Set<UUID> reservedSkus = result.active().stream()
-                .map(Reservation::getSku)
+        //
+        // Collected by order line rather than by SKU: an order carrying the same article twice would
+        // otherwise mark both lines RESERVED although only one of them actually holds a reservation.
+        Set<Long> reservedOrderItemIds = result.active().stream()
+                .map(Reservation::getOrderItem)
+                .filter(Objects::nonNull)
+                .map(OrderItem::getId)
                 .collect(Collectors.toSet());
 
         // Advance the order status only AFTER a successful reservation, otherwise the order would
         // read as "in progress" even though reserveWithRetry failed. Only move forward (out of a
         // pre-fulfillment status) so that a second, idempotent call never sets a further-along order
         // back. A partial reservation counts: fulfillment has started for at least one line.
-        if (!reservedSkus.isEmpty() && PRE_FULFILLMENT_STATUSES.contains(order.getStatus())) {
+        if (!reservedOrderItemIds.isEmpty() && PRE_FULFILLMENT_STATUSES.contains(order.getStatus())) {
             OrderStatus previousStatus = order.getStatus();
             order.setStatus(OrderStatus.IN_FULFILLMENT);
             orderRepository.save(order);
@@ -141,7 +146,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // status is deliberately not reset here, so a line that is already further along in
         // fulfillment is not thrown back.
         List<OrderItem> reservedOrderItems = order.getOrderItems().stream()
-                .filter(orderItem -> reservedSkus.contains(orderItem.getProduct().getSku()))
+                .filter(orderItem -> reservedOrderItemIds.contains(orderItem.getId()))
                 .toList();
 
         for (OrderItem orderItem : reservedOrderItems) {
@@ -252,12 +257,19 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // which rows it actually deleted.
         List<Reservation> released = inventoryService.releaseWithRetry(String.valueOf(order.getId()), items);
 
+        // Matched by the line a reservation points at, not by its SKU. Over the SKU the filter hit
+        // every line carrying that product - so the same article held in two storehouses, or ordered
+        // on two lines, reset positions whose stock is still reserved. getOrderItem().getId() reads
+        // the id straight off the proxy without initializing it.
+        Set<Long> releasedOrderItemIds = reservations.stream()
+                .map(reservation -> reservation.getOrderItem().getId())
+                .collect(Collectors.toSet());
+
         // Reset the line items to WAITING only AFTER the release actually succeeded. Writing the
         // status first would leave them as WAITING even when releaseWithRetry threw - the items
         // would read as unreserved while their stock is still held by an active reservation.
         List<OrderItem> releasedOrderItems = order.getOrderItems().stream()
-                .filter(orderItem -> reservations.stream()
-                        .anyMatch(reservation -> reservation.getSku().equals(orderItem.getProduct().getSku())))
+                .filter(orderItem -> releasedOrderItemIds.contains(orderItem.getId()))
                 .toList();
 
         for (OrderItem orderItem : releasedOrderItems) {

@@ -127,7 +127,7 @@ Which service owns which stretch:
 | `WAITING ⇄ RESERVED` | `FulfillmentService` | `InventoryController` |
 | `RESERVED → PICKED` | `OrderHandlingService` | `FulfillmentController` |
 | `PICKED → PACKED` | `PackingService` | `FulfillmentController` |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyDispatch()` | `FulfillmentController` |
+| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | `FulfillmentController` |
 
 - **Reservation is partial.** Lines that a single storehouse can cover become `RESERVED`; the rest
   stay `WAITING` and are attempted again on the next reserve call, which skips whatever is already
@@ -208,12 +208,15 @@ storehouse and expiry - not the line the reservation belongs to.
 
 Two layers guard against creating duplicate reservations for the same order:
 
-1. **Idempotency guard, per SKU** — `InventoryReservationTransactionService.reserve()` loads the
-   order's active reservations up front and skips every item whose SKU is already held. That is what
-   makes a repeated call continue where the previous one stopped rather than start over, and it also
-   covers the case where `checkItems()` picks a different storehouse the second time around.
-2. **Race-condition fallback** — a DB unique constraint on `(order_id, sku, storehouse_id)` is the
-   last line of defense; `InventoryServiceImpl.reserveWithRetry()` catches
+1. **Idempotency guard, per order line** — `InventoryReservationTransactionService.reserve()` loads
+   the order's active reservations up front and skips every item whose order line already holds one.
+   That is what makes a repeated call continue where the previous one stopped rather than start
+   over, and it also covers the case where `checkItems()` picks a different storehouse the second
+   time around. Keyed by line rather than by SKU - the two coincide, since an order carries every
+   article at most once (`uk_order_item_order_product`), but the line is what a reservation belongs
+   to.
+2. **Race-condition fallback** — the DB unique constraint on `order_item_id` is the last line of
+   defense; `InventoryServiceImpl.reserveWithRetry()` catches
    `DataIntegrityViolationException` and returns the now-existing reservations as `active` with an
    empty `created` — the concurrent call did the inserting, not this one.
 
@@ -429,7 +432,7 @@ The fulfillment chain is split by responsibility rather than by entity:
   required component, decrements them, and adds the produced unit as new stock).
 - **`FulfillmentService`** — getting an order reserved: `reserveItems()` / `releaseItems()`.
 - **`OrderHandlingService`** — what the warehouse does with an order that is already reserved:
-  the picking list, picking by reservation or by order, and the final `readyDispatch()`.
+  the picking list, picking by reservation or by order, and the final `readyForDispatch()`.
 - **`PackingService`** — building `ShipmentPackage`s out of picked lines and completing them.
 - **`LogisticsService`** — declared, not implemented.
 
@@ -464,6 +467,11 @@ erDiagram
   `Distributor`, `Logistics`, `Manager`, `Supplier`, `Warehouse`) discriminated by `user_type`, with
   a many-to-many `Role` relationship (`RoleEnum`: `CUSTOMER`, `MANAGER`, `SUPPLIER`, `WAREHOUSE`,
   `LOGISTICS`, `DISTRIBUTOR`, `ADMIN`).
+- **An article appears on one line only.** `order_items` carries a unique constraint over
+  `(order_id, product_id)`. A request repeating an article is not rejected but **folded**:
+  `OrderServiceImpl.mergeDuplicateProducts` keeps the first line and adds the repeated quantities to
+  it, so three plus two become one line of five. The rule matters beyond tidiness — `(order,
+  product)` identifies the line a reservation belongs to.
 - **`Order.orderItems`** is a `Set` ordered by `@OrderBy("id")`. It is a Set rather than a List
   because the `@EntityGraph` on `OrderRepository` fetches three collections at once — with two
   `List`s among them Hibernate raises `MultipleBagFetchException`. `Product.components` is the only
@@ -480,7 +488,8 @@ erDiagram
   `@OneToOne` on `order_item_id`. It additionally keeps `orderId` (`String`, **not** the numeric
   `Order.id`), `sku` and `quantity` denormalized: `Stock` is keyed by `(sku, storehouse)`, so the
   hot reserve/release path reaches its data without joining through the order item. Unique
-  constraint on `(order_id, sku, storehouse_id)`, status `ACTIVE` / `RELEASED` / `CONSUMED`;
+  unique constraint on `order_item_id` - one line, at most one reservation - and a status of
+  `ACTIVE` / `RELEASED` / `CONSUMED`;
   released reservations are deleted rather than kept (see
   [Reservation flow](#reservation-flow-in-detail)).
   - The relation is deliberately **unidirectional** — `OrderItem` does not point back. A back
@@ -504,14 +513,16 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER, (WAREHOUSE reads) |
-| Production | `POST /orders/{orderNo}/check` (availability — read-only), `POST /produce` *(paged)* | ADMIN, MANAGER |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge` and `/reject` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
+| Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
+| | `POST /produce` *(paged)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE |
 | Packing | `POST /packing/{orderNo}` (body: `items[]`, `packageType`, `weight`, dimensions), `POST /packing/{reservationId}/complete` | ADMIN, WAREHOUSE |
 | Dispatch | `POST /dispatch/{reservationId}` | ADMIN, WAREHOUSE |
-| Shipments | `GET /packages` *(paged)* | ADMIN, LOGISTICS |
-| Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}`, `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
+| Shipments | `GET /packages` *(paged)* | ADMIN, WAREHOUSE, LOGISTICS |
+| Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
+| | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
 | Stock | `POST /stock/add`, `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}`, `DELETE /users/{id}` | ADMIN, MANAGER |
@@ -596,12 +607,15 @@ mvn test
 | `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, and how a customer's `dueDate` is honoured |
 | `OrderServiceAccessTest` | that a customer reaches only their own order and a privileged caller reaches any |
 | `CreatePackageRequestTest` | that a `PackageType` is read from JSON by name, case-insensitively, and falls back to `OTHER` |
+| `CustomQueryExecutionTest` | executes every hand-written `@Query` once — **needs a reachable database** |
+| `InventoryReservationTransactionServiceTest` | the idempotency guard: per order line, so an order carrying the same article twice reserves both |
 
-Everything except `ApplicationTests` runs without Spring context or database (Mockito + AssertJ), so
-the suite finishes in a couple of seconds. To skip the one that needs a database:
+Two of them need a reachable database: `ApplicationTests` loads the whole context, and
+`CustomQueryExecutionTest` runs the hand-written queries against it. The rest is plain
+Mockito/AssertJ and finishes in a couple of seconds:
 
 ```bash
-mvn test -Dtest='!ApplicationTests'
+mvn test -Dtest='!ApplicationTests,!CustomQueryExecutionTest'
 ```
 
 Still uncovered: reservation idempotency and the retry loop at the persistence level, the storehouse
@@ -629,10 +643,6 @@ selection inside `produce()`, and everything from picking onwards — `OrderHand
 - `Reservation.expiresAt` is now swept by `AutomaticReservationService.tryToRelease()`, but that
   routine's `@Scheduled` is commented out — until it is switched on, an expired reservation still
   keeps its stock booked.
-- Two order lines referencing the *same* product produce two `ReserveItem`s with the same SKU; the
-  second is skipped by the per-SKU guard, so one of the two lines never gets a reservation. Now that
-  reservations are keyed to an `OrderItem`, the guard should follow — or equal SKUs should be merged
-  into one quantity before reserving.
 - `POST /orders/{orderId}/consume` is commented out in `InventoryController`; consumption happens
   only as part of picking.
 - `spring-boot-starter-webflux` is still declared in `pom.xml` although no code uses Reactor

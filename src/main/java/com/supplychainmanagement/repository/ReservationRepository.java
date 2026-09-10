@@ -36,6 +36,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
                 ReservationStatus.ACTIVE);
     }
 
+    @EntityGraph(attributePaths = "storehouse")
+    Optional<Reservation> findByOrderItemIdAndStatus(Long orderItemId, ReservationStatus status);
+
+    /**
+     * A line holds at most one reservation, so this is the lookup the reserve/release/consume path
+     * wants. Over (orderId, sku, storehouseId) it was ambiguous: two lines of the same product in
+     * the same storehouse match the same triple.
+     */
+    default Optional<Reservation> findActiveByOrderItem(Long orderItemId) {
+        return findByOrderItemIdAndStatus(orderItemId, ReservationStatus.ACTIVE);
+    }
+
     default List<Reservation> findActive(String orderId) {
         return findByOrderIdAndStatus(
                 orderId,

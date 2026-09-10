@@ -27,6 +27,7 @@ import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -211,5 +212,46 @@ class FulfillmentServiceReleaseItemsTest {
 
         verify(inventoryService, never()).releaseWithRetry(anyString(), anyList());
         assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
+    }
+
+    /**
+     * The whole point of keying the reset to the order line: the same article can sit on two lines,
+     * or be held in two storehouses. Matched over the SKU, releasing one of them reset both - and
+     * the second one's stock is still reserved.
+     */
+    @Test
+    void resetsOnlyTheLineTheReleasedReservationBelongsTo() {
+        Storehouse storehouse = new Storehouse();
+        storehouse.setId(7L);
+
+        Product sharedProduct = new Product();
+        sharedProduct.setArticleNo(1001L);
+        sharedProduct.setSku(SKU);
+
+        OrderItem released = new OrderItem();
+        released.setId(5L);
+        released.setProduct(sharedProduct);
+        released.setQuantity(3);
+        released.setFulfillmentStatus(FulfillmentStatus.RESERVED);
+
+        // Same product, same SKU - a second line, or the same article held in another storehouse.
+        OrderItem stillHeld = new OrderItem();
+        stillHeld.setId(6L);
+        stillHeld.setProduct(sharedProduct);
+        stillHeld.setQuantity(2);
+        stillHeld.setFulfillmentStatus(FulfillmentStatus.RESERVED);
+
+        Order order = new Order();
+        order.setId(42L);
+        order.setOrderNo(1042L);
+        order.setOrderItems(new LinkedHashSet<>(List.of(released, stillHeld)));
+
+        Reservation reservation = Reservation.active(released, ORDER_ID, SKU, 3, storehouse);
+        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
+
+        service.releaseItems(order, List.of(reservation), USERNAME);
+
+        assertThat(released.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
+        assertThat(stillHeld.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
     }
 }

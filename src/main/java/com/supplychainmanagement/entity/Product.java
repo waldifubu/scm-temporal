@@ -42,10 +42,11 @@ public class Product {
     @Column(nullable = true, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     private LocalDateTime updatedAt;
 
-    @Column(columnDefinition = "double default 19.99", nullable = false)
+    @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal unitPrice = BigDecimal.ZERO;
 
-    @Column(nullable = false)
+    /** Kilograms with gram precision - scale 3, and DECIMAL for the same reason unitPrice is. */
+    @Column(nullable = false, precision = 10, scale = 3)
     private BigDecimal weight;
 
     @ManyToMany

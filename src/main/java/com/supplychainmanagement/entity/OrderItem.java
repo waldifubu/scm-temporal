@@ -17,7 +17,19 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "order_items")
+/*
+ * One article, one line. The rule carries a good part of the reservation logic - a reservation
+ * belongs to a line, and (order, product) is what identifies that line - but until now it lived
+ * nowhere: neither in the service nor in the schema. Here it is the schema's job; the service adds
+ * the readable error, see OrderServiceImpl.rejectDuplicateProducts.
+ */
+@Table(
+        name = "order_items",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_order_item_order_product",
+                columnNames = {"order_id", "product_id"}
+        )
+)
 public class OrderItem {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

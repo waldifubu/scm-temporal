@@ -300,6 +300,8 @@ public class OrderServiceImpl implements OrderService {
             return;
         }
 
+        order.setOrderItems(mergeDuplicateProducts(orderItems));
+
         for (OrderItem orderItem : orderItems) {
             orderItem.setOrder(order);
             orderItem.setProduct(resolveProduct(orderItem.getProduct()));
@@ -327,6 +329,8 @@ public class OrderServiceImpl implements OrderService {
         if (incomingItems == null) {
             return;
         }
+
+        incomingItems = mergeDuplicateProducts(incomingItems);
 
         // LinkedHashSet rather than HashSet: only relevant for an order that has no collection yet,
         // but it keeps the line items in the order they came in instead of an arbitrary one.
@@ -360,6 +364,47 @@ public class OrderServiceImpl implements OrderService {
 
         currentItems.clear();
         currentItems.addAll(mergedItems);
+    }
+
+    /**
+     * Folds repeated articles into one line, adding up their quantities: three of an article on one
+     * line and two on another become a single line of five.
+     * <p>
+     * An article may appear on one line only - a second line of the same product would make
+     * (order, product) ambiguous, and that pair is what a reservation is keyed to. The unique
+     * constraint on order_items states the rule; this is what keeps callers from running into it.
+     * <p>
+     * The first occurrence survives and keeps its identity - on an update that means the existing
+     * line is the one that is kept and grown, while the repeated ones drop out and are removed as
+     * orphans. Lines without a resolvable product are passed through untouched; resolveProduct
+     * reports those properly a moment later.
+     */
+    private Set<OrderItem> mergeDuplicateProducts(Collection<OrderItem> orderItems) {
+        Map<Long, OrderItem> byArticleNo = new LinkedHashMap<>();
+        Set<OrderItem> merged = new LinkedHashSet<>();
+
+        for (OrderItem orderItem : orderItems) {
+            Long articleNo = orderItem.getProduct() != null ? orderItem.getProduct().getArticleNo() : null;
+            if (articleNo == null) {
+                merged.add(orderItem);
+                continue;
+            }
+
+            OrderItem alreadySeen = byArticleNo.putIfAbsent(articleNo, orderItem);
+            if (alreadySeen == null) {
+                merged.add(orderItem);
+                continue;
+            }
+
+            alreadySeen.setQuantity(quantityOf(alreadySeen) + quantityOf(orderItem));
+        }
+
+        return merged;
+    }
+
+    /** A missing quantity counts as nothing here; recalculateOrder is what rejects it. */
+    private int quantityOf(OrderItem orderItem) {
+        return orderItem.getQuantity() != null ? orderItem.getQuantity() : 0;
     }
 
     private Product resolveProduct(Product product) {
