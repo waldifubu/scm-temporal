@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
@@ -13,8 +14,10 @@ import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.OrderService;
+import com.supplychainmanagement.service.ProductionService;
 import com.supplychainmanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -23,23 +26,33 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.time.DayOfWeek;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class OrderServiceImpl implements OrderService {
+    private static final LocalTime END_OF_WORKING_DAY = LocalTime.of(17, 0);
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
     private final RoleService roleService;
     private final ApplicationEventPublisher applicationEventPublisher;
+    private final ProductionService productionService;
+    /**
+     * Working days from acknowledgement to delivery when every line is covered by stock today.
+     */
+    @Value("${app.order.leadDays.inStock:2}")
+    private int inStockLeadDays;
+
+    /**
+     * Working days when at least one line has to be replenished or produced first.
+     */
+    @Value("${app.order.leadDays.replenishment:10}")
+    private int replenishmentLeadDays;
 
     @Override
     @Deprecated
@@ -78,6 +91,32 @@ public class OrderServiceImpl implements OrderService {
     public Order findByOrderNo(Long orderNo) {
         return orderRepository.findByOrderNo(orderNo)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "orderNo", orderNo));
+    }
+
+    /**
+     * Mirrors the branch in {@link #findAllByUser}: a privileged caller sees every order, everyone
+     * else only their own.
+     * <p>
+     * Answered with 403 and not 404 on purpose - inside this application an order number is not a
+     * secret, and "you may not see this one" is a more useful answer than pretending it does not
+     * exist. Flip it to ResourceNotFoundException if order numbers should stop being enumerable.
+     */
+    @Override
+    public Order findByOrderNoForUser(Long orderNo, org.springframework.security.core.userdetails.User authUser) {
+        Order order = findByOrderNo(orderNo);
+
+        if (roleService.isPrivilegedUser(authUser)) {
+            return order;
+        }
+
+        var caller = userRepository.findByUsernameOrEmail(authUser.getUsername(), authUser.getUsername())
+                .orElseThrow(() -> new ResourceNotFoundException("User", "username", 0L));
+
+        if (order.getCustomer() == null || !Objects.equals(order.getCustomer().getId(), caller.getId())) {
+            throw new APIException(HttpStatus.FORBIDDEN, "This order belongs to another customer");
+        }
+
+        return order;
     }
 
     @Override
@@ -129,6 +168,60 @@ public class OrderServiceImpl implements OrderService {
     public void statusCheck(Order existingOrder, Order order) {
         OrderStatus previousStatus = existingOrder.getStatus();
 
+    }
+
+    /**
+     * The guard is {@code != CREATED} rather than "not already acknowledged": unlike a rejection,
+     * which stays possible right up to fulfillment, a confirmation only makes sense from the
+     * incoming state. Acknowledging an order that is already reserved or picked would throw it back.
+     */
+    @Override
+    @Transactional
+    public Order acknowledge(Order order, Long userId) {
+        if (order.getStatus() != OrderStatus.CREATED) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "Only an order in CREATED can be acknowledged, this one is " + order.getStatus());
+        }
+
+        order.setStatus(OrderStatus.ACKNOWLEDGED);
+        // Order.deliveryDate is a timestamp while the promise is a day: pinned to the end of the
+        // working day, so "delivered on the 15th" does not read as midnight of the 15th.
+        order.setDeliveryDate(confirmDeliveryDate(order).atTime(END_OF_WORKING_DAY));
+
+        return update(order.getId(), order, userId);
+    }
+
+    /**
+     * What the confirmation promises. Two lead times rather than one: an order every storehouse can
+     * cover today ships within days, one waiting on replenishment cannot. checkItems answers that
+     * question without reserving anything, so asking it here costs a query per line and no state.
+     * <p>
+     * A delivery date the customer asked for later than we can manage wins - shipping earlier than
+     * requested is not a favour. Asking for it earlier does not, because the promise has to be one
+     * that can be kept.
+     */
+    private LocalDate confirmDeliveryDate(Order order) {
+        boolean everyLineCovered = productionService.checkItems(order).stream()
+                .allMatch(AvailableOrderItemDto::available);
+
+        LocalDate earliest = addWorkingDays(LocalDate.now(), everyLineCovered ? inStockLeadDays : replenishmentLeadDays);
+
+        LocalDate requested = order.getDueDate();
+        return requested != null && requested.isAfter(earliest) ? requested : earliest;
+    }
+
+    /**
+     * Weekends are not shipping days - a promise counted in calendar days would be missed.
+     */
+    private LocalDate addWorkingDays(LocalDate from, int workingDays) {
+        LocalDate date = from;
+        for (int added = 0; added < workingDays; ) {
+            date = date.plusDays(1);
+            if (date.getDayOfWeek() != DayOfWeek.SATURDAY && date.getDayOfWeek() != DayOfWeek.SUNDAY) {
+                added++;
+            }
+        }
+        return date;
     }
 
     @Override

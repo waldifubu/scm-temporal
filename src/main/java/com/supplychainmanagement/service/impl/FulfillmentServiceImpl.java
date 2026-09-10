@@ -13,6 +13,7 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.exception.UnsufficientException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.*;
 import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.InventoryService;
@@ -28,6 +29,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -142,7 +144,9 @@ public class FulfillmentServiceImpl implements FulfillmentService {
                 .filter(orderItem -> reservedSkus.contains(orderItem.getProduct().getSku()))
                 .toList();
 
-        reservedOrderItems.forEach(orderItem -> orderItem.setFulfillmentStatus(FulfillmentStatus.RESERVED));
+        for (OrderItem orderItem : reservedOrderItems) {
+            orderItem.setFulfillmentStatus(FulfillmentStatus.RESERVED);
+        }
         orderItemRepository.saveAll(reservedOrderItems);
 
         // Prevent lazy proxy access (e.g. debugger/toString outside session) on returned entities.
@@ -205,19 +209,38 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     }
 
     /**
-     * Transactional for the same reason as {@link #reserveItems}: the line item statuses must be
-     * written as one unit. The stock release itself again runs REQUIRES_NEW and commits separately.
+     * Transactional for the same reason as {@link #reserveItems}: the line item statuses, the order
+     * status and the published event must be written as one unit. The stock release itself again
+     * runs REQUIRES_NEW and commits separately.
      */
     @Override
     @Transactional
-    public void releaseItems(Order order) {
+    public List<Reservation> releaseItems(Order order, String username) {
         List<Reservation> activeReservations = findActiveReservations(order);
         if (activeReservations.isEmpty()) {
             throw new ResourceNotFoundException("Reservation", "orderId", order.getOrderNo());
         }
 
+        return releaseItems(order, activeReservations, username);
+    }
+
+    /**
+     * The release itself. Everything above only decides <em>which</em> reservations get here - the
+     * endpoint hands in all of them, the expiry sweep only what has run out.
+     * <p>
+     * An empty list is not an error: a sweep walks orders where "nothing to do" is the normal case.
+     * Asking for the release of an order that holds nothing at all is one, which is why the entry
+     * point above still throws.
+     */
+    @Override
+    @Transactional
+    public List<Reservation> releaseItems(Order order, List<Reservation> reservations, String username) {
+        if (reservations.isEmpty()) {
+            return List.of();
+        }
+
         // getOrderItem().getId() does not initialize the proxy - Hibernate serves the id out of it.
-        List<ReserveItem> items = activeReservations.stream()
+        List<ReserveItem> items = reservations.stream()
                 .map(reservation -> new ReserveItem(
                         reservation.getOrderItem().getId(),
                         reservation.getSku(),
@@ -225,17 +248,69 @@ public class FulfillmentServiceImpl implements FulfillmentService {
                         reservation.getStorehouse().getId()))
                 .toList();
 
-        inventoryService.releaseWithRetry(String.valueOf(order.getId()), items);
+        // What the inventory layer reports back, not what was handed in: it is the one that knows
+        // which rows it actually deleted.
+        List<Reservation> released = inventoryService.releaseWithRetry(String.valueOf(order.getId()), items);
 
         // Reset the line items to WAITING only AFTER the release actually succeeded. Writing the
         // status first would leave them as WAITING even when releaseWithRetry threw - the items
         // would read as unreserved while their stock is still held by an active reservation.
         List<OrderItem> releasedOrderItems = order.getOrderItems().stream()
-                .filter(orderItem -> activeReservations.stream()
+                .filter(orderItem -> reservations.stream()
                         .anyMatch(reservation -> reservation.getSku().equals(orderItem.getProduct().getSku())))
                 .toList();
 
-        releasedOrderItems.forEach(orderItem -> orderItem.setFulfillmentStatus(FulfillmentStatus.WAITING));
+        for (OrderItem orderItem : releasedOrderItems) {
+            orderItem.setFulfillmentStatus(FulfillmentStatus.WAITING);
+        }
         orderItemRepository.saveAll(releasedOrderItems);
+
+        revertOrderStatus(order, username);
+
+        return released;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Map<Order, List<Reservation>> findExpiredReservationsByOrder() {
+        // Order has no equals/hashCode, so this groups by identity - which is exactly right here:
+        // inside one transaction findById hands out the same instance for the same id, so two
+        // reservations of one order land in the same bucket without a second query.
+        Map<Order, List<Reservation>> byOrder = new LinkedHashMap<>();
+
+        for (Reservation expired : reservationRepository.findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now())) {
+            orderRepository.findById(Long.valueOf(expired.getOrderId()))
+                    .ifPresent(order -> byOrder.computeIfAbsent(order, ignored -> new ArrayList<>()).add(expired));
+        }
+
+        return byOrder;
+    }
+
+    /**
+     * The counterpart to the IN_FULFILLMENT transition in {@link #reserveItems}, and it fires under
+     * the mirrored condition: only once the order holds no reservation at all any more does
+     * fulfillment count as not started, and the order goes back to APPROVED. A partial release
+     * leaves the status alone - the remaining lines are still being fulfilled.
+     * <p>
+     * The released rows are gone by now: release() deletes them in its own committed transaction,
+     * so this query sees what is really left.
+     */
+    private void revertOrderStatus(Order order, String username) {
+        if (order.getStatus() != OrderStatus.IN_FULFILLMENT || !findActiveReservations(order).isEmpty()) {
+            return;
+        }
+
+        OrderStatus previousStatus = order.getStatus();
+        order.setStatus(OrderStatus.APPROVED);
+        orderRepository.save(order);
+
+        // Published even when the name resolves to nobody - OrderHistory.user_id is nullable for
+        // exactly this case, and a release by a scheduled sweep ("system") still belongs in the
+        // audit trail.
+        Long userId = userRepository.findByUsernameOrEmail(username, username)
+                .map(user -> user.getId())
+                .orElse(null);
+        eventPublisher.publishEvent(
+                new OrderStatusChangedEvent(order.getId(), userId, previousStatus, OrderStatus.APPROVED));
     }
 }

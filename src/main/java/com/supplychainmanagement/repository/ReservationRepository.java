@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,6 +49,19 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
 
     @EntityGraph(attributePaths = "storehouse")
     List<Reservation> findAllActiveReservationsByStatusOrderByExpiresAt(ReservationStatus status);
+
+    /**
+     * Reservations whose hold has run out. Nothing evaluates {@code expiresAt} on the request path -
+     * an expired reservation stays ACTIVE and keeps its stock booked until a sweep releases it.
+     */
+    @EntityGraph(attributePaths = "storehouse")
+    List<Reservation> findByStatusAndExpiresAtBefore(ReservationStatus status, LocalDateTime cutoff);
+
+    @EntityGraph(attributePaths = "storehouse")
+    List<Reservation> findByOrderIdAndStatusAndExpiresAtBefore(
+            String orderId,
+            ReservationStatus status,
+            LocalDateTime cutoff);
 
     /**
      * Paged counterpart of the method above. The ordering is left to the {@link Pageable} instead of

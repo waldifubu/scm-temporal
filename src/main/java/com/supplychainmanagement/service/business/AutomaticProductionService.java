@@ -14,18 +14,20 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 
 @Slf4j
-@Configuration
+@Service
 @EnableScheduling
-@AllArgsConstructor
 public class AutomaticProductionService {
 
     private final ProductionService productionService;
-    private final FulfillmentService fulfillmentService;
-    private final OrderService orderService;
+
+    public AutomaticProductionService(ProductionService productionService) {
+        this.productionService = productionService;
+    }
 
     //    @Scheduled(initialDelay = 30, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void assemble() {
@@ -33,15 +35,5 @@ public class AutomaticProductionService {
         Page<ProductionResultDto> pageProducts = productionService.produce(pageable);
         log.info("Tried assembling  {}", LocalDateTime.now());
         log.info("Products: {}", pageProducts.getContent());
-    }
-
-    public void tryToReserve() {
-        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
-        var orders = orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable);
-        orders.forEach(order -> {
-                    ReservationSummary reservationSummary = fulfillmentService.reserveItems(order, "system");
-                    log.info("Reserved for order {}: {}", order.getOrderNo(), reservationSummary.created());
-                }
-        );
     }
 }

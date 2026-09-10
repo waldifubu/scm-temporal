@@ -92,7 +92,7 @@ The chain is split by responsibility, not by entity. Which service owns which st
 | `WAITING ⇄ RESERVED` | `FulfillmentService` | `InventoryController` |
 | `RESERVED → PICKED` | `OrderHandlingService` | `FulfillmentController` |
 | `PICKED → PACKED` | `PackingService` | `FulfillmentController` |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyDispatch()` | `FulfillmentController` |
+| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | `FulfillmentController` |
 | dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
 
 - **`ProductionService`** — `checkItems(order)` reports stock availability per line without
@@ -102,6 +102,16 @@ The chain is split by responsibility, not by entity. Which service owns which st
   advances `Order.status` to `IN_FULFILLMENT`, but only from a pre-fulfillment status
   (`PRE_FULFILLMENT_STATUSES`), so a second idempotent call never regresses further-along orders.
   It asks `ProductionService.checkItems` for availability rather than querying stock itself.
+  `releaseItems` comes in two shapes: given an order it releases everything that order holds, given
+  a list of reservations it releases exactly those - the expiry sweep passes only what has run out,
+  because an order can hold a fresh reservation next to an expired one. Both return what the
+  inventory layer reports actually released, and both take the acting user, because a release takes
+  the order back to `APPROVED` once nothing is held any more and that transition wants an audit row.
+- **`OrderService.acknowledge`** accepts an incoming order and confirms a delivery date for it: two
+  lead times in working days (`app.order.leadDays.inStock` / `.replenishment`, defaulted inline)
+  depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
+  customer asked for later than that wins. Only from `CREATED` - confirming an order already being
+  fulfilled would throw it back.
 - **`InventoryService`** (`InventoryServiceImpl`) is the retry/idempotency wrapper around actual
   reservation work — `reserveWithRetry`/`releaseWithRetry`/`consumeWithRetry`, all keyed by
   `String orderId` (matches `Reservation.orderId`, which is a String, not the numeric `Order.id`).
@@ -116,6 +126,13 @@ The chain is split by responsibility, not by entity. Which service owns which st
   `Stock` is keyed by `(sku, storehouse)`, so the hot reserve/release path needs no join through
   the order item. The relation is deliberately *not* bidirectional — a back reference would drag
   `Order → orderItems → reservation → orderItem` into every response serializing a reservation.
+- **Transaction boundaries for picking sit at the line, not at the call.** The per-line work lives
+  on `OrderHandlingTransactionService` (`REQUIRES_NEW`) and not as a private method of
+  `OrderHandlingServiceImpl`, for two reasons: a private method called from the same bean goes
+  around the proxy and is transactional in name only, and wrapping the whole loop would let a
+  failure on line three roll back the line statuses of one and two while their stock has already
+  been consumed by the REQUIRES_NEW `consumeWithRetry` - a reservation reading ACTIVE over stock
+  that is gone. Per line, everything before the failure stays correctly and completely picked.
 - **`Reservation.release()`** marks status `RELEASED`, but the row is then *deleted* (not kept)
   because the unique constraint would otherwise permanently block re-reserving the same
   order/sku/storehouse combination.
@@ -136,6 +153,33 @@ status code: `CREATED` → **201**, `COMPLETE` → **200** (order fully reserved
 `PENDING` → **202** (lines still `WAITING`, worth calling again). `ReservationResult` carries both
 `created` and `active` for that reason: the response needs the former, the order/line status
 reconciliation the latter.
+
+### Scheduled routines
+
+`AutomaticReservationService` holds what runs without a request; `@EnableScheduling` comes from
+`AutomaticProductionService`. Only `checkCreatedOrders()` is switched on - it reports coverage per
+`CREATED` order and writes nothing. `tryToReserve()` and `tryToRelease()` change state and stay
+commented out on purpose.
+
+Orders reaching these routines come from `findAllByStatus`, whose `@EntityGraph` fetches
+`orderItems` and their products. There is no open-in-view session out here, so a finder without that
+graph turns them into a `LazyInitializationException`.
+
+### Timestamps maintain themselves
+
+`updatedAt` on `Stock`, `Product` and `OrderItem` carries `@UpdateTimestamp`. Do not write it by
+hand - Hibernate overwrites it on flush anyway, so a manual assignment is a no-op that reads like it
+does something. `OrderItem` was the exception until recently, and one branch that forgot the manual
+call left the timestamp stale.
+
+### Enum values in a request body
+
+`@JsonFormat(with = ACCEPT_CASE_INSENSITIVE_VALUES, READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)`
+has to sit on the **property** - see `CreatePackageRequest.packageType`. On the enum declaration it
+is not consulted, and on the entity it does nothing at all, because entities are never deserialized:
+the request DTO is the only thing bound from a body. Note also that a property arriving as `null`
+means the JSON key did not match the record component name; a value the enum does not know produces
+a 400 through `GlobalExceptionHandler`, not a null.
 
 ### Responses are DTOs, never entities
 

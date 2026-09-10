@@ -47,6 +47,8 @@ public class Reservation {
     @Column(nullable = false, length = 16)
     private ReservationStatus status;
 
+    private LocalDateTime createdAt = LocalDateTime.now();
+
     private LocalDateTime expiresAt;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)

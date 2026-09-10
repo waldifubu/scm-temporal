@@ -27,7 +27,21 @@ public interface OrderService {
 
     Order findByOrderNo(Long orderNo);
 
+    /**
+     * The same lookup, but scoped to what the caller is allowed to see: a customer only gets an
+     * order they are the customer of. Privileged roles are unrestricted.
+     */
+    Order findByOrderNoForUser(Long orderNo, org.springframework.security.core.userdetails.User authUser);
+
     Order create(Order order, org.springframework.security.core.userdetails.User user);
+
+    /**
+     * Accepts an incoming order and confirms a delivery date for it - the commercial answer a
+     * customer waits for, the equivalent of an EDIFACT ORDRSP / X12 855.
+     *
+     * @param userId the acting user for the audit trail, may be null
+     */
+    Order acknowledge(Order order, Long userId);
 
     Order update(Long id, Order order);
 

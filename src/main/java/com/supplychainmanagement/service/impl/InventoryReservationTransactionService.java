@@ -85,7 +85,9 @@ public class InventoryReservationTransactionService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void release(String orderId, List<ReserveItem> items) {
+    public List<Reservation> release(String orderId, List<ReserveItem> items) {
+        List<Reservation> released = new ArrayList<>();
+
         for (ReserveItem item : items) {
             Stock stock = findStock(item);
             Reservation reservation = findActiveReservation(orderId, item);
@@ -98,7 +100,10 @@ public class InventoryReservationTransactionService {
             // the unique constraint (order_id, sku, storehouse_id) the row would otherwise block
             // any future reservation for the same order/sku/storehouse combination for good.
             reservationRepository.delete(reservation);
+            released.add(reservation);
         }
+
+        return released;
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

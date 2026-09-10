@@ -8,7 +8,4 @@ public interface PackingService {
     ShipmentPackage createPackage(Long orderNo, CreatePackageRequest createPackageRequest);
 
     PickingOrderDto packingReservationByIdComplete(Long reservationId);
-
-//    public void  createPackage();
-//    public void completePackage();
 }

@@ -46,8 +46,7 @@ public class ShipmentPackage {
     private PackageStatus status;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = true)
-    private PackageType type;
+    private PackageType packageType;
 
     private String packageNumber;
     private BigDecimal weight;
@@ -64,6 +63,12 @@ public class ShipmentPackage {
     )
     private List<PackageItem> items = new ArrayList<>();
 
+    /**
+     * A product without a weight contributes nothing rather than failing the whole sum.
+     */
+    private static BigDecimal weightOf(Product product) {
+        return product == null || product.getWeight() == null ? BigDecimal.ZERO : product.getWeight();
+    }
 
     public void complete() {
 
@@ -73,6 +78,7 @@ public class ShipmentPackage {
             );
         }
 
+        packedAt = LocalDateTime.now();
         status = PackageStatus.PACKED;
     }
 
@@ -90,12 +96,35 @@ public class ShipmentPackage {
                 .multiply(height);
     }
 
-    public BigDecimal getWeight() {
+    /**
+     * The weight of what is inside, summed over the packed units. Deliberately NOT called
+     * {@code getWeight}: that name belongs to the {@code weight} field, and a hand-written getter
+     * of that name suppresses Lombok's - which made the declared weight write-only, stored in the
+     * column and unreadable through the accessor.
+     * <p>
+     * So the two are different numbers and both are wanted: {@code weight} is what was declared or
+     * measured for the carrier, gross and including the packaging itself; this one is the net
+     * content and can serve as a plausibility check against it.
+     */
+    public BigDecimal getContentWeight() {
         return items.stream()
-                .map(PackageItem::getOrderItem)
-                .map(OrderItem::getProduct)
-                .map(Product::getWeight)
+                .map(
+                        item -> weightOf(item.getOrderItem().getProduct()).multiply(BigDecimal.valueOf(item.getQuantity()))
+                )
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /**
+     * What the carrier is billed for: content plus the packaging itself.
+     * <p>
+     * A weight that was declared or actually measured wins over the calculation - it is the more
+     * accurate number and the one the label was printed from. Only without it is the gross weight
+     * estimated, and then the type has to be known: an unset {@code type} contributes no tare rather
+     * than failing, which would otherwise turn every package created without one into an NPE.
+     */
+    public BigDecimal getPackageWeight() {
+        BigDecimal tare = packageType != null ? packageType.getTareWeight() : BigDecimal.ZERO;
+        return getContentWeight().add(tare);
     }
 
     @PrePersist
@@ -105,5 +134,8 @@ public class ShipmentPackage {
         }
 
         createdAt = LocalDateTime.now();
+        if (weight == null) {
+            weight = getContentWeight();
+        }
     }
 }

@@ -44,8 +44,8 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
     @Override
-    public void releaseWithRetry(String orderId, List<ReserveItem> items) {
-        executeWithRetry(() -> transactionService.release(orderId, items));
+    public List<Reservation> releaseWithRetry(String orderId, List<ReserveItem> items) {
+        return executeWithRetry(() -> transactionService.release(orderId, items));
     }
 
     @Override

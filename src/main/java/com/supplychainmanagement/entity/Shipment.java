@@ -32,7 +32,7 @@ public class Shipment {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private ShipmentStatus status;
+    private ShipmentStatus status = ShipmentStatus.CREATED;
 
     @Column(name = "requested_delivery_date")
     private LocalDate requestedDeliveryDate;
@@ -47,7 +47,7 @@ public class Shipment {
     private String shippingAddress;
 
     @Column(name = "created_at", nullable = false)
-    private LocalDateTime createdAt;
+    private LocalDateTime createdAt = LocalDateTime.now();
 
     @Column(name = "shipped_at")
     private LocalDateTime shippedAt;

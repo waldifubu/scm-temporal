@@ -8,6 +8,9 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.UpdateTimestamp;
+
+import java.time.LocalDateTime;
 
 @Getter
 @Setter
@@ -32,6 +35,14 @@ public class OrderItem {
     @Max(value = 10, message = "Your amount is above our limit")
     @Min(value = 1, message = "Your amount must be at least 1")
     private Integer quantity;
+
+    /**
+     * Maintained by Hibernate, like {@code Stock.updatedAt} and {@code Product.updatedAt}. It used
+     * to be written by hand at each call site, which meant every path that forgot to do so left the
+     * timestamp stale - and one of them did.
+     */
+    @UpdateTimestamp
+    private LocalDateTime updatedAt = LocalDateTime.now();
 
     @Enumerated(EnumType.STRING)
     private FulfillmentStatus fulfillmentStatus = FulfillmentStatus.WAITING;

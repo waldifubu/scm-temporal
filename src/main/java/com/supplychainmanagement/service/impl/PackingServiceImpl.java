@@ -10,6 +10,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.PackageStatus;
+import com.supplychainmanagement.model.enums.PackageType;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
@@ -32,21 +33,30 @@ public class PackingServiceImpl implements PackingService {
     private final ShipmentPackageRepository shipmentPackageRepository;
 
     @Override
+    @Transactional
     public PickingOrderDto packingReservationByIdComplete(Long reservationId) {
-        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.CONSUMED).orElseThrow(() -> new ResourceNotFoundException("Reservation", "id not found", reservationId));
+        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.CONSUMED)
+                .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id not found", reservationId));
 
         var orderItem = reservation.getOrderItem();
+
+        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.READY_FOR_DISPATCH) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is already in READY_FOR_DISPATCH status, cannot move to PACKED");
+        }
         if (orderItem.getFulfillmentStatus() == FulfillmentStatus.PACKED) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Order item is already in PACKED status, cannot move to PACKED");
         }
         if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PACKING) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Order item is not in PACKING status, cannot move to PACKED");
         }
+
         orderItem.setFulfillmentStatus(FulfillmentStatus.PACKED);
         orderItemRepository.save(orderItem);
 
-//        return toDto(findOrder(reservation.getOrderId()), reservation);
-        return null;
+        // Same row shape the picking list and every other fulfillment action answer with, and
+        // mapped in here while the transaction is open - orderItem.product and reservation.storehouse
+        // are LAZY.
+        return PickingOrderDto.of(orderItem.getOrder(), reservation);
     }
 
 
@@ -56,6 +66,10 @@ public class PackingServiceImpl implements PackingService {
         ShipmentPackage shipmentPackage = new ShipmentPackage();
 
         shipmentPackage.setStatus(PackageStatus.OPEN);
+        // Without a type there is no tare weight to add, so an unstated one counts as OTHER rather
+        // than staying null - see PackageType.
+        shipmentPackage.setPackageType(request.packageType() != null ? request.packageType() : PackageType.OTHER);
+        // Weight is optional
         shipmentPackage.setWeight(request.weight());
         shipmentPackage.setLength(request.length());
         shipmentPackage.setWidth(request.width());
@@ -63,93 +77,67 @@ public class PackingServiceImpl implements PackingService {
         shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
 
         for (PackItem packItem : request.items()) {
-            OrderItem orderItem = orderItemRepository.findById(packItem.orderItemId()).orElseThrow(
-                    () -> new IllegalArgumentException("OrderItem not found: " + packItem.orderItemId())
-            );
+            packLine(shipmentPackage, packItem, orderNo);
+        }
 
-            // ----------------------------------------------------
-            // 1. Check: OrderItem belongs to the correct orderNo
-            // ----------------------------------------------------
-            if (!Objects.equals(orderItem.getOrder().getOrderNo(), orderNo)) {
-                throw new IllegalStateException("OrderItem does not belong to order " + orderNo);
-            }
-
-            // ----------------------------------------------------
-            // 2. Only allow packing if the OrderItem is in PICKED or PACKING status
-            // ----------------------------------------------------
-            FulfillmentStatus status = orderItem.getFulfillmentStatus();
-
-            if (status != FulfillmentStatus.PICKED && status != FulfillmentStatus.PACKING) {
-//                throw new IllegalStateException("OrderItem " + orderItem.getId() + " is not ready for packing, maybe already packed");
-                continue;
-            }
-
-            // ----------------------------------------------------
-            // 3. Check: requested qty is valid
-            // ----------------------------------------------------
-            int requestedQuantity = packItem.qty();
-
-            if (requestedQuantity <= 0) {
-                throw new IllegalArgumentException("Quantity must be greater than zero");
-            }
-
-            if (requestedQuantity > orderItem.getQuantity()) {
-                throw new IllegalStateException("Cannot pack more than ordered qty for OrderItem " + orderItem.getId()+ ". Requested qty: " + requestedQuantity + ", ordered qty: " + orderItem.getQuantity());
-            }
-
-            // ----------------------------------------------------
-            // 4. Check: already packed qty
-            // ----------------------------------------------------
-            int alreadyPacked = shipmentPackageRepository.sumQuantityByOrderItemId(orderItem.getId());
-
-            // ----------------------------------------------------
-            // 5. Check: Number of items to pack does not exceed ordered qty
-            // alreadyPacked + requested <= ordered
-            // ----------------------------------------------------
-            int newPackedTotal = alreadyPacked + requestedQuantity;
-
-            if (newPackedTotal > orderItem.getQuantity()) {
-                throw new IllegalStateException(
-                        "Cannot pack more than ordered qty. "
-                                + "Ordered: " + orderItem.getQuantity()
-                                + ", already packed: " + alreadyPacked
-                                + ", requested: "
-                                + requestedQuantity);
-            }
-
-            // ----------------------------------------------------
-            // 6. Create PackageItem
-            // ----------------------------------------------------
-            PackageItem packageItem = new PackageItem();
-
-            packageItem.setShipmentPackage(shipmentPackage);
-            packageItem.setOrderItem(orderItem);
-            packageItem.setQuantity(requestedQuantity);
-            shipmentPackage.getItems().add(packageItem);
-
-            // ----------------------------------------------------
-            // 7. Update FulfillmentStatus
-            // ----------------------------------------------------
-            if (newPackedTotal == orderItem.getQuantity()) {
-                orderItem.setFulfillmentStatus(FulfillmentStatus.PACKED);
-            } else if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PACKING) {
-                orderItem.setFulfillmentStatus(FulfillmentStatus.PACKING);
-            }
-
-        } // end for each packItem
-
-
-        // ----------------------------------------------------
-        // 8. Check: ShipmentPackage has at least one item
-        // ----------------------------------------------------
+        // Every line was skipped, so there is nothing to ship - an empty package is not a result.
         if (shipmentPackage.getItems().isEmpty()) {
             throw new IllegalStateException("No valid items to pack for order " + orderNo);
         }
 
-        // ----------------------------------------------------
-        // 9. Save ShipmentPackage
-        // ----------------------------------------------------
         return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /**
+     * Packs one order line into the package under construction.
+     * <p>
+     * A line that is neither PICKED nor PACKING is skipped rather than rejected: a caller may hand
+     * in a whole order and let the ones that are ready be packed. The emptiness check at the end of
+     * {@link #createPackage} is what turns "nothing was ready at all" into an error.
+     */
+    private void packLine(ShipmentPackage shipmentPackage, PackItem packItem, Long orderNo) {
+        OrderItem orderItem = orderItemRepository.findById(packItem.orderItemId()).orElseThrow(
+                () -> new IllegalArgumentException("OrderItem not found: " + packItem.orderItemId())
+        );
+
+        if (!Objects.equals(orderItem.getOrder().getOrderNo(), orderNo)) {
+            throw new IllegalStateException("OrderItem does not belong to order " + orderNo);
+        }
+
+        FulfillmentStatus status = orderItem.getFulfillmentStatus();
+        if (status != FulfillmentStatus.PICKED && status != FulfillmentStatus.PACKING) {
+            return;
+        }
+
+        int requestedQuantity = packItem.qty();
+        if (requestedQuantity <= 0) {
+            throw new IllegalArgumentException("Quantity must be greater than zero");
+        }
+
+        // Measured against what earlier packages of this line already hold, not against the ordered
+        // quantity alone - the latter would let two half packages add up to more than was ordered.
+        int alreadyPacked = shipmentPackageRepository.sumQuantityByOrderItemId(orderItem.getId());
+        int newPackedTotal = alreadyPacked + requestedQuantity;
+        if (newPackedTotal > orderItem.getQuantity()) {
+            throw new IllegalStateException(
+                    "Cannot pack more than ordered qty for OrderItem " + orderItem.getId()
+                            + ". Ordered: " + orderItem.getQuantity()
+                            + ", already packed: " + alreadyPacked
+                            + ", requested: " + requestedQuantity);
+        }
+
+        PackageItem packageItem = new PackageItem();
+        packageItem.setShipmentPackage(shipmentPackage);
+        packageItem.setOrderItem(orderItem);
+        packageItem.setQuantity(requestedQuantity);
+        shipmentPackage.getItems().add(packageItem);
+
+        // PACKED only once every ordered unit sits in a package, PACKING while some are still open.
+        // Assigned unconditionally: writing the status a line already has is a no-op, and guarding
+        // against it only risked skipping whatever else the branch did.
+        orderItem.setFulfillmentStatus(newPackedTotal == orderItem.getQuantity()
+                ? FulfillmentStatus.PACKED
+                : FulfillmentStatus.PACKING);
     }
 
     private String generatePackageNumber() {

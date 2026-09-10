@@ -51,12 +51,12 @@ public class InventoryController {
 
     @PostMapping(path = "/orders/{orderId}/release", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ResponseEntity<Void> release(@PathVariable Long orderId) {
+    public ResponseEntity<List<Reservation>> release(@PathVariable Long orderId,
+                                        @AuthenticationPrincipal User authUser) {
         var order = orderService.findByOrderNo(orderId);
+        var releasedItems = fulfillmentService.releaseItems(order, authUser.getUsername());
 
-        fulfillmentService.releaseItems(order);
-
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(releasedItems);
     }
 
 

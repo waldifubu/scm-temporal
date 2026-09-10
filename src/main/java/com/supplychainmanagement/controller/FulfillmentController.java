@@ -7,6 +7,7 @@ import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageResponse;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackingService;
@@ -89,6 +90,10 @@ public class FulfillmentController {
             return ResponseEntity.status(e.getStatus()).body(response);
         }
 
+        if (pickingOrders.isEmpty()) {
+            throw new ResourceNotFoundException("Picking", "No reservations found for order number: ", Long.parseLong(orderNo));
+        }
+
         return ResponseEntity.ok(pickingOrders);
     }
 
@@ -129,10 +134,10 @@ public class FulfillmentController {
     @NoCheck
     @PostMapping(path = "/dispatch/{reservationId}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> readyForDispath(@PathVariable Long reservationId) {
+    public ResponseEntity<?> readyForDispatch(@PathVariable Long reservationId) {
         PickingOrderDto packingOrderItem = null;
         try {
-            packingOrderItem = orderHandlingService.readyDispatch(reservationId);
+            packingOrderItem = orderHandlingService.readyForDispatch(reservationId);
         } catch (APIException e) {
             Map<String, String> response = new HashMap<>();
             response.put("message", e.getMessage());

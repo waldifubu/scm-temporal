@@ -62,6 +62,24 @@ public class OrderController {
         return toSummaryPage(orderService.findAllByStatus(status, pageable));
     }
 
+    /**
+     * Accepts the order towards the customer - the counterpart to {@link #rejectOrder}. These are
+     * the two possible answers to an incoming order, so they are shaped alike.
+     * <p>
+     * Deliberately a POST of its own and not a side effect of reading the order: acknowledging is a
+     * commercial commitment, and it must not happen because someone opened the detail view.
+     */
+    @PostMapping(path = "/{orderNo}/acknowledge", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public OrderSummaryDto acknowledgeOrder(@PathVariable Long orderNo,
+                                            @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
+
+        // Status guard and delivery date both live in the service: confirming a date needs the
+        // availability check, which is not a controller's business.
+        return toSummaryDto(orderService.acknowledge(order, userService.getAuthenticatedUserId(authUser)));
+    }
+
     @PostMapping(path = "/{orderNo}/reject", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public OrderSummaryDto rejectOrder(@PathVariable Long orderNo,
@@ -75,35 +93,16 @@ public class OrderController {
         return toSummaryDto(orderService.update(order.getId(), order, userService.getAuthenticatedUserId(authUser)));
     }
 
-    /*
-    OrderApprovedEvent
-    OrderPickedEvent
-    OrderShippedEvent
-    OrderDeliveredEvent
-     */
-
-
-/*
-    @GetMapping("/{id}")
-    public Mono<Order> getOrder(@PathVariable Long id) {
-        return orderService.findById(id)
-                .onErrorResume(ResourceNotFoundException.class, ignored -> Mono.error(ignored));
-    }
-*/
-
     @GetMapping(path = "/{orderNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER')")
     public OrderDetailsDto getOrderByOrderNo(@PathVariable Long orderNo,
                                              @AuthenticationPrincipal User authUser) {
-        Order order = orderService.findByOrderNo(orderNo);
-
-        if (order.getStatus() == OrderStatus.ACKNOWLEDGED) {
-//            throw new IllegalArgumentException("Order is already acknowledged");
-        }
-
-        order.setStatus(OrderStatus.ACKNOWLEDGED);
-        return toDetailsDto(orderService.update(order.getId(), order, userService.getAuthenticatedUserId(authUser)));
+        // A customer may only see an order they are the customer of - checked in the service,
+        // where the role branch for the order list already lives.
+        return toDetailsDto(orderService.findByOrderNoForUser(orderNo, authUser));
     }
+
+
 
     @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
@@ -113,20 +112,6 @@ public class OrderController {
         eventPublisher.publishEvent(new OrderCreatedEvent(String.valueOf(order.getOrderNo()), authUser.getUsername(), order.getOrderDate()));
         return ResponseEntity.status(HttpStatus.CREATED).body(createdOrder);
     }
-
-
-
-    /*
-        @PutMapping("/{id}")
-        public Mono<OrderSummaryDto> updateOrder(@PathVariable Long id, @RequestBody Order order) {
-            return orderService.update(id, order).map(this::toSummaryDto);
-        }
-
-        @DeleteMapping("/{id}")
-        public Mono<Void> deleteOrder(@PathVariable Long id) {
-            return orderService.deleteById(id);
-        }
-    */
 
     private OrderSummaryDto toSummaryDto(Order order) {
         int qty = 0;

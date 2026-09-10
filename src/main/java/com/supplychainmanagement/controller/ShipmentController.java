@@ -23,7 +23,7 @@ public class ShipmentController {
     final private ShipmentPackageRepository shipmentPackageRepository;
 
     @GetMapping(path = "/packages", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
     public PageResponse<ShipmentPackageListDto> getPackages(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,

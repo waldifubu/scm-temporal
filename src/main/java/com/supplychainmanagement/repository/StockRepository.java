@@ -37,7 +37,7 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
             WHERE s.sku = :sku AND (s.onHand - s.reserved) >= :quantity
             ORDER BY s.updatedAt ASC
             """)
-    List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("qty") int quantity);
+    List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("quantity") int quantity);
 
     List<Stock> findByStorehouseId(Long id);
 

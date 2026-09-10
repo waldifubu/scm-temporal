@@ -35,7 +35,7 @@ stateDiagram-v2
 
     state "Pre-fulfillment" as pre {
         [*] --> CREATED
-        CREATED --> ACKNOWLEDGED : GET /orders/{orderNo}
+        CREATED --> ACKNOWLEDGED : POST /orders/{orderNo}/acknowledge
         ACKNOWLEDGED --> REVIEW
         REVIEW --> APPROVED
     }
@@ -59,8 +59,17 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
 `FulfillmentServiceImpl`):
 
 - **`CREATED`** is the default status set by `Order`'s `@PrePersist` hook when an order is created.
-- **`ACKNOWLEDGED`** is set as a side effect of `GET /orders/{orderNo}` — fetching order details
-  acknowledges it. The guard against re-acknowledging is commented out, so it fires on every call.
+- **`ACKNOWLEDGED`** is set by `POST /orders/{orderNo}/acknowledge` and only from `CREATED`. The
+  call also confirms a **delivery date**: `OrderServiceImpl.acknowledge` asks
+  `ProductionService.checkItems` whether every line is covered by stock today and adds the matching
+  lead time in working days (`app.order.leadDays.inStock`, default 2, vs.
+  `app.order.leadDays.replenishment`, default 10), skipping weekends. A `dueDate` the customer asked
+  for *later* than that wins; an earlier one does not, because the promise has to be keepable.
+  Acknowledging is the commercial acceptance of an incoming order — the equivalent of an EDIFACT
+  `ORDRSP` / X12 `855` — so it is a deliberate act by ADMIN or MANAGER, the counterpart to
+  `/reject`. It used to happen as a side effect of `GET /orders/{orderNo}`, which made a read change
+  state and let anyone opening the detail view, warehouse staff included, commit the company to the
+  order.
 - **`REVIEW`** and **`APPROVED`** are modeled in the enum but not yet driven by any endpoint.
 - **`REJECTED`** can be set from any pre-fulfillment status via `POST /orders/{orderNo}/reject`
   (the only check is that the order isn't already rejected).
@@ -70,6 +79,11 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   makes the reserve call idempotent: calling it again on an order that already advanced past this
   point does not regress its status. A *partial* reservation counts — fulfillment has started for at
   least one line.
+- **Back to `APPROVED`** is the one backwards transition: `releaseItems` returns an order to
+  `APPROVED` once the release leaves it holding no reservation at all — the mirror image of the
+  `IN_FULFILLMENT` step. A partial release leaves the status alone. Like every other transition it
+  publishes an event, and it does so even when the acting user cannot be resolved (a scheduled sweep
+  runs as `"system"`), writing the audit row with a null `user_id`.
 - **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED` → `COMPLETED`** and **`CANCELLED`** are
   defined in `OrderStatus` but not yet wired up at the *order* level — the per-line equivalent up to
   `READY_FOR_DISPATCH` is implemented, see below and
@@ -126,6 +140,12 @@ Which service owns which stretch:
   `(orderItemId, qty)` pairs. A line lands in `PACKED` only once the quantities across all packages
   add up to the ordered quantity; until then it sits in `PACKING`. The service refuses to pack more
   than was ordered, counting what previous packages already hold.
+- **A package knows three weights.** `weight` is what was declared or measured for the carrier and
+  may be absent; `contentWeight` sums product weight × packed quantity; `packageWeight` is the
+  effective gross — the declared one if there is one, otherwise content plus the tare of its
+  `PackageType` (a Euro pallet brings 25 kg of its own, a pallet cage 70). Do not add a
+  `getWeight()` of your own to `ShipmentPackage`: a hand-written getter suppresses Lombok's and made
+  the declared weight write-only once already.
 - Each of the later transitions validates the status it is coming from and answers **400** with a
   message when the line is not in the expected one — picking a line that is not `RESERVED`, or
   dispatching one that is not `PACKED`, is rejected rather than silently skipped.
@@ -212,6 +232,25 @@ Releasing (`releaseItems()` / `InventoryReservationTransactionService.release()`
 stock and **deletes** the `Reservation` row (rather than just flipping it to `RELEASED`) — the
 unique constraint above would otherwise permanently block re-reserving the same
 order/SKU/storehouse combination.
+
+### Scheduled routines
+
+`AutomaticReservationService` (`service/business`) holds what runs without a request.
+`@EnableScheduling` is switched on by `AutomaticProductionService`, so a `@Scheduled` on a bean is
+enough:
+
+| Routine | Does | Enabled |
+|---------|------|---------|
+| `checkCreatedOrders()` | reports per `CREATED` order how many lines are coverable right now | **yes**, every 10 min |
+| `tryToReserve()` | reserves for orders in `IN_FULFILLMENT` | no |
+| `tryToRelease()` | releases reservations past `expiresAt`, per order and only the expired ones | no |
+
+Only the read-only one runs. `checkItems` reserves nothing and writes nothing, so it is safe to
+repeat; the other two change state and switching them on is a deliberate decision.
+
+Note that the orders these routines work on come from `findAllByStatus`, which fetches `orderItems`
+and their products through an `@EntityGraph`. There is no open-in-view session out here, so a finder
+without that graph would turn every one of them into a `LazyInitializationException`.
 
 ## Tech stack
 
@@ -465,11 +504,11 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER, (WAREHOUSE reads) |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only), `POST /produce` *(paged)* | ADMIN, MANAGER |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE |
-| Packing | `POST /packing/{orderNo}`, `POST /packing/{reservationId}/complete` | ADMIN, WAREHOUSE |
+| Packing | `POST /packing/{orderNo}` (body: `items[]`, `packageType`, `weight`, dimensions), `POST /packing/{reservationId}/complete` | ADMIN, WAREHOUSE |
 | Dispatch | `POST /dispatch/{reservationId}` | ADMIN, WAREHOUSE |
 | Shipments | `GET /packages` *(paged)* | ADMIN, LOGISTICS |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}`, `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
@@ -492,6 +531,11 @@ Notable response-code conventions:
 - `GET /products`, `GET /products/{articleNo}` and all `/users` endpoints return DTOs
   (`ProductDto`, `UserDto`), not entities. `/products` hides `id`, `categories` and `components`
   from non-privileged callers; `/users` never exposes the password hash.
+- `GET /orders/{orderNo}` is open to `CUSTOMER`, but scoped: `OrderService.findByOrderNoForUser`
+  lets a privileged caller (ADMIN/MANAGER/WAREHOUSE) read any order and everyone else only the ones
+  they are the customer of, answering **403** otherwise. Same branch as `findAllByUser` uses for the
+  list. It answers 403 rather than 404 deliberately — within this application an order number is not
+  a secret, and the clearer answer is worth more than hiding the order's existence.
 - Authorization failures return **403** with `errorCode: WRONG_ROLE`, missing authentication
   **401** with `errorCode: UNAUTHENTICATED`.
 
@@ -549,6 +593,9 @@ mvn test
 | `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler and not to the catch-all, and that the catch-all keeps a status the exception carries |
 | `UserMapperTest` | that no password hash or internal field reaches the response |
 | `ProductMapperTest` | field suppression for non-privileged callers, and that the entity is left unmodified |
+| `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, and how a customer's `dueDate` is honoured |
+| `OrderServiceAccessTest` | that a customer reaches only their own order and a privileged caller reaches any |
+| `CreatePackageRequestTest` | that a `PackageType` is read from JSON by name, case-insensitively, and falls back to `OTHER` |
 
 Everything except `ApplicationTests` runs without Spring context or database (Mockito + AssertJ), so
 the suite finishes in a couple of seconds. To skip the one that needs a database:
@@ -566,26 +613,22 @@ selection inside `produce()`, and everything from picking onwards — `OrderHand
 - **Order-level statuses stop at `IN_FULFILLMENT`.** `READY_FOR_DISPATCH`, `IN_TRANSIT`,
   `DELIVERED`, `COMPLETED` and `CANCELLED` are defined but nothing advances an *order* into them,
   even once all its lines have reached `READY_FOR_DISPATCH`.
-- **`LogisticsService` is an empty interface** (`dispatch()`, `tracking()`), and no `Shipment` is
-  ever created — `PackingService.createPackage()` builds `ShipmentPackage`s without attaching them
-  to one, so `ShipmentStatus` is currently unreachable.
-- **`PackingServiceImpl.packingReservationByIdComplete()` returns `null`** after writing the status,
-  so `POST /packing/{reservationId}/complete` answers with an empty body.
+- **`LogisticsService` is an empty interface**, and no `Shipment` is ever created —
+  `PackingService.createPackage()` builds `ShipmentPackage`s without attaching them to one, so
+  `ShipmentStatus` is unreachable and a package never leaves `PackageStatus.OPEN`:
+  `ShipmentPackage.complete()` exists but has no caller, because the only "complete" endpoint closes
+  an *order line*, not a package.
 - **`ShipmentController` injects `ShipmentPackageRepository` directly**, bypassing the service layer
   every other controller goes through.
-- The picking/packing/dispatch write paths are **not `@Transactional`**. Each repository call
-  commits on its own, so a failure mid-way leaves the line item in an intermediate status — a pick
-  that fails at `consumeWithRetry` leaves it in `PICKING`.
-- `GET /orders/{orderNo}` has a side effect (advances status to `ACKNOWLEDGED`) and its guard is
-  commented out, so it fires on every call.
 - `UserController.create/update` still accept the raw `User` entity as request body. A caller can
   set `roles` through it, and the endpoint is open to `MANAGER` — so a manager can grant themselves
   `ADMIN`. The response side is already covered by `UserDto`; the request side is not.
 - `OrderServiceImpl.randomOrderNo()` draws from only ~9000 numbers and re-checks existence in a
   loop — a TOCTOU race against the insert, and effectively an endless loop once a few thousand
   orders exist.
-- `Reservation.expiresAt` is set to `now()` on creation (probably meant to be `now().plus(...)`) and
-  is never evaluated; there is no expiry sweep. The picking list nevertheless sorts by it.
+- `Reservation.expiresAt` is now swept by `AutomaticReservationService.tryToRelease()`, but that
+  routine's `@Scheduled` is commented out — until it is switched on, an expired reservation still
+  keeps its stock booked.
 - Two order lines referencing the *same* product produce two `ReserveItem`s with the same SKU; the
   second is skipped by the per-SKU guard, so one of the two lines never gets a reservation. Now that
   reservations are keyed to an `OrderItem`, the guard should follow — or equal SKUs should be merged

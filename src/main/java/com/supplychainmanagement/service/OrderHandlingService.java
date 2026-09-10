@@ -20,5 +20,5 @@ public interface OrderHandlingService {
 
     List<PickingOrderDto> pickingReservationByOrderNo(String orderNo);
 
-    PickingOrderDto readyDispatch(Long reservationId);
+    PickingOrderDto readyForDispatch(Long reservationId);
 }
