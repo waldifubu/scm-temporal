@@ -181,6 +181,11 @@ the first, while the order-status and line-status reconciliation needs the secon
 after a first one that committed its reservation but failed before the order was written has to be
 able to catch the order status up, and it creates nothing to go by.
 
+The reservations in the response are detached copies with `orderItem` nulled out
+(`toDetachedReservationWithoutOrderItem`), so that serializing them cannot pull the order line and
+everything hanging off it into the JSON. Clients get id, orderId, sku, quantity, status,
+storehouse and expiry - not the line the reservation belongs to.
+
 Two layers guard against creating duplicate reservations for the same order:
 
 1. **Idempotency guard, per SKU** — `InventoryReservationTransactionService.reserve()` loads the
@@ -275,8 +280,15 @@ Configuration is split across Spring profiles:
 - `application.properties.dist` — a template to copy from for local/untracked overrides.
 
 > The three live `application*.properties` files are **git-ignored**: they hold the datasource
-> credentials and `app.jwtSecret`. Start from `application.properties.dist`. A missing
-> `app.jwtSecret` fails the context start with `Could not resolve placeholder 'app.jwtSecret'`.
+> credentials and `app.jwtSecret`. Start from `application.properties.dist` - it carries a working
+> default for every placeholder the code requires without one (`app.jwtSecret`,
+> `app.jwtExpirationMs`, `app.cookie.name`, `app.cookie.secure`, `app.mysqldatafile`); only the
+> datasource has to be filled in. A missing one fails the context start with
+> `Could not resolve placeholder ...`, naming the property.
+>
+> Watch where a property lives. Anything defined only in `application-dev.properties` is invisible
+> to a run without an active profile - `@SpringBootTest` being the one that bites, since it loads
+> `application.properties` alone. Properties both profiles override still belong there as well.
 
 > **Persistence caveat:** `spring.jpa.hibernate.ddl-auto=update` will add missing tables/columns but
 > will **not** fix an existing column's type, backfill data, or add/drop constraints. If you change
@@ -530,19 +542,19 @@ mvn test
 
 | Test | Covers |
 |------|--------|
-| `ApplicationTests` | Spring context load — **needs a reachable database and `app.jwtSecret`** |
-| `FulfillmentServiceCheckItemsTest` | storehouse selection, that `checkItems` writes nothing and issues one query per line |
+| `ApplicationTests` | Spring context load — **needs a reachable database** |
+| `ProductionServiceCheckItemsTest` | storehouse selection, that `checkItems` writes nothing and issues one query per line |
 | `FulfillmentServiceReserveItemsTest` | partial reservation, continuation on repeat, the `CREATED`/`COMPLETE`/`PENDING` outcomes, that only newly created reservations are reported, that the order item id reaches the `ReserveItem`, user attribution |
 | `FulfillmentServiceReleaseItemsTest` | that the status reset happens only after a successful release |
-| `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler and not to the catch-all |
+| `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler and not to the catch-all, and that the catch-all keeps a status the exception carries |
 | `UserMapperTest` | that no password hash or internal field reaches the response |
 | `ProductMapperTest` | field suppression for non-privileged callers, and that the entity is left unmodified |
 
 Everything except `ApplicationTests` runs without Spring context or database (Mockito + AssertJ), so
-the suite finishes in a couple of seconds. To run only the fulfillment ones:
+the suite finishes in a couple of seconds. To skip the one that needs a database:
 
 ```bash
-mvn test -Dtest='Fulfillment*Test'
+mvn test -Dtest='!ApplicationTests'
 ```
 
 Still uncovered: reservation idempotency and the retry loop at the persistence level, the storehouse
@@ -569,8 +581,6 @@ selection inside `produce()`, and everything from picking onwards — `OrderHand
 - `UserController.create/update` still accept the raw `User` entity as request body. A caller can
   set `roles` through it, and the endpoint is open to `MANAGER` — so a manager can grant themselves
   `ADMIN`. The response side is already covered by `UserDto`; the request side is not.
-- `GlobalExceptionHandler` ends in a catch-all `@ExceptionHandler(Exception.class)` that turns every
-  unmapped exception into a 500, even one carrying its own status.
 - `OrderServiceImpl.randomOrderNo()` draws from only ~9000 numbers and re-checks existence in a
   loop — a TOCTOU race against the insert, and effectively an endless loop once a few thousand
   orders exist.

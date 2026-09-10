@@ -1,10 +1,11 @@
 package com.supplychainmanagement.service.ratelimiting;
 
-import tools.jackson.databind.ObjectMapper;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.web.servlet.FilterRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 @Configuration
 public class RateLimitingConfig {
@@ -14,8 +15,9 @@ public class RateLimitingConfig {
     // immediately.
     @Bean
     public FilterRegistrationBean<RateLimitingFilter> rateLimitingFilterRegistration(
-            PricingPlanService pricingPlanService, ObjectMapper objectMapper) {
-        var registration = new FilterRegistrationBean<>(new RateLimitingFilter(pricingPlanService, objectMapper));
+            PricingPlanService pricingPlanService,
+            @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
+        var registration = new FilterRegistrationBean<>(new RateLimitingFilter(pricingPlanService, handlerExceptionResolver));
         registration.addUrlPatterns("/api/*");
         registration.setOrder(Ordered.LOWEST_PRECEDENCE);
         registration.setName("rateLimitingFilter");

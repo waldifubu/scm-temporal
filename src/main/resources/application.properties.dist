@@ -27,3 +27,27 @@ spring.jpa.database-platform=org.hibernate.dialect.MariaDBDialect
 spring.jpa.hibernate.ddl-auto=update
 spring.jpa.show-sql=true
 spring.jpa.properties.hibernate.format_sql=true
+
+# Server / Logging
+server.port=8080
+logging.file.name=logs/app-${server.port}.log
+
+# API versioning: clients may omit the version, ApiVersionDefaultFilter rewrites
+# /api/... to /api/${spring.mvc.apiversion.default}/... before the request is routed.
+spring.mvc.apiversion.default=1.0
+
+# Seed data loaded on startup, path relative to the classpath.
+app.mysqldatafile=/data-mysql.sql
+
+# JWT Properties
+# The secret is the HMAC key for HS256 - JwtTokenProvider hands it to Keys.hmacShaKeyFor(),
+# which rejects anything shorter than 256 bits. Replace this placeholder with your own value;
+# keep it out of version control (the live application*.properties files are git-ignored).
+app.jwtSecret=CHANGE_ME_this_placeholder_only_exists_so_a_fresh_checkout_starts_replace_it_with_a_real_secret
+# 1800000 ms = 30 minutes
+app.jwtExpirationMs=1800000
+
+# Cookie carrying the JWT. secure=false for local http development; set it to true
+# wherever the app is served over https, otherwise the browser drops the cookie.
+app.cookie.name=scmcookie
+app.cookie.secure=false

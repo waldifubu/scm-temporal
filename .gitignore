@@ -76,3 +76,8 @@ node_modules/
 /src/main/resources/application.properties
 /src/main/resources/application-dev.properties
 /src/main/resources/application-prod.properties
+
+### Claude Code ###
+# CLAUDE.md itself is checked in - it is project documentation.
+# Only the per-machine settings stay out.
+/.claude/settings.local.json

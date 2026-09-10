@@ -1,6 +1,6 @@
 package com.supplychainmanagement.service.ratelimiting;
 
-import tools.jackson.databind.ObjectMapper;
+import com.supplychainmanagement.exception.RateLimitExceededException;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.ConsumptionProbe;
 import jakarta.servlet.FilterChain;
@@ -8,12 +8,12 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.NonNull;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -27,11 +27,12 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     static final String API_KEY_HEADER = "X-API-KEY";
 
     private final PricingPlanService pricingPlanService;
-    private final ObjectMapper objectMapper;
+    private final HandlerExceptionResolver handlerExceptionResolver;
 
-    public RateLimitingFilter(PricingPlanService pricingPlanService, ObjectMapper objectMapper) {
+    public RateLimitingFilter(PricingPlanService pricingPlanService,
+                              HandlerExceptionResolver handlerExceptionResolver) {
         this.pricingPlanService = pricingPlanService;
-        this.objectMapper = objectMapper;
+        this.handlerExceptionResolver = handlerExceptionResolver;
     }
 
     @Override
@@ -49,20 +50,19 @@ public class RateLimitingFilter extends OncePerRequestFilter {
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
 
         if (!probe.isConsumed()) {
-            long millisToWait = TimeUnit.NANOSECONDS.toMillis(probe.getNanosToWaitForRefill());
+            long secondsToWait = TimeUnit.NANOSECONDS.toSeconds(probe.getNanosToWaitForRefill());
+            RateLimitExceededException tooManyRequests = new RateLimitExceededException(secondsToWait);
 
-            response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.setCharacterEncoding("UTF-8");
-            response.addHeader("Retry-After", String.valueOf(TimeUnit.MILLISECONDS.toSeconds(millisToWait)));
-
-            Map<String, String> body = Map.of(
-                    "error", "RATE_LIMIT_EXCEEDED",
-                    "message", "Rate limit exceeded. Please try again in " + millisToWait + " ms"
-            );
-
-            objectMapper.writeValue(response.getWriter(), body);
-            response.getWriter().flush();
+            // A servlet filter runs before the DispatcherServlet, so throwing here would
+            // bypass the GlobalExceptionHandler — delegate to it explicitly instead.
+            //
+            // The return value decides whether that worked: a null ModelAndView means no resolver
+            // took the exception, and simply returning would hand the caller an empty 200 instead of
+            // the 429. Answer it here in that case - without the JSON body the advice would add.
+            if (handlerExceptionResolver.resolveException(request, response, null, tooManyRequests) == null) {
+                response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
+                response.setHeader(HttpHeaders.RETRY_AFTER, String.valueOf(tooManyRequests.getRetryAfterSeconds()));
+            }
             return;
         }
 

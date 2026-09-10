@@ -6,7 +6,7 @@ import java.time.Duration;
 
 public enum PricingPlan {
     // Declare method (could also be abstract)
-    FREE {
+    FREE(null) {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
@@ -15,7 +15,7 @@ public enum PricingPlan {
                     .build();
         }
     },
-    BASIC {
+    BASIC("BX001-") {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
@@ -24,7 +24,7 @@ public enum PricingPlan {
                     .build();
         }
     },
-    PROFESSIONAL {
+    PROFESSIONAL("PX001-") {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
@@ -33,25 +33,30 @@ public enum PricingPlan {
                     .build();
         }
     },
-    NO_LIMIT {
+    NO_LIMIT("NL001-ÄÖÜ") {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
                     .capacity(Long.MAX_VALUE)
-                    .refillGreedy(Long.MAX_VALUE, Duration.ofDays(10))
+                    .refillGreedy(Long.MAX_VALUE, Duration.ofSeconds(1))
                     .build();
         }
     };
 
+    private final String apiKeyPrefix;
+
+    PricingPlan(String apiKeyPrefix) {
+        this.apiKeyPrefix = apiKeyPrefix;
+    }
+
     public static PricingPlan resolvePlanFromApiKey(String apiKey) {
         if (apiKey == null || apiKey.isEmpty()) {
             return FREE;
-        } else if (apiKey.startsWith("BX001-")) {
-            return BASIC;
-        } else if (apiKey.startsWith("PX001-")) {
-            return PROFESSIONAL;
-        } else if (apiKey.startsWith("NL001-ÄÖÜ")) {
-            return NO_LIMIT;
+        }
+        for (PricingPlan plan : values()) {
+            if (plan.apiKeyPrefix != null && apiKey.startsWith(plan.apiKeyPrefix)) {
+                return plan;
+            }
         }
         return FREE;
     }

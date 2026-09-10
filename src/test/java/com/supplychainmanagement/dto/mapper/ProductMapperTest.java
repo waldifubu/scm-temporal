@@ -25,7 +25,7 @@ class ProductMapperTest {
         product.setName("Zahnriemen");
         product.setDescription("Antriebsriemen");
         product.setUnitPrice(new BigDecimal("19.99"));
-        product.setWeight(2.5);
+        product.setWeight(new BigDecimal("2.5"));
         product.setSku(UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8"));
         product.setActive(true);
 
@@ -37,7 +37,7 @@ class ProductMapperTest {
         Component component = new Component();
         component.setId(11L);
         component.setName("Spannrolle");
-        component.setWeight(0.5);
+        component.setWeight(new BigDecimal("0.5"));
         product.setComponents(new ArrayList<>(List.of(component)));
 
         return product;

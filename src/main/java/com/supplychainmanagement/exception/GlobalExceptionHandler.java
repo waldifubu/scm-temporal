@@ -1,6 +1,8 @@
 package com.supplychainmanagement.exception;
 
+import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -11,8 +13,10 @@ import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
@@ -26,6 +30,7 @@ import java.util.Map;
 
 // Deliberately unrestricted: errors delegated from the JwtAuthenticationFilter carry
 // no handler type, so an annotations-restricted advice would never match them.
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
@@ -45,6 +50,14 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorDetails> handleAPIException(APIException ex, WebRequest webRequest) {
         ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "API_ERROR");
         return new ResponseEntity<>(errorDetails, ex.getStatus());
+    }
+
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<ErrorDetails> handleRateLimitExceeded(RateLimitExceededException ex, WebRequest webRequest) {
+        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "RATE_LIMIT_EXCEEDED");
+        return ResponseEntity.status(ex.getStatus())
+                .header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()))
+                .body(errorDetails);
     }
 
     @ExceptionHandler(UnsufficientException.class)
@@ -68,6 +81,13 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     @ExceptionHandler(WrongRoleException.class)
     public ResponseEntity<ErrorDetails> handleWrongRole(WrongRoleException ex, WebRequest webRequest) {
         ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "WRONG_ROLE");
+        return new ResponseEntity<>(errorDetails, HttpStatus.FORBIDDEN);
+    }
+
+    @ExceptionHandler(AccountLockedException.class)
+    public ResponseEntity<ErrorDetails> handleAccountLocked(AccountLockedException ex, WebRequest webRequest) {
+        log.info("Account locked for user: " + ex.getUsername());
+        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "ACCOUNT_LOCKED");
         return new ResponseEntity<>(errorDetails, HttpStatus.FORBIDDEN);
     }
 
@@ -130,12 +150,48 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return new ResponseEntity<>(errorDetails, HttpStatus.BAD_REQUEST);
     }
 
-    /** Mother of exceptions **/
+    /**
+     * Mother of exceptions - whatever no more specific handler claimed.
+     * <p>
+     * The status is taken from the exception where it carries one, and only falls back to 500
+     * otherwise. Answering everything with 500 would turn a deliberate 404 or 409 from Spring or a
+     * library into a server error, telling the client the fault is ours when it is not - and hiding
+     * which one it actually was.
+     */
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorDetails> handleGenericException(Exception ex, WebRequest webRequest) {
-        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, "INTERNAL_SERVER_ERROR");
+        HttpStatusCode status = resolveStatus(ex);
 
-        return new ResponseEntity<>(errorDetails, HttpStatus.INTERNAL_SERVER_ERROR);
+        if (status.is5xxServerError()) {
+            // The only place a genuinely unexpected exception surfaces - without the stack trace
+            // here there is nothing left to debug it with.
+            log.error("Unhandled exception", ex);
+        }
+
+        ErrorDetails errorDetails = buildErrorDetails(ex, webRequest, errorCodeOf(status));
+
+        return new ResponseEntity<>(errorDetails, status);
+    }
+
+    /**
+     * Two ways an exception states its own status: implementing {@link ErrorResponse} (Spring's own,
+     * {@code ResponseStatusException} among them) or being annotated {@code @ResponseStatus}. The
+     * annotation is read through AnnotatedElementUtils so an inherited or meta-annotated one counts
+     * too.
+     */
+    private HttpStatusCode resolveStatus(Exception ex) {
+        if (ex instanceof ErrorResponse errorResponse) {
+            return errorResponse.getStatusCode();
+        }
+
+        ResponseStatus responseStatus =
+                AnnotatedElementUtils.findMergedAnnotation(ex.getClass(), ResponseStatus.class);
+
+        return responseStatus != null ? responseStatus.code() : HttpStatus.INTERNAL_SERVER_ERROR;
+    }
+
+    private String errorCodeOf(HttpStatusCode status) {
+        return status instanceof HttpStatus httpStatus ? httpStatus.name() : "HTTP_" + status.value();
     }
 
     public ErrorDetails buildErrorDetails(Exception ex, WebRequest webRequest, String errorCode) {
@@ -145,7 +201,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ErrorDetails buildPocessedErrorDetails(String rawMessage, WebRequest webRequest, String errorCode) {
         String route = HtmlUtils.htmlEscape(webRequest.getDescription(false).replace("uri=", ""));
         String message = HtmlUtils.htmlEscape(rawMessage != null ? rawMessage : "");
-        logger.error("Handling Exception: Route: " + route + " | Message: " + message);
+        log.error("Handling Exception: Route: " + route + " | Message: " + message);
         return new ErrorDetails(LocalDateTime.now(), message, route, errorCode);
     }
 }

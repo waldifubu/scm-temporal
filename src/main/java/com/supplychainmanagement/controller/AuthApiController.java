@@ -62,19 +62,13 @@ public class AuthApiController {
 
     @PostMapping(value = "/login", version = "1.0")
     @Deprecated
-    public ResponseEntity<?> login(@RequestBody LoginDto loginDto) {
-        try {
-            JwtAuthResponse response = authService.login(loginDto);
+    public ResponseEntity<?> login(@Valid @RequestBody LoginDto loginDto) {
+        JwtAuthResponse response = authService.login(loginDto);
 
-            eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
-            return ResponseEntity.ok()
-                    .header(HttpHeaders.SET_COOKIE, response.getCookie())
-                    .body(response);
-        } catch (APIException apiException) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", apiException.getMessage());
-            return ResponseEntity.badRequest().body(response);
-        }
+        eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
+        return ResponseEntity.ok()
+                .header(HttpHeaders.SET_COOKIE, response.getCookie())
+                .body(response);
     }
 
     @PostMapping(value = "/login", version = "2.0")

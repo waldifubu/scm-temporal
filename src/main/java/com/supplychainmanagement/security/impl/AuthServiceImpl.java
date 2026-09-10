@@ -6,11 +6,13 @@ import com.supplychainmanagement.dto.auth.RegisterDto;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.*;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.exception.AccountLockedException;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.RoleRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.security.AuthService;
 import com.supplychainmanagement.security.JwtTokenProvider;
+import com.supplychainmanagement.security.LoginAttemptService;
 import io.jsonwebtoken.ExpiredJwtException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
@@ -49,6 +51,7 @@ public class AuthServiceImpl implements AuthService {
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider jwtTokenProvider;
+    private final LoginAttemptService loginAttemptService;
 
     @Value("${application.timezone:UTC}")
     private String applicationTimeZone;
@@ -108,12 +111,26 @@ public class AuthServiceImpl implements AuthService {
                         "Invalid username or email!"
                 ));
 
+        if(!dbUser.getIsActive()) {
+            throw new APIException(
+                    HttpStatus.FORBIDDEN,
+                    "Account is disabled!"
+            );
+        }
+
+        String dbUserUsername = dbUser.getUsername();
+        if (loginAttemptService.isLocked(dbUserUsername)) {
+            long remainingMinutes = loginAttemptService.getRemainingLockTime(dbUserUsername);
+            throw new AccountLockedException(dbUserUsername, remainingMinutes);
+        }
+
         Authentication authentication = null;
         try {
             authentication = authenticationManager.authenticate(
                     new UsernamePasswordAuthenticationToken(loginDto.getUsernameOrEmail(), loginDto.getPassword())
             );
         } catch (BadCredentialsException badCredentialsException) {
+            loginAttemptService.loginFailed(dbUserUsername);
             throw new APIException(
                     HttpStatus.BAD_REQUEST,
                     "Invalid username/email or password!"
@@ -151,6 +168,7 @@ public class AuthServiceImpl implements AuthService {
 
         dbUser.setLastLogin(LocalDateTime.now());
         userRepository.save(dbUser);
+        loginAttemptService.loginSucceeded(dbUserUsername);
 
         return JwtAuthResponse.builder()
                 .tokenType("Bearer")

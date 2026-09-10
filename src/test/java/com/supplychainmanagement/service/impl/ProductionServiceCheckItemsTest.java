@@ -5,9 +5,9 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.entity.Storehouse;
-import com.supplychainmanagement.repository.OrderItemRepository;
+import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.StockRepository;
-import com.supplychainmanagement.service.ProductionService;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -26,21 +26,24 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class FulfillmentServiceCheckItemsTest {
+class ProductionServiceCheckItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
 
     @Mock
     private StockRepository stockRepository;
     @Mock
-    private OrderItemRepository orderItemRepository;
+    private ProductRepository productRepository;
+    @Mock
+    private StockService stockService;
 
     @InjectMocks
-    private ProductionService service;
+    private ProductionServiceImpl service;
 
     private Storehouse storehouse(Long id) {
         Storehouse storehouse = new Storehouse();
@@ -103,7 +106,11 @@ class FulfillmentServiceCheckItemsTest {
 
         service.checkItems(orderWithOneItem(3));
 
-        verifyNoInteractions(orderItemRepository);
+        // The write paths of this service run through stockService.add and stockRepository.save -
+        // a read-only availability check may touch neither.
+        verify(stockRepository).findEligibleBySku(any(), eq(3));
+        verifyNoMoreInteractions(stockRepository);
+        verifyNoInteractions(stockService, productRepository);
     }
 
     /** And the second half: one query per order line, not one per line and storehouse. */
