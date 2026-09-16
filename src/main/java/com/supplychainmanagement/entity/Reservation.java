@@ -84,7 +84,7 @@ public class Reservation {
         this.quantity = quantity;
         this.storehouse = storehouse;
         this.status = reservationStatus;
-        this.expiresAt = LocalDateTime.now().plusHours(24); // default expiration time of 24 hours
+        this.expiresAt = LocalDateTime.now().plusHours(1); // default expiration time of 1 hour
     }
 
     /**

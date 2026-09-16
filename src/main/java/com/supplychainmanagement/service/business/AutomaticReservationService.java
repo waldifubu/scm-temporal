@@ -2,6 +2,7 @@ package com.supplychainmanagement.service.business;
 
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
+import com.supplychainmanagement.exception.UnsufficientException;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.OrderService;
@@ -10,11 +11,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -25,6 +25,13 @@ import java.util.stream.Collectors;
 @Service
 public class AutomaticReservationService {
 
+    /**
+     * The acting user recorded in the audit trail for everything this service does on its own.
+     * Resolving it is best effort - OrderHistory.user_id is nullable precisely because not every
+     * status change has a person behind it.
+     */
+    private static final String SYSTEM_USER = "system";
+    private final static Long deleteAfterDays = 2L; // Delete consumed reservations after 2 days
     private final FulfillmentService fulfillmentService;
     private final OrderService orderService;
     private final ProductionService productionService;
@@ -38,13 +45,6 @@ public class AutomaticReservationService {
     }
 
     /**
-     * The acting user recorded in the audit trail for everything this service does on its own.
-     * Resolving it is best effort - OrderHistory.user_id is nullable precisely because not every
-     * status change has a person behind it.
-     */
-    private static final String SYSTEM_USER = "system";
-
-    /**
      * Reports how far the orders that just came in could be fulfilled right now.
      * <p>
      * Read only: {@code checkItems} reserves nothing and writes nothing, which is why this one runs
@@ -54,7 +54,7 @@ public class AutomaticReservationService {
      * coverable today is exactly what decides whether it can be confirmed - and with which delivery
      * date, see {@code OrderService.acknowledge}.
      */
-    @Scheduled(initialDelay = 60, fixedDelay = 300, timeUnit = TimeUnit.SECONDS)
+//    @Scheduled(initialDelay = 60, fixedDelay = 300, timeUnit = TimeUnit.SECONDS)
     public void checkCreatedOrders() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
 
@@ -85,17 +85,21 @@ public class AutomaticReservationService {
     private String describeUncovered(List<AvailableOrderItemDto> items) {
         return items.stream()
                 .filter(item -> !item.available())
-                .map(item -> "article " + item.articleNo() + " (requested " + item.orderQuantity() + ")")
+                .map(item -> "article " + item.articleNo() + " (requested " + item.orderQuantity() + "/" + item.availableQuantity() + ")")
                 .collect(Collectors.joining(", "));
     }
 
-    //    @Scheduled(initialDelay = 30, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToReserve() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         var orders = orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable);
         orders.forEach(order -> {
-                    ReservationSummary reservationSummary = fulfillmentService.reserveItems(order, SYSTEM_USER);
-                    log.info("Reserved for order {}: {}", order.getOrderNo(), reservationSummary.created());
+                    try {
+                        ReservationSummary reservationSummary = fulfillmentService.reserveItems(order, SYSTEM_USER);
+                        log.info("Reserved for order {}: {}", order.getOrderNo(), reservationSummary.created());
+                    } catch (UnsufficientException e) {
+                        log.info("Order {}: not enough stock to reserve - missing {}", order.getOrderNo(), e.getMessage());
+                    }
                 }
         );
     }
@@ -109,11 +113,11 @@ public class AutomaticReservationService {
      * Per order, and only the expired reservations of it: an order can hold a fresh reservation
      * next to an expired one when its lines were reserved in separate calls.
      */
-    //    @Scheduled(initialDelay = 60, fixedDelay = 300, timeUnit = TimeUnit.SECONDS)
+//    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToRelease() {
-        fulfillmentService.findExpiredReservationsByOrder().forEach((order, expired) -> {
+        fulfillmentService.findOrdersWithExpiredReservations().forEach(order -> {
             try {
-                var released = fulfillmentService.releaseItems(order, expired, SYSTEM_USER);
+                var released = fulfillmentService.releaseItems(order, SYSTEM_USER);
                 log.info("Released {} expired reservation(s) for order {}", released.size(), order.getOrderNo());
             } catch (Exception e) {
                 // One order must not stop the sweep - the next run picks this one up again.
@@ -121,4 +125,34 @@ public class AutomaticReservationService {
             }
         });
     }
+
+    /**
+     * The counterpart to {@link #tryToRelease}: nothing on the request path ever looks at
+     * {@code Reservation.expiresAt} for consumed reservations, so an abandoned reservation keeps its
+     * stock booked forever - invisible to every other order, and unreservable for its own because
+     * the per-SKU guard sees it as still held. This sweep deletes those reservations.
+     * <p>
+     * Per order, and only the expired reservations of it: an order can hold a fresh reservation
+     * next to an expired one when its lines were reserved in separate calls.
+     */
+    //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    public void tryToDelete() {
+        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
+        var orders = orderService.findAllByStatus(OrderStatus.READY_FOR_DISPATCH, pageable);
+
+        orders.forEach(order -> {
+            fulfillmentService.findConsumedReservations(order).forEach(reservation -> {
+                try {
+                    if (reservation.getExpiresAt().isBefore(LocalDateTime.now().minusDays(deleteAfterDays))) {
+                        var deleted = fulfillmentService.deleteReservation(reservation, SYSTEM_USER);
+                        log.info("Deleted consumed reservation {} for order {}", deleted.getId(), order.getOrderNo());
+                    }
+                } catch (Exception e) {
+                    // One reservation must not stop the sweep - the next run picks this one up again.
+                    log.error("Failed to delete consumed reservation {} for order {}", reservation.getId(), order.getOrderNo(), e);
+                }
+            });
+        });
+    }
+
 }

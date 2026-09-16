@@ -1,6 +1,6 @@
 package com.supplychainmanagement.model.enums;
 
-public enum PackageStatus {
+public enum ShipmentPackageStatus {
     OPEN,
     PACKED,
     DISPATCHED

@@ -42,7 +42,7 @@ public class Order {
 
     @CreationTimestamp()
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
-    private LocalDateTime orderDate;
+    private LocalDateTime created;
 
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate dueDate;

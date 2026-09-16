@@ -15,7 +15,7 @@ import java.math.BigDecimal;
  * a measurement of the individual one. Anything that has been weighed belongs in
  * {@code ShipmentPackage.weight}, which takes precedence over this estimate.
  */
-public enum PackageType {
+public enum ShipmentPackageType {
 
     CARTON(new BigDecimal("0.5")),
     WOODEN_BOX(new BigDecimal("8.0")),
@@ -34,7 +34,7 @@ public enum PackageType {
 
     private final BigDecimal tareWeight;
 
-    PackageType(BigDecimal tareWeight) {
+    ShipmentPackageType(BigDecimal tareWeight) {
         this.tareWeight = tareWeight;
     }
 

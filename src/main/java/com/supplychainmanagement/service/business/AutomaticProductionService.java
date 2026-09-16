@@ -14,9 +14,11 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.concurrent.TimeUnit;
 
 @Slf4j
 @Service
@@ -29,11 +31,11 @@ public class AutomaticProductionService {
         this.productionService = productionService;
     }
 
-    //    @Scheduled(initialDelay = 30, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void assemble() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         Page<ProductionResultDto> pageProducts = productionService.produce(pageable);
         log.info("Tried assembling  {}", LocalDateTime.now());
-        log.info("Products: {}", pageProducts.getContent());
+        log.info("Products: {} Total Elements: {}", pageProducts.getContent(), pageProducts.getTotalElements());
     }
 }
