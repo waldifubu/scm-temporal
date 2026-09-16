@@ -7,9 +7,7 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
-import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
-import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.service.InventoryService;
 import lombok.RequiredArgsConstructor;
 import org.jspecify.annotations.NonNull;
@@ -39,12 +37,16 @@ import java.util.List;
 public class OrderHandlingTransactionService {
 
     private final OrderItemRepository orderItemRepository;
-    private final ReservationRepository reservationRepository;
     private final InventoryService inventoryService;
 
     /**
      * Picks one reservation: the line item goes to PICKING, the reserved stock is consumed, the
      * reservation becomes CONSUMED, and only then does the line item reach PICKED.
+     * <p>
+     * The reservation is written exactly once, by consume in its own REQUIRES_NEW transaction - never
+     * again in here. This transaction took its snapshot before consume committed, and MariaDB
+     * (innodb_snapshot_isolation, on by default since 11.6) refuses to update a row that changed after
+     * the snapshot: "Record has changed since last read in table 'reservation'".
      * <p>
      * The order is handed in rather than looked up from {@code reservation.getOrderId()}: picking a
      * whole order would otherwise repeat the same lookup for every single line.
@@ -54,28 +56,37 @@ public class OrderHandlingTransactionService {
         OrderItem orderItem = orderItemValidation(order, reservation);
 
         orderItem.setFulfillmentStatus(FulfillmentStatus.PICKING);
-        orderItemRepository.save(orderItem);
+        OrderItem savedOrderItem = orderItemRepository.save(orderItem);
 
+        List<Reservation> consumed;
         try {
-            inventoryService.consumeWithRetry(String.valueOf(order.getId()), List.of(new ReserveItem(orderItem.getId(), reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
+            consumed = inventoryService.consumeWithRetry(String.valueOf(order.getId()), List.of(new ReserveItem(savedOrderItem.getId(), reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
         } catch (Exception e) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Failed to consume items for reservation " + reservation.getId() + ": " + e.getMessage());
         }
 
-        reservation.setStatus(ReservationStatus.CONSUMED);
-        var newReservation = reservationRepository.save(reservation);
-        if (newReservation.getStatus() != ReservationStatus.CONSUMED) {
-            throw new APIException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to update reservation status for reservation " + reservation.getId());
+        // consume skips a line it cannot consume - no stock row, or no active reservation left for
+        // it - instead of throwing. Carrying on would mark the reservation CONSUMED and the line
+        // PICKED although no stock was taken out. Thrown outside the try so the message is not
+        // wrapped a second time; the rollback also takes the line back out of PICKING.
+        if (consumed.isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Nothing consumed for reservation " + reservation.getId()
+                    + ": stock or active reservation missing, order item " + savedOrderItem.getId() + " not picked");
         }
+
+        // Deliberately not reservation.setStatus(CONSUMED) + save: consume has already written CONSUMED
+        // and committed. A second write from this transaction is the one MariaDB rejects, see above.
+        // The reservation instance in hand therefore still reads ACTIVE in memory - it is only used
+        // for the response below, which does not carry the reservation status.
 
         // Only after the reservation is really consumed, so a line never reads as PICKED while its
         // stock is still reserved.
-        orderItem.setFulfillmentStatus(FulfillmentStatus.PICKED);
-        orderItemRepository.save(orderItem);
+        savedOrderItem.setFulfillmentStatus(FulfillmentStatus.PICKED);
+        orderItemRepository.save(savedOrderItem);
 
         // Mapped in here, while the transaction is open, so the LAZY product and storehouse are
         // resolved before the result leaves the boundary.
-        return PickingOrderDto.of(order, newReservation);
+        return PickingOrderDto.of(order, reservation);
     }
 
     private static @NonNull OrderItem orderItemValidation(Order order, Reservation reservation) {

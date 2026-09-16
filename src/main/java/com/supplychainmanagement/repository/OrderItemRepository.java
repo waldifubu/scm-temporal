@@ -1,8 +1,11 @@
 package com.supplychainmanagement.repository;
 
-import com.supplychainmanagement.entity.Order;
-import jakarta.persistence.LockModeType;
+import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.entity.OrderItem;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -11,7 +14,6 @@ import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     @EntityGraph(attributePaths = {"order", "product"})
@@ -31,4 +33,39 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT oi FROM OrderItem oi WHERE oi.id = :id")
     Optional<OrderItem> findForUpdateById(@Param("id") Long id);
+
+    /**
+     * Order lines in one fulfillment status, across all orders, as a projection - one query for the
+     * page, nothing lazy in the result. Sortable by the columns of OrderItem itself (updatedAt,
+     * quantity, ...); a sort over a joined column such as the product name is not resolvable on a
+     * projection query.
+     * <p>
+     * The reservation comes in through an entity join with ON: OrderItem has no reference to its
+     * reservation, the relation only points the other way. A LEFT join, because a line need not hold
+     * one - WAITING has none yet, and a released reservation is deleted. reservationId is null then.
+     * Released rows being deleted also means any reservation found is the line's current one, ACTIVE
+     * or CONSUMED.
+     * <p>
+     * The count query repeats the inner joins on purpose - they can drop rows, so a plain count over
+     * order_items would report a larger total than the page query can deliver. The left join is left
+     * out of it: it can neither drop a line nor, with at most one reservation per line
+     * (uk_reservation_order_item), duplicate one.
+     */
+    @Query(value = """
+            select new com.supplychainmanagement.dto.order.OrderItemListDto(
+                oi.id, r.id, o.orderNo, p.articleNo, p.name, oi.quantity, oi.fulfillmentStatus, oi.updatedAt)
+            from OrderItem oi
+              join oi.order o
+              join oi.product p
+              left join Reservation r on r.orderItem = oi
+            where oi.fulfillmentStatus = :status
+            """,
+            countQuery = """
+                    select count(oi)
+                    from OrderItem oi
+                      join oi.order o
+                      join oi.product p
+                    where oi.fulfillmentStatus = :status
+                    """)
+    Page<OrderItemListDto> findAllByFulfillmentStatus(@Param("status") FulfillmentStatus status, Pageable pageable);
 }

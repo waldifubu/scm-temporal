@@ -50,7 +50,7 @@ public class ProductionController {
         return new AvailableDto(
                 String.valueOf(orderNo),
                 order.getStatus(),
-                order.getOrderDate(),
+                order.getCreated(),
                 items,
                 message,
                 allAvailable

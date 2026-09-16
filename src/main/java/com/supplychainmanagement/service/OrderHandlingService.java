@@ -1,6 +1,8 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.dto.picking.PickingOrderDto;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -21,4 +23,6 @@ public interface OrderHandlingService {
     List<PickingOrderDto> pickingReservationByOrderNo(String orderNo);
 
     PickingOrderDto readyForDispatch(Long reservationId);
+
+    Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable);
 }

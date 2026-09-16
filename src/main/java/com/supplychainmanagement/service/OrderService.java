@@ -19,7 +19,7 @@ public interface OrderService {
 
     Page<Order> findAll(Pageable pageable);
 
-    Page<Order> findAllByUser(org.springframework.security.core.userdetails.User authUser, Pageable pageable);
+    Page<Order> findAllByUserAndStatus(org.springframework.security.core.userdetails.User authUser, OrderStatus orderStatus, Pageable pageable);
 
     Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 

@@ -44,7 +44,7 @@ public class OrderItem {
     private Product product;
 
     @Column(name = "quantity", nullable = false)
-    @Max(value = 10, message = "Your amount is above our limit")
+    @Max(value = 20, message = "Your amount is above our limit")
     @Min(value = 1, message = "Your amount must be at least 1")
     private Integer quantity;
 

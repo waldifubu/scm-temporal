@@ -9,6 +9,7 @@ import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.StockRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
@@ -22,6 +23,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class InventoryReservationTransactionService {
 
@@ -72,18 +74,24 @@ public class InventoryReservationTransactionService {
                 continue;
             }
 
-            stock.reserve(item.quantity());
+            Reservation reservation;
 
-            Reservation reservation = Reservation.active(
-                    // A proxy is enough: writing the foreign key needs the id, not the row.
-                    // getReferenceById issues no select, so the reserve path keeps its query count.
-                    orderItemRepository.getReferenceById(item.orderItemId()),
-                    orderId,
-                    item.sku(),
-                    item.quantity(),
-                    stock.getStorehouse()
-            );
-            Hibernate.initialize(reservation.getStorehouse());
+            try {
+                stock.reserve(item.quantity());
+                reservation = Reservation.active(
+                        // A proxy is enough: writing the foreign key needs the id, not the row.
+                        // getReferenceById issues no select, so the reserve path keeps its query count.
+                        orderItemRepository.getReferenceById(item.orderItemId()),
+                        orderId,
+                        item.sku(),
+                        item.quantity(),
+                        stock.getStorehouse()
+                );
+                Hibernate.initialize(reservation.getStorehouse());
+            } catch (IllegalArgumentException | IllegalStateException ile) {
+                log.warn(ile.getMessage() + " - skipping reservation for order item: " + item.orderItemId());
+                continue;
+            }
 
             stockRepository.save(stock);
             reservationRepository.save(reservation);
@@ -99,36 +107,64 @@ public class InventoryReservationTransactionService {
     public List<Reservation> release(String orderId, List<ReserveItem> items) {
         List<Reservation> released = new ArrayList<>();
 
+        Stock stock;
+        Reservation reservation;
+
         for (ReserveItem item : items) {
-            Stock stock = findStock(item);
-            Reservation reservation = findActiveReservation(orderId, item);
+            try {
+                stock = findStock(item);
+                reservation = findActiveReservation(orderId, item);
 
-            stock.release(item.quantity());
-            reservation.release();
+                stock.release(item.quantity());
+                reservation.release();
 
-            stockRepository.save(stock);
-            // A released reservation is deleted rather than merely stored as RELEASED: because of
-            // the unique constraint on order_item_id the row would otherwise block any future
-            // reservation for that line for good.
-            reservationRepository.delete(reservation);
+                stockRepository.save(stock);
+                // A released reservation is deleted rather than merely stored as RELEASED: because of
+                // the unique constraint on order_item_id the row would otherwise block any future
+                // reservation for that line for good.
+                reservationRepository.delete(reservation);
+            } catch (IllegalArgumentException | IllegalStateException ile) {
+                log.warn(ile.getMessage() + " - skipping consumption for order item: " + item.orderItemId());
+                continue;
+            }
+
             released.add(reservation);
         }
 
         return released;
     }
 
+    /**
+     * Returns the reservations this call set to CONSUMED. A line without stock or without an active
+     * reservation is skipped, so the list can be shorter than {@code items} - it is the only way for
+     * a caller to tell a consumed line from a skipped one.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void consume(String orderId, List<ReserveItem> items) {
+    public List<Reservation> consume(String orderId, List<ReserveItem> items) {
+        List<Reservation> consumed = new ArrayList<>();
+
         for (ReserveItem item : items) {
-            Stock stock = findStock(item);
-            Reservation reservation = findActiveReservation(orderId, item);
 
-            stock.consume(item.quantity());
-            reservation.consume();
+            Stock stock;
+            Reservation reservation;
+            try {
+                stock = findStock(item);
+                reservation = findActiveReservation(orderId, item);
 
-            stockRepository.save(stock);
-            reservationRepository.save(reservation);
+                stock.consume(item.quantity());
+                reservation.consume();
+                stockRepository.save(stock);
+                reservationRepository.save(reservation);
+
+            } catch (IllegalArgumentException | IllegalStateException ile) {
+                log.warn(ile.getMessage() + " - skipping consumption for order item: " + item.orderItemId());
+                continue;
+            }
+
+            consumed.add(reservation);
         }
+
+        return consumed;
     }
 
     private Stock findStock(ReserveItem item) {

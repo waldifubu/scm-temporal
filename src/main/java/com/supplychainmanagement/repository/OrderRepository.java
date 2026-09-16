@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -16,7 +17,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Optional<Order> findWithDetailsById(Long id);
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
-    Page<Order>  findAllByCustomer(User customer,  Pageable pageable);
+    Page<Order>  findAllByCustomerAndStatus(User customer, OrderStatus status, Pageable pageable);
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Page<Order> findAllBy(Pageable pageable);
@@ -32,4 +33,12 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
+
+    /**
+     * Several orders in one query, with their lines fetched. For callers that work on the orders
+     * after the session has closed - the expiry sweep hands them to releaseItems, which walks
+     * {@code orderItems}.
+     */
+    @EntityGraph(attributePaths = "orderItems")
+    List<Order> findWithOrderItemsByIdIn(Collection<Long> ids);
 }

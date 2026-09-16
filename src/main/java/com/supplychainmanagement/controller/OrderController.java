@@ -38,13 +38,14 @@ public class OrderController {
     public PageResponse<OrderSummaryDto> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "CREATED") String status,
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order,
             @AuthenticationPrincipal User authUser) {
         Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
         Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
 
-        return toSummaryPage(orderService.findAllByUser(authUser, pageable));
+        return toSummaryPage(orderService.findAllByUserAndStatus(authUser, OrderStatus.valueOf(status.toUpperCase()), pageable));
     }
 
     @GetMapping(path = "/new", version = "1.0")
@@ -109,7 +110,7 @@ public class OrderController {
     public ResponseEntity<OrderDetailsDto> createOrder(@RequestBody(required = true) Order order,
                                                        @AuthenticationPrincipal User authUser) {
         OrderDetailsDto createdOrder = toDetailsDto(orderService.create(order, authUser));
-        eventPublisher.publishEvent(new OrderCreatedEvent(String.valueOf(order.getOrderNo()), authUser.getUsername(), order.getOrderDate()));
+        eventPublisher.publishEvent(new OrderCreatedEvent(String.valueOf(order.getOrderNo()), authUser.getUsername(), order.getCreated()));
         return ResponseEntity.status(HttpStatus.CREATED).body(createdOrder);
     }
 
@@ -125,7 +126,7 @@ public class OrderController {
                 order.getAmountOfItems(),
                 order.getTotal(),
                 order.getDueDate(),
-                order.getOrderDate(),
+                order.getCreated(),
                 order.getStatus()
         );
     }
@@ -137,7 +138,7 @@ public class OrderController {
                     order.getTotal(),
                     order.getStatus(),
                     order.getDueDate(),
-                    order.getOrderDate(),
+                    order.getCreated(),
                     order.getCustomer() != null ? order.getCustomer().getLastName() : null,
                     java.util.Collections.emptyList()
             );
@@ -157,7 +158,7 @@ public class OrderController {
                 order.getTotal(),
                 order.getStatus(),
                 order.getDueDate(),
-                order.getOrderDate(),
+                order.getCreated(),
                 order.getCustomer() != null ? order.getCustomer().getLastName() : null,
                 items
         );

@@ -14,7 +14,7 @@ public record OrderSummaryDto(
         @JsonFormat(pattern = "yyyy-MM-dd")
         LocalDate dueDate,
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-        LocalDateTime createdDate,
+        LocalDateTime created,
         OrderStatus status
 ) {
 }

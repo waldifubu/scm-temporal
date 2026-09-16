@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
@@ -8,6 +9,7 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
@@ -61,14 +63,14 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public Page<Order> findAllByUser(org.springframework.security.core.userdetails.User authUser, Pageable pageable) {
+    public Page<Order> findAllByUserAndStatus (org.springframework.security.core.userdetails.User authUser, OrderStatus status, Pageable pageable) {
         if (roleService.isAdmin(authUser)) {
-            return findAll(pageable);
+            return findAllByStatus(status, pageable);
         }
 
         var user = userRepository.findByUsernameOrEmail(authUser.getUsername(), authUser.getUsername())
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", 0L));
-        return orderRepository.findAllByCustomer(user, pageable);
+        return orderRepository.findAllByCustomerAndStatus(user, status, pageable);
     }
 
     @Override
@@ -94,7 +96,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * Mirrors the branch in {@link #findAllByUser}: a privileged caller sees every order, everyone
+     * Mirrors the branch in a privileged caller sees every order, everyone
      * else only their own.
      * <p>
      * Answered with 403 and not 404 on purpose - inside this application an order number is not a
@@ -226,12 +228,14 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
+    @NoCheck
     public Order update(Long id, Order order) {
         return update(id, order, null);
     }
 
     @Override
     @Transactional
+    @NoCheck
     public Order update(Long id, Order order, Long userId) {
         Order existingOrder = orderRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", id));
@@ -303,6 +307,7 @@ public class OrderServiceImpl implements OrderService {
         order.setOrderItems(mergeDuplicateProducts(orderItems));
 
         for (OrderItem orderItem : orderItems) {
+            orderItem.setFulfillmentStatus(orderItem.getFulfillmentStatus() != null ? orderItem.getFulfillmentStatus() : FulfillmentStatus.WAITING);
             orderItem.setOrder(order);
             orderItem.setProduct(resolveProduct(orderItem.getProduct()));
         }

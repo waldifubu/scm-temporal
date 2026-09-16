@@ -1,9 +1,8 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.reservation.ReservationDto;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
-import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.service.FulfillmentService;
-import com.supplychainmanagement.service.InventoryService;
 import com.supplychainmanagement.service.OrderService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -35,8 +34,8 @@ public class InventoryController {
      */
     @PostMapping(path = "/orders/{orderId}/reserve", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ResponseEntity<List<Reservation>> reserve(@PathVariable Long orderId,
-                                                     @AuthenticationPrincipal User authUser) {
+    public ResponseEntity<List<ReservationDto>> reserve(@PathVariable Long orderId,
+                                                        @AuthenticationPrincipal User authUser) {
         var order = orderService.findByOrderNo(orderId);
 
         ReservationSummary summary = fulfillmentService.reserveItems(order, authUser.getUsername());
@@ -49,14 +48,18 @@ public class InventoryController {
         return ResponseEntity.status(status).body(summary.created());
     }
 
+    /**
+     * Answers with the reservations that were actually released - as DTOs, not entities: they come
+     * back from a REQUIRES_NEW transaction whose session is closed, see {@link ReservationDto}.
+     */
     @PostMapping(path = "/orders/{orderId}/release", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ResponseEntity<List<Reservation>> release(@PathVariable Long orderId,
-                                        @AuthenticationPrincipal User authUser) {
+    public ResponseEntity<List<ReservationDto>> release(@PathVariable Long orderId,
+                                                        @AuthenticationPrincipal User authUser) {
         var order = orderService.findByOrderNo(orderId);
         var releasedItems = fulfillmentService.releaseItems(order, authUser.getUsername());
 
-        return ResponseEntity.ok(releasedItems);
+        return ResponseEntity.ok(releasedItems.stream().map(ReservationDto::of).toList());
     }
 
 
@@ -64,11 +67,13 @@ public class InventoryController {
     /*
     @PostMapping(path = "/orders/{orderId}/consume", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<Void> consume(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
+    public ResponseEntity<List<ReservationDto>> consume(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
 
-        inventoryService.consumeWithRetry(orderId, items);
+        // Only what was really consumed: a line without stock or without an active reservation is
+        // skipped, so the list can be shorter than the request. Mapped for the same reason as release.
+        var consumed = inventoryService.consumeWithRetry(orderId, items);
 
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(consumed.stream().map(ReservationDto::of).toList());
     }
     */
 }

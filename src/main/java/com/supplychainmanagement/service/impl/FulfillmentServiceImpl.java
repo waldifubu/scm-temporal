@@ -2,11 +2,13 @@ package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
+import com.supplychainmanagement.dto.reservation.ReservationDto;
 import com.supplychainmanagement.dto.reservation.ReservationOutcome;
 import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.*;
+import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
@@ -22,9 +24,7 @@ import com.supplychainmanagement.service.ProductionService;
 import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -154,9 +154,11 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         }
         orderItemRepository.saveAll(reservedOrderItems);
 
-        // Prevent lazy proxy access (e.g. debugger/toString outside session) on returned entities.
-        List<Reservation> createdReservations = result.created().stream()
-                .map(this::toDetachedReservationWithoutOrderItem)
+        // Mapped rather than handed out: the reservations come from the REQUIRES_NEW reserve
+        // transaction and their LAZY references belong to a session that is already closed.
+        // ReservationDto reads only ids off them, which works without initializing anything.
+        List<ReservationDto> createdReservations = result.created().stream()
+                .map(ReservationDto::of)
                 .toList();
 
         return new ReservationSummary(createdReservations, outcomeOf(order, result));
@@ -195,22 +197,25 @@ public class FulfillmentServiceImpl implements FulfillmentService {
 
     // Helper along the lines of checkItems: returns the currently active reservations for the
     // order instead of checking stock levels the way checkItems does.
-    private List<Reservation> findActiveReservations(Order order) {
+    public List<Reservation> findActiveReservations(Order order) {
         return reservationRepository.findActive(String.valueOf(order.getId()));
     }
 
-    private Reservation toDetachedReservationWithoutOrderItem(Reservation source) {
-        Reservation copy = new Reservation();
-        copy.setId(source.getId());
-        copy.setOrderId(source.getOrderId());
-        copy.setSku(source.getSku());
-        copy.setQuantity(source.getQuantity());
-        copy.setStatus(source.getStatus());
-        copy.setStorehouse(source.getStorehouse());
-        copy.setExpiresAt(source.getExpiresAt());
-        copy.setOrderId(source.getOrderId());
-        copy.setOrderItem(null); // Detach the order item to avoid lazy loading issues
-        return copy;
+    @Override
+    public List<Reservation> findConsumedReservations(Order order) {
+        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
+        var pageList = reservationRepository.findAllByStatus(ReservationStatus.CONSUMED, pageable);
+
+        return pageList.getContent().stream()
+                .filter(reservation -> reservation.getOrderId().equals(String.valueOf(order.getId())))
+                .toList();
+    }
+
+    @Override
+    public Reservation deleteReservation(Reservation reservation, String systemUser) {
+        reservationRepository.delete(reservation);
+        revertOrderStatus(reservation.getOrderItem().getOrder(), systemUser);
+        return reservation;
     }
 
     /**
@@ -222,30 +227,12 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     @Transactional
     public List<Reservation> releaseItems(Order order, String username) {
         List<Reservation> activeReservations = findActiveReservations(order);
+
         if (activeReservations.isEmpty()) {
-            throw new ResourceNotFoundException("Reservation", "orderId", order.getOrderNo());
+            return Collections.emptyList();
         }
 
-        return releaseItems(order, activeReservations, username);
-    }
-
-    /**
-     * The release itself. Everything above only decides <em>which</em> reservations get here - the
-     * endpoint hands in all of them, the expiry sweep only what has run out.
-     * <p>
-     * An empty list is not an error: a sweep walks orders where "nothing to do" is the normal case.
-     * Asking for the release of an order that holds nothing at all is one, which is why the entry
-     * point above still throws.
-     */
-    @Override
-    @Transactional
-    public List<Reservation> releaseItems(Order order, List<Reservation> reservations, String username) {
-        if (reservations.isEmpty()) {
-            return List.of();
-        }
-
-        // getOrderItem().getId() does not initialize the proxy - Hibernate serves the id out of it.
-        List<ReserveItem> items = reservations.stream()
+        List<ReserveItem> items = activeReservations.stream()
                 .map(reservation -> new ReserveItem(
                         reservation.getOrderItem().getId(),
                         reservation.getSku(),
@@ -261,7 +248,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // every line carrying that product - so the same article held in two storehouses, or ordered
         // on two lines, reset positions whose stock is still reserved. getOrderItem().getId() reads
         // the id straight off the proxy without initializing it.
-        Set<Long> releasedOrderItemIds = reservations.stream()
+        Set<Long> releasedOrderItemIds = activeReservations.stream()
                 .map(reservation -> reservation.getOrderItem().getId())
                 .collect(Collectors.toSet());
 
@@ -284,18 +271,24 @@ public class FulfillmentServiceImpl implements FulfillmentService {
 
     @Override
     @Transactional(readOnly = true)
-    public Map<Order, List<Reservation>> findExpiredReservationsByOrder() {
-        // Order has no equals/hashCode, so this groups by identity - which is exactly right here:
-        // inside one transaction findById hands out the same instance for the same id, so two
-        // reservations of one order land in the same bucket without a second query.
-        Map<Order, List<Reservation>> byOrder = new LinkedHashMap<>();
+    public List<Order> findOrdersWithExpiredReservations() {
+        // Deduplicated by id: an order holding several expired reservations is still one order to
+        // release. A LinkedHashSet keeps the order in which the reservations came back.
+        Set<Long> orderIds = reservationRepository
+                .findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now())
+                .stream()
+                .map(reservation -> Long.valueOf(reservation.getOrderId()))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
 
-        for (Reservation expired : reservationRepository.findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now())) {
-            orderRepository.findById(Long.valueOf(expired.getOrderId()))
-                    .ifPresent(order -> byOrder.computeIfAbsent(order, ignored -> new ArrayList<>()).add(expired));
+        if (orderIds.isEmpty()) {
+            return List.of();
         }
 
-        return byOrder;
+        // One query for all of them instead of a findById per reservation, and with the lines
+        // fetched: the sweep passes these orders to releaseItems once this transaction has closed,
+        // and releaseItems walks order.getOrderItems() - lazy, that would throw only after the stock
+        // had already been released.
+        return orderRepository.findWithOrderItemsByIdIn(orderIds);
     }
 
     /**
@@ -320,7 +313,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // exactly this case, and a release by a scheduled sweep ("system") still belongs in the
         // audit trail.
         Long userId = userRepository.findByUsernameOrEmail(username, username)
-                .map(user -> user.getId())
+                .map(User::getId)
                 .orElse(null);
         eventPublisher.publishEvent(
                 new OrderStatusChangedEvent(order.getId(), userId, previousStatus, OrderStatus.APPROVED));

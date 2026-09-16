@@ -1,6 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
-import com.supplychainmanagement.dto.picking.PickingOrderDto;
+import com.supplychainmanagement.annotation.NoCheck;
+import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
 import com.supplychainmanagement.dto.shipping.PackItem;
 import com.supplychainmanagement.entity.OrderItem;
@@ -9,10 +10,10 @@ import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
-import com.supplychainmanagement.model.enums.PackageStatus;
-import com.supplychainmanagement.model.enums.PackageType;
-import com.supplychainmanagement.model.enums.ReservationStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.repository.OrderItemRepository;
+import com.supplychainmanagement.repository.PackageItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.service.PackingService;
@@ -21,124 +22,203 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.Comparator;
-import java.util.Objects;
+import java.util.*;
 
 @Service
 @AllArgsConstructor
 public class PackingServiceImpl implements PackingService {
 
-    private final ReservationRepository reservationRepository;
     private final OrderItemRepository orderItemRepository;
     private final ShipmentPackageRepository shipmentPackageRepository;
+    private final PackageItemRepository packageItemRepository;
 
-    @Override
-    @Transactional
-    public PickingOrderDto packingReservationByIdComplete(Long reservationId) {
-        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.CONSUMED)
-                .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id not found", reservationId));
-
-        var orderItem = reservation.getOrderItem();
-
-        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.READY_FOR_DISPATCH) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is already in READY_FOR_DISPATCH status, cannot move to PACKED");
+    /**
+     * Rejects the whole request before a single line is locked or changed.
+     * <p>
+     * Up front and not in packLine, because packLine skips a line that is not ready to be packed
+     * before it ever reads the quantity - a qty of 0 on such a line would pass silently. A quantity
+     * below 1 is invalid whatever state its line is in. Thrown as APIException, so the client gets a
+     * 400; an IllegalArgumentException would end up as a 500 in GlobalExceptionHandler.
+     * <p>
+     * The request DTOs carry the same rules as bean validation. This is the guard for every caller
+     * that does not come through a validated controller parameter.
+     */
+    private static void requireValidItems(List<PackItem> items) {
+        if (items == null || items.isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "At least one item is required");
         }
-        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.PACKED) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is already in PACKED status, cannot move to PACKED");
-        }
-        if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PACKING) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is not in PACKING status, cannot move to PACKED");
-        }
 
-        orderItem.setFulfillmentStatus(FulfillmentStatus.PACKED);
-        orderItemRepository.save(orderItem);
-
-        // Same row shape the picking list and every other fulfillment action answer with, and
-        // mapped in here while the transaction is open - orderItem.product and reservation.storehouse
-        // are LAZY.
-        return PickingOrderDto.of(orderItem.getOrder(), reservation);
+        for (PackItem item : items) {
+            if (item.orderItemId() == null) {
+                throw new APIException(HttpStatus.BAD_REQUEST, "orderItemId is required");
+            }
+            if (item.qty() == null || item.qty() < 1) {
+                throw new APIException(HttpStatus.BAD_REQUEST,
+                        "Quantity must be at least 1 for OrderItem " + item.orderItemId() + ", was: " + item.qty());
+            }
+        }
     }
 
+    //@TODO: This method is not used anywhere, so it can be removed. The validation is done in packLine and requireValidItems.
+    @NoCheck
+    @Override
+    public void validateOrderItemPacking(OrderItem orderItem) {
+        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.READY_FOR_DISPATCH) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Order item " + orderItem.getId() + " is already in READY_FOR_DISPATCH status, cannot move to PACKED");
+        }
+        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.PACKED) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Order item " + orderItem.getId() + " is already in PACKED status, cannot move to PACKED");
+        }
+        /*
+        if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PACKING) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Order item " + orderItem.getId() + " is not in PACKING status, cannot move to PACKED");
+        }*/
+    }
 
     @Override
     @Transactional
-    public ShipmentPackage createPackage(Long orderNo, CreatePackageRequest request) {
-        ShipmentPackage shipmentPackage = new ShipmentPackage();
+    public ShipmentPackage createShipmentPackage(Long orderNo, CreatePackageRequest request) {
+        requireValidItems(request.items());
 
-        shipmentPackage.setStatus(PackageStatus.OPEN);
-        // Without a type there is no tare weight to add, so an unstated one counts as OTHER rather
-        // than staying null - see PackageType.
-        shipmentPackage.setPackageType(request.packageType() != null ? request.packageType() : PackageType.OTHER);
-        // Weight is optional
-        shipmentPackage.setWeight(request.weight());
-        shipmentPackage.setLength(request.length());
-        shipmentPackage.setWidth(request.width());
-        shipmentPackage.setHeight(request.height());
-        shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
+        ShipmentPackage shipmentPackage = newShipmentPackage(request);
 
+        UUID runNo = UUID.randomUUID();
+        List<String> skipped = new ArrayList<>();
         // Processed in a stable order because packLine locks each line: two concurrent requests
         // touching the same two lines in opposite orders would otherwise deadlock each other.
         request.items().stream()
                 .sorted(Comparator.comparing(PackItem::orderItemId))
-                .forEach(packItem -> packLine(shipmentPackage, packItem, orderNo));
+                .forEach(packItem -> packLine(packItem, orderNo, runNo, shipmentPackage.getItems(), skipped)
+                        .ifPresent(packageItem -> {
+                            packageItem.setShipmentPackage(shipmentPackage);
+                            shipmentPackage.getItems().add(packageItem);
+                        }));
 
         // Every line was skipped, so there is nothing to ship - an empty package is not a result.
         if (shipmentPackage.getItems().isEmpty()) {
-            throw new IllegalStateException("No valid items to pack for order " + orderNo);
+            throw nothingToPack("No valid items to pack for order " + orderNo, skipped);
         }
 
         return shipmentPackageRepository.save(shipmentPackage);
     }
 
     /**
-     * Packs one order line into the package under construction.
+     * Packs order lines without putting them into a package: the items only share a runNo, which is
+     * how they are found again as one packing run.
      * <p>
-     * A line that is neither PICKED nor PACKING is skipped rather than rejected: a caller may hand
-     * in a whole order and let the ones that are ready be packed. The emptiness check at the end of
-     * {@link #createPackage} is what turns "nothing was ready at all" into an error.
+     * Same rules as {@link #createShipmentPackage} - every line is locked, measured against its
+     * ordered quantity including what this run already holds, and advanced to PACKING or PACKED.
+     * Unlike there, no order number narrows the request down, so the lines may belong to different
+     * orders.
      */
-    private void packLine(ShipmentPackage shipmentPackage, PackItem packItem, Long orderNo) {
+    @Override
+    @Transactional
+    public List<PackageItem> createPackageItems(CreatePackageItemsRequest request) {
+        requireValidItems(request.items());
+
+        UUID runNo = UUID.randomUUID();
+        List<PackageItem> packageItems = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+
+        // Stable order for the same reason as in createShipmentPackage: packLine locks each line.
+        request.items().stream()
+                .sorted(Comparator.comparing(PackItem::orderItemId))
+                // No separate lookup or status validation up front - packLine covers both, on the
+                // locked row: an unknown id is a 404, a line already fully packed (PACKED or beyond)
+                // is skipped, more than the room left is a 400. An unlocked findById before it would
+                // also have validated a state read before the lock was taken.
+                .forEach(packItem -> packLine(packItem, null, runNo, packageItems, skipped)
+                        .ifPresent(packageItems::add));
+
+        // Every line was skipped - a run that packed nothing is not a result.
+        if (packageItems.isEmpty()) {
+            throw nothingToPack("No valid items to pack", skipped);
+        }
+
+        return packageItemRepository.saveAll(packageItems);
+    }
+
+    /**
+     * Builds the package item for one order line, or nothing if the line is not ready to be packed.
+     * The caller decides where the item goes - into a package or into a run of loose items.
+     * <p>
+     * Two kinds of lines are skipped rather than rejected: one that is neither PICKED nor PACKING, and
+     * one whose ordered quantity is already fully packed - by earlier package items or by this very
+     * run. A caller may hand in a whole order, or repeat a line, and let whatever is still open be
+     * packed. A line with some room left that is asked for more than that room is still an error.
+     * The emptiness checks in the callers are what turn "nothing left to pack at all" into one.
+     *
+     * @param orderNo   the order every line has to belong to, or null if the caller does not narrow
+     *                  the request down to one order
+     * @param inThisRun the items this call has built so far - not written yet, so the database total
+     *                  cannot see them
+     * @param skipped   receives why a line was skipped, for the error when nothing at all is packed
+     */
+    private Optional<PackageItem> packLine(PackItem packItem, Long orderNo, UUID runNo,
+                                           List<PackageItem> inThisRun, List<String> skipped) {
         // Locked, not just read: see OrderItemRepository.findForUpdateById. The lock is held until
         // createPackage commits, so a concurrent packer waits and then sees the updated total.
+        // Every failure below is the caller's: a 404 or a 400, never an unchecked exception that
+        // GlobalExceptionHandler would have to answer with a 500.
         OrderItem orderItem = orderItemRepository.findForUpdateById(packItem.orderItemId()).orElseThrow(
-                () -> new IllegalArgumentException("OrderItem not found: " + packItem.orderItemId())
+                () -> new ResourceNotFoundException("OrderItem", "id", packItem.orderItemId())
         );
 
-        if (!Objects.equals(orderItem.getOrder().getOrderNo(), orderNo)) {
-            throw new IllegalStateException("OrderItem does not belong to order " + orderNo);
+        if (orderNo != null && !Objects.equals(orderItem.getOrder().getOrderNo(), orderNo)) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "OrderItem " + orderItem.getId() + " does not belong to order " + orderNo);
         }
 
-        FulfillmentStatus status = orderItem.getFulfillmentStatus();
-        if (status != FulfillmentStatus.PICKED && status != FulfillmentStatus.PACKING) {
-            return;
-        }
+        // Quantities first, status second. Asking for more than the line has room for is an error
+        // whatever state the line is in - checked after the status, a line already reading PACKED
+        // (or not picked yet) would swallow the overflow as a silent skip.
 
+        // Validated for the whole request in requireValidItems, before any line was locked.
         int requestedQuantity = packItem.qty();
-        if (requestedQuantity <= 0) {
-            throw new IllegalArgumentException("Quantity must be greater than zero");
-        }
 
         // Measured against what earlier packages of this line already hold, not against the ordered
         // quantity alone - the latter would let two half packages add up to more than was ordered.
-        // The package being built counts too: its items are not written yet, so the query cannot see
-        // them, and the same line listed twice in one request would otherwise pass twice.
+        // The current run counts too: its items are not written yet, so the query cannot see them,
+        // and the same line listed twice in one request would otherwise pass twice. The query itself
+        // counts every package item of the line, with or without a package.
         int alreadyPacked = shipmentPackageRepository.sumQuantityByOrderItemId(orderItem.getId())
-                + packedInThisPackage(shipmentPackage, orderItem);
+                + packedInThisRun(inThisRun, orderItem);
+
+        // Nothing left to pack for this line: skipped like a line that is not ready. Decided by the
+        // quantities, not by the status - PACKED normally says the same, but only if nothing ever
+        // left the two out of step.
+        if (alreadyPacked >= orderItem.getQuantity()) {
+            skipped.add("OrderItem " + orderItem.getId() + " is already fully packed ("
+                    + alreadyPacked + " of " + orderItem.getQuantity() + ")");
+            return Optional.empty();
+        }
+
+        // Never clipped to the room left: packing less than was asked for would leave the caller
+        // believing the full quantity is in the package.
         int newPackedTotal = alreadyPacked + requestedQuantity;
         if (newPackedTotal > orderItem.getQuantity()) {
-            throw new IllegalStateException(
+            throw new APIException(HttpStatus.BAD_REQUEST,
                     "Cannot pack more than ordered qty for OrderItem " + orderItem.getId()
                             + ". Ordered: " + orderItem.getQuantity()
                             + ", already packed: " + alreadyPacked
                             + ", requested: " + requestedQuantity);
         }
 
+        // Only a line with room for the request gets this far. One that is neither PICKED nor
+        // PACKING is still skipped rather than rejected.
+        FulfillmentStatus status = orderItem.getFulfillmentStatus();
+        if (status != FulfillmentStatus.PICKED && status != FulfillmentStatus.PACKING) {
+            skipped.add("OrderItem " + orderItem.getId() + " is " + status
+                    + ", only PICKED or PACKING can be packed");
+            return Optional.empty();
+        }
+
         PackageItem packageItem = new PackageItem();
-        packageItem.setShipmentPackage(shipmentPackage);
         packageItem.setOrderItem(orderItem);
         packageItem.setQuantity(requestedQuantity);
-        shipmentPackage.getItems().add(packageItem);
+        packageItem.setRunNo(runNo);
 
         // PACKED only once every ordered unit sits in a package, PACKING while some are still open.
         // Assigned unconditionally: writing the status a line already has is a no-op, and guarding
@@ -146,10 +226,26 @@ public class PackingServiceImpl implements PackingService {
         orderItem.setFulfillmentStatus(newPackedTotal == orderItem.getQuantity()
                 ? FulfillmentStatus.PACKED
                 : FulfillmentStatus.PACKING);
+
+        return Optional.of(packageItem);
     }
 
-    private int packedInThisPackage(ShipmentPackage shipmentPackage, OrderItem orderItem) {
-        return shipmentPackage.getItems().stream()
+    /**
+     * The 400 for a request that packed nothing, naming every skipped line with its reason - a bare
+     * "No valid items to pack" leaves the caller guessing whether the line was not picked yet,
+     * already dispatched or simply full. A line listed twice in the request is named once.
+     */
+    private static APIException nothingToPack(String message, List<String> skipped) {
+        if (skipped.isEmpty()) {
+            return new APIException(HttpStatus.BAD_REQUEST, message);
+        }
+
+        return new APIException(HttpStatus.BAD_REQUEST,
+                message + ": " + String.join("; ", skipped.stream().distinct().toList()));
+    }
+
+    private int packedInThisRun(List<PackageItem> inThisRun, OrderItem orderItem) {
+        return inThisRun.stream()
                 .filter(item -> Objects.equals(item.getOrderItem().getId(), orderItem.getId()))
                 .mapToInt(PackageItem::getQuantity)
                 .sum();
@@ -158,5 +254,33 @@ public class PackingServiceImpl implements PackingService {
     private String generatePackageNumber() {
         LocalDateTime now = LocalDateTime.now();
         return "PKG-" + now.format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd")) + "-" + java.util.UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    /**
+     * A package without items, to be filled later. {@code items} may be missing from the request here
+     * and is ignored if sent - see {@link CreatePackageRequest.WithItems}.
+     */
+    @Override
+    @Transactional
+    public ShipmentPackage createEmptyShipment(CreatePackageRequest request) {
+        return shipmentPackageRepository.save(newShipmentPackage(request));
+    }
+
+    /**
+     * The package itself, without items - shared by {@link #createShipmentPackage} and
+     * {@link #createEmptyShipment}, so the two cannot drift apart in how a package is set up.
+     */
+    private ShipmentPackage newShipmentPackage(CreatePackageRequest request) {
+        ShipmentPackage shipmentPackage = new ShipmentPackage();
+        shipmentPackage.setShipmentPackageType(request.shipmentPackageType() != null ? request.shipmentPackageType() : ShipmentPackageType.OTHER);
+        shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
+        shipmentPackage.setStatus(ShipmentPackageStatus.OPEN);
+
+        shipmentPackage.setWeight(request.weight() != null ? request.weight() : BigDecimal.ZERO);
+        shipmentPackage.setLength(request.length());
+        shipmentPackage.setWidth(request.width());
+        shipmentPackage.setHeight(request.height());
+
+        return shipmentPackage;
     }
 }

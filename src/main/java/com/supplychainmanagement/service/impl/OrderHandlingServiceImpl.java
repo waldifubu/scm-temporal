@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.dto.picking.PickingOrderDto;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.*;
@@ -76,7 +77,6 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
                 .toList();
     }
 
-
     @Override
     @Transactional
     public PickingOrderDto readyForDispatch(Long reservationId) {
@@ -94,6 +94,16 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
         orderItemRepository.save(orderItem);
 
         return PickingOrderDto.of(findOrder(reservation.getOrderId()), reservation);
+    }
+
+    /**
+     * Order lines in the given fulfillment status, across all orders. A projection like
+     * {@link #pickingOrders}: the page is one query and carries nothing lazy into the response.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable) {
+        return orderItemRepository.findAllByFulfillmentStatus(status, pageable);
     }
 
     /**

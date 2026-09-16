@@ -12,7 +12,7 @@ public record OrderDetailsDto(
         BigDecimal total,
         OrderStatus status,
         LocalDate dueDate,
-        LocalDateTime orderDate,
+        LocalDateTime created,
         String customerName,
         List<OrderItemDto> items
 ) {

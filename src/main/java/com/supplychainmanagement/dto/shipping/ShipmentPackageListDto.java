@@ -4,8 +4,8 @@ import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
-import com.supplychainmanagement.model.enums.PackageStatus;
-import com.supplychainmanagement.model.enums.PackageType;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageType;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -15,8 +15,8 @@ import java.util.Objects;
 public record ShipmentPackageListDto(
         Long id,
         String packageNumber,
-        PackageStatus status,
-        PackageType type,
+        ShipmentPackageStatus status,
+        ShipmentPackageType type,
         BigDecimal weight,
         BigDecimal packageWeight,
         BigDecimal volume,
@@ -29,7 +29,7 @@ public record ShipmentPackageListDto(
                 shipmentPackage.getId(),
                 shipmentPackage.getPackageNumber(),
                 shipmentPackage.getStatus(),
-                shipmentPackage.getPackageType(),
+                shipmentPackage.getShipmentPackageType(),
                 shipmentPackage.getWeight(),
                 shipmentPackage.getPackageWeight(),
                 shipmentPackage.getVolume(),

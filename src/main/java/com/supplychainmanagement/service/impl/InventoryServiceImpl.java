@@ -49,8 +49,8 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
     @Override
-    public void consumeWithRetry(String orderId, List<ReserveItem> items) {
-        executeWithRetry(() -> transactionService.consume(orderId, items));
+    public List<Reservation> consumeWithRetry(String orderId, List<ReserveItem> items) {
+        return executeWithRetry(() -> transactionService.consume(orderId, items));
     }
 
     private <T> T executeWithRetry(Supplier<T> transaction) {
@@ -65,13 +65,6 @@ public class InventoryServiceImpl implements InventoryService {
             }
         }
         throw new IllegalStateException("Retry loop exited without result");
-    }
-
-    private void executeWithRetry(Runnable transaction) {
-        executeWithRetry(() -> {
-            transaction.run();
-            return null;
-        });
     }
 
     private void backoff(int attempt) {

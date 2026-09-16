@@ -1,7 +1,7 @@
 package com.supplychainmanagement.entity;
 
-import com.supplychainmanagement.model.enums.PackageStatus;
-import com.supplychainmanagement.model.enums.PackageType;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -43,10 +43,10 @@ public class ShipmentPackage {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private PackageStatus status;
+    private ShipmentPackageStatus status;
 
     @Enumerated(EnumType.STRING)
-    private PackageType packageType;
+    private ShipmentPackageType shipmentPackageType;
 
     private String packageNumber;
     private BigDecimal weight;
@@ -72,14 +72,14 @@ public class ShipmentPackage {
 
     public void complete() {
 
-        if (status != PackageStatus.OPEN) {
+        if (status != ShipmentPackageStatus.OPEN) {
             throw new IllegalStateException(
                     "Package is not open"
             );
         }
 
         packedAt = LocalDateTime.now();
-        status = PackageStatus.PACKED;
+        status = ShipmentPackageStatus.PACKED;
     }
 
     public BigDecimal getVolume() {
@@ -123,19 +123,28 @@ public class ShipmentPackage {
      * than failing, which would otherwise turn every package created without one into an NPE.
      */
     public BigDecimal getPackageWeight() {
-        BigDecimal tare = packageType != null ? packageType.getTareWeight() : BigDecimal.ZERO;
+        BigDecimal tare = shipmentPackageType != null ? shipmentPackageType.getTareWeight() : BigDecimal.ZERO;
         return getContentWeight().add(tare);
     }
 
     @PrePersist
     void applyDefault() {
         if (status == null) {
-            status = PackageStatus.OPEN;
+            status = ShipmentPackageStatus.OPEN;
         }
 
         createdAt = LocalDateTime.now();
         if (weight == null) {
             weight = getContentWeight();
+        }
+        if (length == null) {
+            length = BigDecimal.ZERO;
+        }
+        if (width == null) {
+            width = BigDecimal.ZERO;
+        }
+        if (height == null) {
+            height = BigDecimal.ZERO;
         }
     }
 }
