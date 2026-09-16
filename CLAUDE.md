@@ -22,8 +22,8 @@ mvn test -Dtest=ApplicationTests
 ```
 `ApplicationTests` loads the full Spring context and therefore needs a reachable database and a
 complete `application.properties` - it runs with no active profile, so anything defined only in
-`application-dev.properties` is missing there. Everything else is plain Mockito/AssertJ and runs
-in a couple of seconds.
+`application-dev.properties` is missing there. `CustomQueryExecutionTest` and `ReservationDtoTest`
+load the context too. Everything else is plain Mockito/AssertJ and runs in a couple of seconds.
 
 Run the app (dev profile, uses `application-dev.properties`):
 ```
@@ -102,11 +102,11 @@ The chain is split by responsibility, not by entity. Which service owns which st
   advances `Order.status` to `IN_FULFILLMENT`, but only from a pre-fulfillment status
   (`PRE_FULFILLMENT_STATUSES`), so a second idempotent call never regresses further-along orders.
   It asks `ProductionService.checkItems` for availability rather than querying stock itself.
-  `releaseItems` comes in two shapes: given an order it releases everything that order holds, given
-  a list of reservations it releases exactly those - the expiry sweep passes only what has run out,
-  because an order can hold a fresh reservation next to an expired one. Both return what the
-  inventory layer reports actually released, and both take the acting user, because a release takes
-  the order back to `APPROVED` once nothing is held any more and that transition wants an audit row.
+  `releaseItems(order, username)` releases every active reservation the order holds - there is no
+  variant for a subset any more - and returns what the inventory layer reports actually released.
+  An order holding nothing yields an empty list, not an error, so the endpoint answers `200 []`
+  rather than 404. It takes the acting user because a release takes the order back to `APPROVED`
+  once nothing is held any more, and that transition wants an audit row.
 - **`OrderService.acknowledge`** accepts an incoming order and confirms a delivery date for it: two
   lead times in working days (`app.order.leadDays.inStock` / `.replenishment`, defaulted inline)
   depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
@@ -143,6 +143,25 @@ The chain is split by responsibility, not by entity. Which service owns which st
   failure on line three roll back the line statuses of one and two while their stock has already
   been consumed by the REQUIRES_NEW `consumeWithRetry` - a reservation reading ACTIVE over stock
   that is gone. Per line, everything before the failure stays correctly and completely picked.
+- **`pick` never writes the reservation itself.** `consume` sets `CONSUMED` and commits in its own
+  `REQUIRES_NEW` transaction. The pick transaction took its snapshot before that commit, and MariaDB
+  (`innodb_snapshot_isolation`, on by default since 11.6) refuses to update a row that changed after
+  the snapshot: `Record has changed since last read in table 'reservation'`. Do not add a
+  `reservation.setStatus(...)` in `pick` - a modified managed entity is flushed without any `save`.
+- **Packing goes through `PackingServiceImpl.packLine`**, shared by `createShipmentPackage`
+  (`POST /packing/{orderNo}`, a package with its items) and `createPackageItems` (`POST /packing`,
+  loose items without a package that share one `runNo`). `createEmptyShipment`
+  (`POST /package/empty`) creates the package alone; all three set the package up through
+  `newShipmentPackage`. Per line, on the row locked with `findForUpdateById` and in ascending id
+  order: unknown id -> 404; line of another order -> 400; already packed = every `package_item` of
+  the line (in a package or loose) plus earlier entries of the same request; full -> skipped; more
+  than the room left -> 400, never clipped; status not `PICKED`/`PACKING` -> skipped; otherwise packed
+  and set to `PACKING` or `PACKED`. Quantities are checked before the status, so an overflow is
+  reported whatever state the line is in. `requireValidItems` rejects an empty list and `qty` < 1
+  before any line is locked. When nothing at all is packed the 400 names every skipped line with its
+  reason. Throw `APIException`/`ResourceNotFoundException` from here, never `IllegalStateException`,
+  which `GlobalExceptionHandler` answers with a 500. `validateOrderItemPacking` is currently unused
+  and kept on purpose for a manual "complete" endpoint.
 - **`Reservation.release()`** marks status `RELEASED`, but the row is then *deleted* (not kept)
   because the unique constraint would otherwise permanently block re-reserving the same
   order/sku/storehouse combination.
@@ -167,13 +186,27 @@ reconciliation the latter.
 ### Scheduled routines
 
 `AutomaticReservationService` holds what runs without a request; `@EnableScheduling` comes from
-`AutomaticProductionService`. Only `checkCreatedOrders()` is switched on - it reports coverage per
-`CREATED` order and writes nothing. `tryToReserve()` and `tryToRelease()` change state and stay
-commented out on purpose.
+`AutomaticProductionService`. During development the `@Scheduled` annotations of all three routines
+are commented out; the intervals below are the ones they carry. Each works the first 100 orders of
+its status. `AutomaticProductionService.assemble()` on the other hand is active and runs `produce()`
+every 150 s.
 
-Orders reaching these routines come from `findAllByStatus`, whose `@EntityGraph` fetches
-`orderItems` and their products. There is no open-in-view session out here, so a finder without that
-graph turns them into a `LazyInitializationException`.
+- `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and acknowledges the ones
+  whose every line is coverable (`orderService.acknowledge(order, null)`). It writes.
+- `tryToReserve()` (every 150 s) calls `reserveItems` for every `IN_FULFILLMENT` order.
+- `tryToRelease()` (every 150 s) takes its orders from
+  `FulfillmentService.findOrdersWithExpiredReservations()` - every order holding at least one
+  reservation past `expiresAt`, each once - and calls `releaseItems` for each. `expiresAt` only
+  decides which orders are picked: the release then covers *all* active reservations of the order,
+  a fresh one next to an expired one included. A full release takes the order back to `APPROVED`.
+
+There is no open-in-view session out here, so every order reaching these routines has to arrive with
+its `orderItems` already fetched, or it turns into a `LazyInitializationException`.
+`checkCreatedOrders` and `tryToReserve` get theirs from `findAllByStatus`, `tryToRelease` from
+`findWithOrderItemsByIdIn` - one query for all affected orders, both through an `@EntityGraph`. For
+the release this is not cosmetic: `releaseItems` walks `orderItems` only after the stock has been
+released in its own `REQUIRES_NEW` transaction, so a lazy failure there would leave the lines on
+`RESERVED` over reservations that are already gone.
 
 ### Timestamps maintain themselves
 
@@ -185,7 +218,8 @@ call left the timestamp stale.
 ### Enum values in a request body
 
 `@JsonFormat(with = ACCEPT_CASE_INSENSITIVE_VALUES, READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE)`
-has to sit on the **property** - see `CreatePackageRequest.packageType`. On the enum declaration it
+has to sit on the **property** - see `CreatePackageRequest.shipmentPackageType` (the JSON key is
+`shipmentPackageType` since the rename from `packageType`). On the enum declaration it
 is not consulted, and on the entity it does nothing at all, because entities are never deserialized:
 the request DTO is the only thing bound from a body. Note also that a property arriving as `null`
 means the JSON key did not match the record component name; a value the enum does not know produces
@@ -203,6 +237,30 @@ orderItems` closes into a cycle Jackson cannot escape.
 The picking *actions* return the same DTO, mapped inside `OrderHandlingServiceImpl` while the
 session is open. A projection query that joins needs an explicit `countQuery` — inner joins can
 drop rows, so a plain `count(...)` would report a larger total than the page query delivers.
+
+A third way it breaks: anything returned from a `REQUIRES_NEW` transaction - the whole inventory
+layer - comes out of a session that is already closed, so its LAZY references fail with
+`Could not initialize proxy - no session` when Jackson touches them. Open-in-view does not cover
+this; its session is a different one. `ReservationDto` is the answer for that case: related entities
+as ids only, because Hibernate serves `getId()` on a proxy without initializing it. Reserve and
+release answer with it - reserve maps inside `FulfillmentServiceImpl.reserveItems`, release in the
+controller, because `releaseItems` also feeds `tryToRelease`, which wants the entities. `ReservationDtoTest` reproduces the
+closed-session state with `getReference`.
+
+`OrderItemListDto` (`GET /order-items`) is the projection for order lines by fulfillment status. It
+carries the line's `reservationId` through `left join Reservation r on r.orderItem = oi` - an entity
+join with ON, because `OrderItem` has no reference to its reservation, and a left one, because a
+`WAITING` line has none. The count query leaves that join out; it cannot drop or duplicate lines as
+long as `uk_reservation_order_item` holds.
+
+### Validation groups on request bodies
+
+`CreatePackageRequest.items` is required for `POST /packing/{orderNo}` and optional for
+`POST /package/empty`. One DTO covers both through a validation group: `@NotEmpty` on `items` belongs
+to `CreatePackageRequest.WithItems`, the `@Valid` on each `PackItem` to `Default`. An endpoint that
+requires items declares `@Validated({Default.class, CreatePackageRequest.WithItems.class})`; a plain
+`@Valid` lets `items` be missing. `WithItems` alone would skip the per-item rules - always pair it
+with `Default`.
 
 ### Paged list endpoints
 
@@ -231,6 +289,12 @@ The same applies to new foreign keys. Adding `Reservation.orderItem` was the rec
 column added to a populated table gets MariaDB's default `0` — and `0` is no valid `order_items.id`.
 A new FK column has to be added nullable, backfilled, and only then constrained. Check what is
 actually in the column (`SELECT ... GROUP BY`) before assuming the rows are `NULL`.
+
+The reverse needs a manual step too: `package_item.shipment_package_id` became optional for loose
+items, but `update` leaves an existing `NOT NULL` in place - `ALTER TABLE package_item MODIFY
+shipment_package_id BIGINT NULL`. Data migrations that cannot wait for a real migration tool run as
+an `ApplicationReadyEvent` listener in `config` (`OrderDateToCreatedMigration`), guarded so they do
+nothing once done. Note that `@SpringBootTest` runs them as well, against the same database.
 
 ### Business/aspect utilities
 
