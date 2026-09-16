@@ -186,32 +186,42 @@ class FulfillmentServiceReleaseItemsTest {
         assertThat(((OrderStatusChangedEvent) captor.getValue()).userId()).isNull();
     }
 
-    /** Only what has expired is handed back - a line reserved later keeps its hold. */
+    /**
+     * What comes back is what the inventory layer reported released, not the list queried up front:
+     * that layer is the one that knows which rows it actually deleted.
+     */
     @Test
-    void releasesOnlyTheExpiredReservations() {
+    void returnsWhatTheInventoryLayerReportsReleased() {
         Order order = orderWithActiveReservation();
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation expired = Reservation.active(orderItem, ORDER_ID, SKU, 3, storehouse);
-        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(expired));
+        Reservation reportedReleased = Reservation.active(orderItem, ORDER_ID, SKU, 3, storehouse);
+        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reportedReleased));
 
-        var released = service.releaseItems(order, List.of(expired), "system");
+        var released = service.releaseItems(order, "system");
 
-        // What comes back is what the inventory layer reported released, not the queried list.
-        assertThat(released).containsExactly(expired);
+        assertThat(released).containsExactly(reportedReleased);
         verify(inventoryService).releaseWithRetry(anyString(), anyList());
         assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
     }
 
-    /** Nothing expired is not an error: the sweep visits orders that simply have nothing to do. */
+    /**
+     * An order holding nothing is not an error: the sweep visits orders that simply have nothing to
+     * do. Nothing is released, no line is touched, and the order status stays where it is.
+     */
     @Test
-    void doesNothingWhenNoReservationHasExpired() {
+    void doesNothingWhenTheOrderHoldsNoReservation() {
         Order order = orderWithActiveReservation();
-        assertThat(service.releaseItems(order, List.of(), "system")).isEmpty();
+        order.setStatus(OrderStatus.IN_FULFILLMENT);
+        when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of());
+
+        assertThat(service.releaseItems(order, "system")).isEmpty();
 
         verify(inventoryService, never()).releaseWithRetry(anyString(), anyList());
+        verify(orderItemRepository, never()).saveAll(any());
         assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
     }
 
     /**
@@ -246,10 +256,12 @@ class FulfillmentServiceReleaseItemsTest {
         order.setOrderNo(1042L);
         order.setOrderItems(new LinkedHashSet<>(List.of(released, stillHeld)));
 
+        // Only the first line holds a reservation. The second shares its article but not its hold.
         Reservation reservation = Reservation.active(released, ORDER_ID, SKU, 3, storehouse);
+        when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(reservation), List.of());
         when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
 
-        service.releaseItems(order, List.of(reservation), USERNAME);
+        service.releaseItems(order, USERNAME);
 
         assertThat(released.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
         assertThat(stillHeld.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);

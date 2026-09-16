@@ -7,6 +7,7 @@ import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.entity.Storehouse;
+import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.StockRepository;
@@ -82,7 +83,7 @@ class InventoryReservationTransactionServiceTest {
     }
 
     /** One stock row for the shared SKU, deep enough for both lines. */
-    private void stockAvailable(int onHand) {
+    private Stock stockAvailable(int onHand) {
         Stock stock = new Stock();
         stock.setSku(SKU);
         stock.setOnHand(onHand);
@@ -92,6 +93,7 @@ class InventoryReservationTransactionServiceTest {
         when(stockRepository.findByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.of(stock));
         when(stockRepository.save(any(Stock.class))).thenAnswer(call -> call.getArgument(0));
         when(reservationRepository.save(any(Reservation.class))).thenAnswer(call -> call.getArgument(0));
+        return stock;
     }
 
     /**
@@ -166,5 +168,32 @@ class InventoryReservationTransactionServiceTest {
         var result = service.reserve(ORDER_ID, List.of(reserveItem(11L, 99)));
 
         assertThat(result.created()).isEmpty();
+    }
+
+    /**
+     * consume skips a line it cannot consume instead of failing the call, so what it returns is the
+     * only record of which lines were really consumed - the skipped one must not appear in it.
+     */
+    @Test
+    void consumeReturnsOnlyTheReservationsItConsumed() {
+        Reservation held = Reservation.active(line(11L, 3), ORDER_ID, SKU, 3, storehouse);
+        stockAvailable(10).setReserved(3);
+
+        when(reservationRepository.findActiveByOrderItem(11L)).thenReturn(Optional.of(held));
+        when(reservationRepository.findActiveByOrderItem(12L)).thenReturn(Optional.empty());
+
+        var consumed = service.consume(ORDER_ID, List.of(reserveItem(11L, 3), reserveItem(12L, 2)));
+
+        assertThat(consumed).containsExactly(held);
+        assertThat(held.getStatus()).isEqualTo(ReservationStatus.CONSUMED);
+    }
+
+    /** Nothing consumable at all is an empty list, not an exception. */
+    @Test
+    void consumeReturnsAnEmptyListWhenNoLineHoldsAReservation() {
+        stockAvailable(10);
+        when(reservationRepository.findActiveByOrderItem(11L)).thenReturn(Optional.empty());
+
+        assertThat(service.consume(ORDER_ID, List.of(reserveItem(11L, 3)))).isEmpty();
     }
 }

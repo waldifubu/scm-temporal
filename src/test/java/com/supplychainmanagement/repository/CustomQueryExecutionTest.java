@@ -1,5 +1,6 @@
 package com.supplychainmanagement.repository;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -75,6 +76,34 @@ class CustomQueryExecutionTest {
     @Test
     void findForUpdateByIdRuns() {
         assertThat(orderItemRepository.findForUpdateById(UNKNOWN_ID)).isEmpty();
+    }
+
+    /**
+     * The order line projection with its count query, sorted by a column of the line itself - the
+     * default sort of the endpoint.
+     */
+    @Test
+    void findAllByFulfillmentStatusRunsWithItsCountQuery() {
+        var page = orderItemRepository.findAllByFulfillmentStatus(
+                FulfillmentStatus.PICKED,
+                PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "updatedAt")));
+
+        assertThat(page).isNotNull();
+        assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    /**
+     * The reservation is left-joined, so a line without one must still be listed. The count query
+     * carries no reservation join - if the page query ever turned into an inner join, it would deliver
+     * fewer rows than the count promises. WAITING lines hold no reservation, which makes them the
+     * status to look at. Data-independent: with no WAITING line at all both sides are 0.
+     */
+    @Test
+    void findAllByFulfillmentStatusKeepsLinesWithoutAReservation() {
+        var page = orderItemRepository.findAllByFulfillmentStatus(
+                FulfillmentStatus.WAITING, PageRequest.of(0, 5));
+
+        assertThat((long) page.getNumberOfElements()).isEqualTo(Math.min(page.getTotalElements(), 5));
     }
 
     /**

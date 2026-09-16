@@ -1,6 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
+import com.supplychainmanagement.dto.reservation.ReservationDto;
 import com.supplychainmanagement.dto.reservation.ReservationOutcome;
 import com.supplychainmanagement.dto.reservation.ReservationResult;
 import com.supplychainmanagement.dto.reservation.ReserveItem;
@@ -273,11 +274,11 @@ class FulfillmentServiceReserveItemsTest {
 
         var summary = service.reserveItems(order, USERNAME);
 
-        // Compared by sku, not by identity: reserveItems answers with detached copies whose
-        // orderItem is nulled out, so the instances are deliberately not the ones handed in.
-        assertThat(summary.created()).extracting(Reservation::getSku).containsExactly(outstandingSku);
-        assertThat(summary.created()).extracting(Reservation::getSku).doesNotContain(SKU);
-        assertThat(summary.created()).allSatisfy(r -> assertThat(r.getOrderItem()).isNull());
+        // reserveItems answers with DTOs, so the comparison runs over their fields - and the line a
+        // reservation belongs to now reaches the caller as its id.
+        assertThat(summary.created()).extracting(ReservationDto::sku).containsExactly(outstandingSku);
+        assertThat(summary.created()).extracting(ReservationDto::sku).doesNotContain(SKU);
+        assertThat(summary.created()).extracting(ReservationDto::orderItemId).containsExactly(12L);
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
     }
 
@@ -361,7 +362,7 @@ class FulfillmentServiceReserveItemsTest {
 
         var summary = service.reserveItems(order, USERNAME);
 
-        assertThat(summary.created()).extracting(Reservation::getSku).containsExactly(SKU);
+        assertThat(summary.created()).extracting(ReservationDto::sku).containsExactly(SKU);
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
         verify(inventoryService).reserveWithRetry(anyString(), anyList());
         verify(orderItemRepository).saveAll(anyList());

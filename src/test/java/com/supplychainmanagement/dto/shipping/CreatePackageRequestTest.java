@@ -1,13 +1,13 @@
 package com.supplychainmanagement.dto.shipping;
 
-import com.supplychainmanagement.model.enums.PackageType;
+import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * How a package type has to reach the API. The annotation driving this sits on {@link PackageType}
+ * How a package type has to reach the API. The annotation driving this sits on {@link ShipmentPackageType}
  * itself rather than on a property - putting it on {@code ShipmentPackage} has no effect, because
  * that entity is never deserialized: this record is the only thing bound from a request body.
  * <p>
@@ -18,7 +18,7 @@ class CreatePackageRequestTest {
 
     private final JsonMapper mapper = JsonMapper.builder().build();
 
-    private PackageType typeOf(String rawType) {
+    private ShipmentPackageType typeOf(String rawType) {
         String json = """
                 {
                   "items": [ { "orderItemId": 11, "qty": 2 } ],
@@ -27,18 +27,18 @@ class CreatePackageRequestTest {
                 }
                 """.formatted(rawType);
 
-        return mapper.readValue(json, CreatePackageRequest.class).packageType();
+        return mapper.readValue(json, CreatePackageRequest.class).shipmentPackageType();
     }
 
     @Test
     void readsTheConstantName() {
-        assertThat(typeOf("METAL_CONTAINER")).isEqualTo(PackageType.METAL_CONTAINER);
+        assertThat(typeOf("METAL_CONTAINER")).isEqualTo(ShipmentPackageType.METAL_CONTAINER);
     }
 
     @Test
     void readsItRegardlessOfCase() {
-        assertThat(typeOf("metal_container")).isEqualTo(PackageType.METAL_CONTAINER);
-        assertThat(typeOf("Metal_Container")).isEqualTo(PackageType.METAL_CONTAINER);
+        assertThat(typeOf("metal_container")).isEqualTo(ShipmentPackageType.METAL_CONTAINER);
+        assertThat(typeOf("Metal_Container")).isEqualTo(ShipmentPackageType.METAL_CONTAINER);
     }
 
     /**
@@ -48,7 +48,7 @@ class CreatePackageRequestTest {
      */
     @Test
     void fallsBackToOtherForAnUnknownValue() {
-        assertThat(typeOf("METALCONTAINER")).isEqualTo(PackageType.OTHER);
+        assertThat(typeOf("METALCONTAINER")).isEqualTo(ShipmentPackageType.OTHER);
     }
 
     /** An absent type stays null - the fallback covers unknown values, not missing ones. */
@@ -58,6 +58,6 @@ class CreatePackageRequestTest {
                 { "items": [ { "orderItemId": 11, "qty": 2 } ], "weight": 18.5 }
                 """;
 
-        assertThat(mapper.readValue(json, CreatePackageRequest.class).packageType()).isNull();
+        assertThat(mapper.readValue(json, CreatePackageRequest.class).shipmentPackageType()).isNull();
     }
 }
