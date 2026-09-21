@@ -10,14 +10,21 @@ import lombok.Setter;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+/*
+ * One item per order line and packing run in a package. The run is part of the key so that a line
+ * packed in two runs - two loose items, 5 + 5 - can still go into one package: its quantity there is
+ * the sum of its items, and each keeps the runNo it was packed under. Loose items (no package) are
+ * not constrained at all, NULLs are distinct in a unique index.
+ */
 @Table(
         name = "package_item",
         uniqueConstraints = {
                 @UniqueConstraint(
-                        name = "uq_package_order_item",
+                        name = "uq_package_item_order_item_run",
                         columnNames = {
                                 "shipment_package_id",
-                                "order_item_id"
+                                "order_item_id",
+                                "run_no"
                         }
                 )
         }

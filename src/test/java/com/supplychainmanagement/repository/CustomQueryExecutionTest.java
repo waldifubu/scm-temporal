@@ -2,6 +2,7 @@ package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -9,6 +10,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -45,6 +47,8 @@ class CustomQueryExecutionTest {
     private ShipmentPackageRepository shipmentPackageRepository;
     @Autowired
     private OrderItemRepository orderItemRepository;
+    @Autowired
+    private PackageItemRepository packageItemRepository;
 
     /** The one that broke: two named parameters, and the second was bound under a different name. */
     @Test
@@ -132,5 +136,75 @@ class CustomQueryExecutionTest {
                 ReservationStatus.ACTIVE,
                 PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "productName"))).getContent())
                 .isInstanceOf(Exception.class);
+    }
+
+    /** The locking read on a package, taken before its contents are changed. */
+    @Test
+    void findForUpdateByIdOfAPackageRuns() {
+        assertThat(shipmentPackageRepository.findForUpdateById(UNKNOWN_ID)).isEmpty();
+    }
+
+    /** The locking read on package items, with IN and ORDER BY in the same statement as FOR UPDATE. */
+    @Test
+    void findAllForUpdateByIdInRuns() {
+        assertThat(packageItemRepository.findAllForUpdateByIdIn(List.of(UNKNOWN_ID, -2L))).isEmpty();
+    }
+
+    /** The package list, paged and sorted by a field of the package. */
+    @Test
+    void findAllByShipmentPackageStatusRuns() {
+        var page = shipmentPackageRepository.findAllByShipmentPackageStatus(
+                ShipmentPackageStatus.OPEN, PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "packageNumber")));
+
+        assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    /** The entity graph with its nested paths only resolves when the query runs. */
+    @Test
+    void findWithItemsByIdInRuns() {
+        assertThat(shipmentPackageRepository.findWithItemsByIdIn(List.of(UNKNOWN_ID))).isEmpty();
+    }
+
+    /** All package items with order line and product fetched, paged in SQL and sorted by an own field. */
+    @Test
+    void findAllWithProductByRuns() {
+        var page = packageItemRepository.findAllWithProductBy(
+                PageRequest.of(0, 5, Sort.by(Sort.Direction.DESC, "created")));
+
+        assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    /**
+     * The loose items: every row the query returns really has no package - checked against the data,
+     * so it also holds while there are loose items in the database.
+     */
+    @Test
+    void findAllWithProductByShipmentPackageIsNullReturnsOnlyLooseItems() {
+        var page = packageItemRepository.findAllWithProductByShipmentPackageIsNull(PageRequest.of(0, 50));
+
+        assertThat(page.getContent()).allSatisfy(item -> assertThat(item.getShipmentPackage()).isNull());
+    }
+
+    /** The list filter with its package number part - Containing becomes a LIKE with wildcards. */
+    @Test
+    void findAllByShipmentPackageStatusAndPackageNumberContainingRuns() {
+        var page = shipmentPackageRepository.findAllByShipmentPackageStatusAndPackageNumberContaining(
+                ShipmentPackageStatus.OPEN, "PKG-", PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "id")));
+
+        assertThat(page.getContent()).allSatisfy(shipmentPackage ->
+                assertThat(shipmentPackage.getPackageNumber()).contains("PKG-"));
+    }
+
+    /** The two detail finders with their entity graphs. */
+    @Test
+    void detailFindersRun() {
+        assertThat(packageItemRepository.findWithProductById(UNKNOWN_ID)).isEmpty();
+        assertThat(shipmentPackageRepository.findWithItemsById(UNKNOWN_ID)).isEmpty();
+    }
+
+    /** The id lookup the siblings are computed from, with its interface projection. */
+    @Test
+    void findItemIdsByOrderItemIdInRuns() {
+        assertThat(packageItemRepository.findItemIdsByOrderItemIdIn(List.of(UNKNOWN_ID))).isEmpty();
     }
 }

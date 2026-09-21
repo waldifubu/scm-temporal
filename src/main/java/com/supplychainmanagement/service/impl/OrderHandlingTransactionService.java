@@ -74,7 +74,7 @@ public class OrderHandlingTransactionService {
                     + ": stock or active reservation missing, order item " + savedOrderItem.getId() + " not picked");
         }
 
-        // Deliberately not reservation.setStatus(CONSUMED) + save: consume has already written CONSUMED
+        // Deliberately not reservation.setShipmentPackageStatus(CONSUMED) + save: consume has already written CONSUMED
         // and committed. A second write from this transaction is the one MariaDB rejects, see above.
         // The reservation instance in hand therefore still reads ACTIVE in memory - it is only used
         // for the response below, which does not carry the reservation status.

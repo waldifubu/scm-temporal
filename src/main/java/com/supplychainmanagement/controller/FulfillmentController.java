@@ -6,8 +6,10 @@ import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.dto.picking.PickingOrderDto;
 import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
+import com.supplychainmanagement.dto.shipping.PackageItemIdsRequest;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageResponse;
+import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
@@ -15,6 +17,7 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
+import com.supplychainmanagement.service.PackageItemResponseAssembler;
 import com.supplychainmanagement.service.PackingService;
 import jakarta.validation.Valid;
 import jakarta.validation.groups.Default;
@@ -31,6 +34,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 @RestController
 @RequiredArgsConstructor
@@ -39,6 +43,7 @@ public class FulfillmentController {
 
     private final OrderHandlingService orderHandlingService;
     private final PackingService packingService;
+    private final PackageItemResponseAssembler packageItemResponseAssembler;
 
     /**
      * Paged like the order list in {@code OrderController.list}, down to the parameter names, so the
@@ -135,7 +140,7 @@ public class FulfillmentController {
      */
     @PostMapping(path = "/packing/{orderNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> createShipmentPackage(
+    public ResponseEntity<?> createShipmentPackageByOrder(
             @PathVariable Long orderNo,
             @Validated({Default.class, CreatePackageRequest.WithItems.class})
             @RequestBody CreatePackageRequest createPackageRequest) {
@@ -148,7 +153,7 @@ public class FulfillmentController {
             return ResponseEntity.status(e.getStatus()).body(response);
         }
 
-        return ResponseEntity.ok(ShipmentPackageResponse.from(shipmentPackage));
+        return ResponseEntity.ok(toResponse(shipmentPackage));
     }
 
     /**
@@ -173,27 +178,100 @@ public class FulfillmentController {
             return ResponseEntity.status(e.getStatus()).body(response);
         }
 
-        List<PackageItemResponse> responses = packageItems.stream()
-                .map(PackageItemResponse::from)
-                .toList();
+        List<PackageItemResponse> responses = packageItemResponseAssembler.toResponses(packageItems);
 
         return ResponseEntity.ok(PageResponse.of(new PageImpl<>(responses)));
     }
 
-    @PostMapping(path = "/package/empty", version = "1.0")
+    // @TODO: Check if the order lines belong to the same order as the package, and if the quantity is valid. If not, throw an APIException with a message indicating the issue.
+    /**
+     * Creates a shipment package without an order, for custom shipments. Validate the request and return the created shipment package.
+     */
+    @PostMapping(path = "/packing/shipment", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> createEmptyShipment(@Valid @RequestBody CreatePackageRequest createPackageRequest) {
+    public ResponseEntity<?> createCustomShipment(@Valid @RequestBody CreatePackageRequest createPackageRequest) {
         ShipmentPackage shipmentPackage;
         try {
-            shipmentPackage = packingService.createEmptyShipment(createPackageRequest);
+            shipmentPackage = packingService.createCustomShipment(createPackageRequest);
         } catch (APIException e) {
             Map<String, String> response = new HashMap<>();
             response.put("message", e.getMessage());
             return ResponseEntity.status(e.getStatus()).body(response);
         }
 
-        return ResponseEntity.ok(ShipmentPackageResponse.from(shipmentPackage));
+        return ResponseEntity.ok(toResponse(shipmentPackage));
     }
+
+    /**
+     * Makes the package hold exactly these package items - body {@code [101, 102]} or
+     * {@code {"packageItemIds": [...]}}. The ones it held and that are left out go back to being
+     * loose, they are not deleted. An empty list empties the package.
+     */
+    @PutMapping(path = "/packing/shipment/{shipmentPackageId}/items", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<?> updateCustomShipment(
+            @PathVariable Long shipmentPackageId,
+            @Valid @RequestBody PackageItemIdsRequest packageItemIdsRequest) {
+        return packageResponse(() -> packingService.updateCustomShipment(shipmentPackageId, packageItemIdsRequest));
+    }
+
+    /**
+     * Puts loose package items into the package, same body as above. Items already in it stay, so a
+     * repeated call changes nothing.
+     */
+    @PostMapping(path = "/packing/shipment/{shipmentPackageId}/items", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<?> addPackageItems(
+            @PathVariable Long shipmentPackageId,
+            @Valid @RequestBody PackageItemIdsRequest packageItemIdsRequest) {
+        return packageResponse(() -> packingService.addPackageItems(shipmentPackageId, packageItemIdsRequest));
+    }
+
+    /** Takes one item out of the package; it goes back to being loose, it is not deleted. */
+    @DeleteMapping(path = "/packing/shipment/{shipmentPackageId}/items/{packageItemId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<?> removePackageItem(
+            @PathVariable Long shipmentPackageId,
+            @PathVariable Long packageItemId) {
+        return packageResponse(() -> packingService.removePackageItem(shipmentPackageId, packageItemId));
+    }
+
+    /**
+     * The package's own data - type, weight, dimensions, number. Its contents are changed through
+     * the /items endpoints above.
+     */
+    @PutMapping(path = "/packing/shipment/{shipmentPackageId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<?> updatePackageData(
+            @PathVariable Long shipmentPackageId,
+            @Valid @RequestBody UpdatePackageRequest updatePackageRequest) {
+        return packageResponse(() -> packingService.updatePackageData(shipmentPackageId, updatePackageRequest));
+    }
+
+    /**
+     * The package in the response shape of the packing endpoints, and an APIException as
+     * {"message": ...} at its own status, like the endpoints above answer it.
+     */
+    /** The package in the response shape, its items with their siblings. */
+    private ShipmentPackageResponse toResponse(ShipmentPackage shipmentPackage) {
+        return ShipmentPackageResponse.from(shipmentPackage,
+                packageItemResponseAssembler.toResponses(shipmentPackage.getItems()));
+    }
+
+    private ResponseEntity<?> packageResponse(Supplier<ShipmentPackage> action) {
+        try {
+            return ResponseEntity.ok(toResponse(action.get()));
+        } catch (APIException e) {
+            Map<String, String> response = new HashMap<>();
+            response.put("message", e.getMessage());
+            return ResponseEntity.status(e.getStatus()).body(response);
+        }
+    }
+
+
+
+
+
 
     @NoCheck
     @PostMapping(path = "/dispatch/{reservationId}", version = "1.0")
@@ -210,6 +288,80 @@ public class FulfillmentController {
 
         return ResponseEntity.ok(packingOrderItem);
     }
+
+
+
+    /*
+alle Packages PACKED
+        ↓
+Shipment READY
+        ↓
+Distributor übernimmt
+        ↓
+IN_TRANSIT
+
+
+
+     !!! Auch wenn ein Shipment mehrere Orders enthalten darf, würde ich ein Package niemals mit unterschiedlichen Orders mischen. !!!
+     Ein Package sollte weiterhin nur eine Order enthalten
+
+### Warehouse
+
+Order
+  ↓
+Picking
+  ↓
+PackageItem
+  ↓
+ShipmentPackage
+  ↓
+PACKED
+
+
+### Logistics
+
+PACKED ShipmentPackages
+  ↓
+Shipment
+  ↓
+Distributor
+  ↓
+Dispatch
+
+
+
+ORDER
+  │
+  ▼
+RESERVATION
+  │
+  ▼
+PICKING
+  │
+  ▼
+PACKAGE ITEMS
+  │
+  ▼
+SHIPMENT PACKAGE
+  │
+  │  Warehouse
+  │
+  ▼
+PACKED
+  │
+  │  Logistics
+  ▼
+SHIPMENT
+  │
+  ▼
+DISTRIBUTOR
+  │
+  ▼
+IN_TRANSIT
+  │
+  ▼
+DELIVERED
+     */
     
     /*
     /receipts

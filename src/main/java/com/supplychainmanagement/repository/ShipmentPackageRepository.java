@@ -1,9 +1,19 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.ShipmentPackage;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
 
 public interface ShipmentPackageRepository extends JpaRepository<ShipmentPackage, Long> {
     @Query("""
@@ -14,4 +24,33 @@ public interface ShipmentPackageRepository extends JpaRepository<ShipmentPackage
     int sumQuantityByOrderItemId(
             @Param("orderItemId") Long orderItemId
     );
+
+    /**
+     * Locks the package for the rest of the transaction. Changing its contents reads what it holds
+     * and then writes - two concurrent calls on the same package would otherwise both pass the
+     * one-order and one-item-per-line checks against the same, stale contents.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT sp FROM ShipmentPackage sp WHERE sp.id = :id")
+    Optional<ShipmentPackage> findForUpdateById(@Param("id") Long id);
+
+    /** One page of packages in a status - the packages alone, their contents come separately. */
+    Page<ShipmentPackage> findAllByShipmentPackageStatus(ShipmentPackageStatus status, Pageable pageable);
+
+    /**
+     * The packages of one page with everything a list row reads: items, their order lines, the
+     * products for the content weight and the orders for the due date. Separate from the page query,
+     * because a collection fetch in a paged query is paged in memory - see ShippingServiceImpl.
+     */
+    @EntityGraph(attributePaths = {"items", "items.orderItem", "items.orderItem.product", "items.orderItem.order"})
+    List<ShipmentPackage> findWithItemsByIdIn(Collection<Long> ids);
+
+    Page<ShipmentPackage> findAllByShipmentPackageStatusAndPackageNumberContaining(ShipmentPackageStatus status, String packageNumber, Pageable pageable);
+
+    /**
+     * One package with its contents, fetched like {@link #findWithItemsByIdIn} - a single package is
+     * not paged, so the collection can come with it in one query.
+     */
+    @EntityGraph(attributePaths = {"items", "items.orderItem", "items.orderItem.product", "items.orderItem.order"})
+    Optional<ShipmentPackage> findWithItemsById(Long id);
 }

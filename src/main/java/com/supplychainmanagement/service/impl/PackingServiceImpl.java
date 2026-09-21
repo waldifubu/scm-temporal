@@ -4,6 +4,8 @@ import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
 import com.supplychainmanagement.dto.shipping.PackItem;
+import com.supplychainmanagement.dto.shipping.PackageItemIdsRequest;
+import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
@@ -14,7 +16,6 @@ import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.PackageItemRepository;
-import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.service.PackingService;
 import lombok.AllArgsConstructor;
@@ -25,6 +26,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 @Service
 @AllArgsConstructor
@@ -59,6 +62,20 @@ public class PackingServiceImpl implements PackingService {
                         "Quantity must be at least 1 for OrderItem " + item.orderItemId() + ", was: " + item.qty());
             }
         }
+    }
+
+    /**
+     * The 400 for a request that packed nothing, naming every skipped line with its reason - a bare
+     * "No valid items to pack" leaves the caller guessing whether the line was not picked yet,
+     * already dispatched or simply full. A line listed twice in the request is named once.
+     */
+    private static APIException nothingToPack(String message, List<String> skipped) {
+        if (skipped.isEmpty()) {
+            return new APIException(HttpStatus.BAD_REQUEST, message);
+        }
+
+        return new APIException(HttpStatus.BAD_REQUEST,
+                message + ": " + String.join("; ", skipped.stream().distinct().toList()));
     }
 
     //@TODO: This method is not used anywhere, so it can be removed. The validation is done in packLine and requireValidItems.
@@ -230,20 +247,6 @@ public class PackingServiceImpl implements PackingService {
         return Optional.of(packageItem);
     }
 
-    /**
-     * The 400 for a request that packed nothing, naming every skipped line with its reason - a bare
-     * "No valid items to pack" leaves the caller guessing whether the line was not picked yet,
-     * already dispatched or simply full. A line listed twice in the request is named once.
-     */
-    private static APIException nothingToPack(String message, List<String> skipped) {
-        if (skipped.isEmpty()) {
-            return new APIException(HttpStatus.BAD_REQUEST, message);
-        }
-
-        return new APIException(HttpStatus.BAD_REQUEST,
-                message + ": " + String.join("; ", skipped.stream().distinct().toList()));
-    }
-
     private int packedInThisRun(List<PackageItem> inThisRun, OrderItem orderItem) {
         return inThisRun.stream()
                 .filter(item -> Objects.equals(item.getOrderItem().getId(), orderItem.getId()))
@@ -262,25 +265,248 @@ public class PackingServiceImpl implements PackingService {
      */
     @Override
     @Transactional
-    public ShipmentPackage createEmptyShipment(CreatePackageRequest request) {
-        return shipmentPackageRepository.save(newShipmentPackage(request));
+    public ShipmentPackage createCustomShipment(CreatePackageRequest request) {
+        var shipmentPackage = newShipmentPackage(request);
+
+        if (request.items() != null && !request.items().isEmpty()) {
+            requireValidItems(request.items());
+            UUID runNo = UUID.randomUUID();
+            List<String> skipped = new ArrayList<>();
+            // Processed in a stable order because packLine locks each line: two concurrent requests
+            // touching the same two lines in opposite orders would otherwise deadlock each other.
+            request.items().stream()
+                    .sorted(Comparator.comparing(PackItem::orderItemId))
+                    .forEach(packItem -> packLine(packItem, null, runNo, shipmentPackage.getItems(), skipped)
+                            .ifPresent(packageItem -> {
+                                packageItem.setShipmentPackage(shipmentPackage);
+                                shipmentPackage.getItems().add(packageItem);
+                            }));
+
+            // Every line was skipped, so there is nothing to ship - an empty package is not a result.
+            if (shipmentPackage.getItems().isEmpty()) {
+                throw nothingToPack("No valid items to pack for this shipment", skipped);
+            }
+        }
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /**
+     * Replaces the package's own data with the defaults a new package gets - see
+     * {@link UpdatePackageRequest}. Its contents are changed through the item methods below.
+     */
+    @Override
+    @Transactional
+    public ShipmentPackage updatePackageData(Long shipmentPackageId, UpdatePackageRequest request) {
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+
+        applyPackageFields(shipmentPackage, request.shipmentPackageType(),
+                request.weight(), request.length(), request.width(), request.height());
+        if (request.packageNumber() != null) {
+            shipmentPackage.setPackageNumber(request.packageNumber());
+        }
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /**
+     * Puts loose package items into the package. An item already in this package is left as it is,
+     * so repeating a call changes nothing.
+     * <p>
+     * No quantity check: the items were counted as packed when they were created, and moving them
+     * into a package changes neither that count nor the status of their order lines.
+     */
+    @Override
+    @Transactional
+    public ShipmentPackage addPackageItems(Long shipmentPackageId, PackageItemIdsRequest request) {
+        if (request.packageItemIds().isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "At least one package item id is required");
+        }
+
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+        List<PackageItem> requested = findPackageItemsForUpdate(request.packageItemIds());
+        requireLooseOrIn(shipmentPackage, requested);
+
+        List<PackageItem> added = requested.stream()
+                .filter(item -> !isIn(item, shipmentPackage))
+                .toList();
+        List<PackageItem> contents = Stream.concat(shipmentPackage.getItems().stream(), added.stream()).toList();
+        requireOneOrder(shipmentPackageId, contents);
+        requireOneItemPerLineAndRun(shipmentPackageId, contents);
+
+        added.forEach(item -> attach(item, shipmentPackage));
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /**
+     * Makes the package hold exactly the given items. Those it held and that are not in the list go
+     * back to being loose - never deleted, see ShipmentPackage.items. An empty list empties the
+     * package.
+     */
+    @Override
+    @Transactional
+    public ShipmentPackage updateCustomShipment(Long shipmentPackageId, PackageItemIdsRequest request) {
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+        List<PackageItem> wanted = findPackageItemsForUpdate(request.packageItemIds());
+        requireLooseOrIn(shipmentPackage, wanted);
+        requireOneOrder(shipmentPackageId, wanted);
+        requireOneItemPerLineAndRun(shipmentPackageId, wanted);
+
+        Set<Long> wantedIds = wanted.stream().map(PackageItem::getId).collect(Collectors.toSet());
+        List<PackageItem> leaving = shipmentPackage.getItems().stream()
+                .filter(item -> !wantedIds.contains(item.getId()))
+                .toList();
+
+        if (!leaving.isEmpty()) {
+            leaving.forEach(item -> detach(item, shipmentPackage));
+            // Written before anything is attached: an item leaving and one arriving for the same
+            // order line and run would otherwise sit in the package together until the flush, and
+            // the flush order decides whether uq_package_item_order_item_run sees them both.
+            packageItemRepository.flush();
+        }
+        wanted.stream()
+                .filter(item -> !isIn(item, shipmentPackage))
+                .forEach(item -> attach(item, shipmentPackage));
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /** Takes one item out of the package; it goes back to being loose. */
+    @Override
+    @Transactional
+    public ShipmentPackage removePackageItem(Long shipmentPackageId, Long packageItemId) {
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+        PackageItem item = findPackageItemsForUpdate(List.of(packageItemId)).getFirst();
+
+        if (!isIn(item, shipmentPackage)) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "PackageItem " + packageItemId + " is not in ShipmentPackage " + shipmentPackageId);
+        }
+        detach(item, shipmentPackage);
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /** Locked, and only while OPEN - a packed or dispatched package keeps what it holds. */
+    private ShipmentPackage findOpenPackageForUpdate(Long shipmentPackageId) {
+        ShipmentPackage shipmentPackage = shipmentPackageRepository.findForUpdateById(shipmentPackageId)
+                .orElseThrow(() -> new ResourceNotFoundException("ShipmentPackage", "id", shipmentPackageId));
+
+        if (shipmentPackage.getShipmentPackageStatus() != ShipmentPackageStatus.OPEN) {
+            throw new APIException(HttpStatus.CONFLICT, "ShipmentPackage " + shipmentPackageId + " is "
+                    + shipmentPackage.getShipmentPackageStatus() + ", only an OPEN package can be changed");
+        }
+        return shipmentPackage;
+    }
+
+    /** Locked, each id once; an id that does not exist is a 404 naming every missing one. */
+    private List<PackageItem> findPackageItemsForUpdate(List<Long> packageItemIds) {
+        Set<Long> ids = new TreeSet<>(packageItemIds);
+        if (ids.isEmpty()) {
+            return List.of();
+        }
+
+        List<PackageItem> items = packageItemRepository.findAllForUpdateByIdIn(ids);
+        if (items.size() != ids.size()) {
+            Set<Long> found = items.stream().map(PackageItem::getId).collect(Collectors.toSet());
+            List<Long> missing = ids.stream().filter(id -> !found.contains(id)).toList();
+            throw new APIException(HttpStatus.NOT_FOUND, "PackageItem not found: " + missing);
+        }
+        return items;
+    }
+
+    /** An item may be loose or already in this package - never taken silently out of another one. */
+    private static void requireLooseOrIn(ShipmentPackage shipmentPackage, List<PackageItem> items) {
+        for (PackageItem item : items) {
+            if (item.getShipmentPackage() != null && !isIn(item, shipmentPackage)) {
+                throw new APIException(HttpStatus.CONFLICT, "PackageItem " + item.getId()
+                        + " is already in ShipmentPackage " + item.getShipmentPackage().getId());
+            }
+        }
+    }
+
+    /** A package goes to one customer, so it holds the items of one order only. */
+    private static void requireOneOrder(Long shipmentPackageId, List<PackageItem> contents) {
+        List<Long> orderIds = contents.stream()
+                .map(item -> item.getOrderItem().getOrder().getId())
+                .distinct()
+                .toList();
+        if (orderIds.size() > 1) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "ShipmentPackage " + shipmentPackageId
+                    + " can only hold items of one order, got items of orders " + orderIds);
+        }
+    }
+
+    /** One order line from one packing run - the key of uq_package_item_order_item_run. */
+    private record LineRun(Long orderItemId, UUID runNo) {
+    }
+
+    /**
+     * At most one item per order line and packing run in a package - uq_package_item_order_item_run
+     * would otherwise fail at flush with a 500. Items of the same line from different runs may share a
+     * package; the line's quantity there is the sum of its items. Two items of the same line from the
+     * same run only exist when that run listed the line twice.
+     * <p>
+     * A record key rather than groupingBy over the runNo alone: legacy rows may carry no runNo, and
+     * groupingBy refuses a null key. Two such items of one line are refused here although the database
+     * would take them - NULLs are distinct in a unique index - which errs on the safe side.
+     */
+    private static void requireOneItemPerLineAndRun(Long shipmentPackageId, List<PackageItem> contents) {
+        Map<LineRun, List<Long>> itemIdsByLineRun = contents.stream()
+                .collect(Collectors.groupingBy(item -> new LineRun(item.getOrderItem().getId(), item.getRunNo()),
+                        LinkedHashMap::new, Collectors.mapping(PackageItem::getId, Collectors.toList())));
+
+        itemIdsByLineRun.forEach((lineRun, itemIds) -> {
+            if (itemIds.size() > 1) {
+                throw new APIException(HttpStatus.CONFLICT, "OrderItem " + lineRun.orderItemId()
+                        + " from run " + lineRun.runNo() + " would be in ShipmentPackage " + shipmentPackageId
+                        + " twice, as package items " + itemIds);
+            }
+        });
+    }
+
+    /** True if the item is already in the package, false if it is loose or in another package. */
+    private static boolean isIn(PackageItem item, ShipmentPackage shipmentPackage) {
+        return item.getShipmentPackage() != null
+                && Objects.equals(item.getShipmentPackage().getId(), shipmentPackage.getId());
+    }
+
+    /** Both sides: the item owns the foreign key, the package's list is what the response shows. */
+    private static void attach(PackageItem item, ShipmentPackage shipmentPackage) {
+        item.setShipmentPackage(shipmentPackage);
+        shipmentPackage.getItems().add(item);
+    }
+
+    private static void detach(PackageItem item, ShipmentPackage shipmentPackage) {
+        item.setShipmentPackage(null);
+        shipmentPackage.getItems().remove(item);
     }
 
     /**
      * The package itself, without items - shared by {@link #createShipmentPackage} and
-     * {@link #createEmptyShipment}, so the two cannot drift apart in how a package is set up.
+     * {@link #createCustomShipment}, so the two cannot drift apart in how a package is set up.
      */
     private ShipmentPackage newShipmentPackage(CreatePackageRequest request) {
         ShipmentPackage shipmentPackage = new ShipmentPackage();
-        shipmentPackage.setShipmentPackageType(request.shipmentPackageType() != null ? request.shipmentPackageType() : ShipmentPackageType.OTHER);
         shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
-        shipmentPackage.setStatus(ShipmentPackageStatus.OPEN);
-
-        shipmentPackage.setWeight(request.weight() != null ? request.weight() : BigDecimal.ZERO);
-        shipmentPackage.setLength(request.length());
-        shipmentPackage.setWidth(request.width());
-        shipmentPackage.setHeight(request.height());
+        shipmentPackage.setShipmentPackageStatus(ShipmentPackageStatus.OPEN);
+        applyPackageFields(shipmentPackage, request.shipmentPackageType(),
+                request.weight(), request.length(), request.width(), request.height());
 
         return shipmentPackage;
+    }
+
+    /**
+     * Type, weight and dimensions, with the same defaults for a new package and an updated one:
+     * no type means OTHER, no weight means 0.
+     */
+    private static void applyPackageFields(ShipmentPackage shipmentPackage, ShipmentPackageType type,
+                                           BigDecimal weight, BigDecimal length, BigDecimal width, BigDecimal height) {
+        shipmentPackage.setShipmentPackageType(type != null ? type : ShipmentPackageType.OTHER);
+        shipmentPackage.setWeight(weight != null ? weight : BigDecimal.ZERO);
+        shipmentPackage.setLength(length);
+        shipmentPackage.setWidth(width);
+        shipmentPackage.setHeight(height);
     }
 }

@@ -51,10 +51,6 @@ public class Shipment {
     @Column(name = "delivered_at")
     private LocalDateTime deliveredAt;
 
-    @OneToMany(
-            mappedBy = "shipment",
-            cascade = CascadeType.ALL,
-            orphanRemoval = true
-    )
+    @OneToMany(mappedBy = "shipment")
     private List<ShipmentPackage> packages = new ArrayList<>();
 }

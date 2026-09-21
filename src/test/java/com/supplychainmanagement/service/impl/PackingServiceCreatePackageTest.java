@@ -413,11 +413,11 @@ class PackingServiceCreatePackageTest {
     void createsAnEmptyPackageWithoutItems() {
         when(shipmentPackageRepository.save(any(ShipmentPackage.class))).thenAnswer(call -> call.getArgument(0));
 
-        ShipmentPackage created = service.createEmptyShipment(
+        ShipmentPackage created = service.createCustomShipment(
                 new CreatePackageRequest(null, null, null, null, null, null, null));
 
         assertThat(created.getItems()).isEmpty();
-        assertThat(created.getStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
+        assertThat(created.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
         assertThat(created.getShipmentPackageType()).isEqualTo(ShipmentPackageType.OTHER);
         assertThat(created.getPackageNumber()).startsWith("PKG-");
         verify(orderItemRepository, never()).findForUpdateById(anyLong());
@@ -430,12 +430,12 @@ class PackingServiceCreatePackageTest {
         nothingPackedYet();
 
         ShipmentPackage packed = service.createShipmentPackage(ORDER_NO, request(new PackItem(LINE_ID, 1)));
-        ShipmentPackage empty = service.createEmptyShipment(request());
+        ShipmentPackage empty = service.createCustomShipment(request());
 
         assertThat(empty)
-                .extracting(ShipmentPackage::getStatus, ShipmentPackage::getShipmentPackageType,
+                .extracting(ShipmentPackage::getShipmentPackageStatus, ShipmentPackage::getShipmentPackageType,
                         ShipmentPackage::getWeight, ShipmentPackage::getPackageNumber)
-                .containsExactly(packed.getStatus(), packed.getShipmentPackageType(),
+                .containsExactly(packed.getShipmentPackageStatus(), packed.getShipmentPackageType(),
                         packed.getWeight(), packed.getPackageNumber());
     }
 

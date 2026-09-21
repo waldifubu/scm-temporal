@@ -578,7 +578,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Order lines | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)* | ADMIN, WAREHOUSE |
 | Packing | `POST /packing/{orderNo}` (body: `items[]` required, `shipmentPackageType`, `weight`, dimensions, `packageNumber`), `POST /packing` (body: `{"items": [...]}` or the bare array `[...]` - loose items of one run, paged response), `POST /package/empty` (package body, `items` optional) | ADMIN, WAREHOUSE |
 | Dispatch | `POST /dispatch/{reservationId}` | ADMIN, WAREHOUSE |
-| Shipments | `GET /packages` *(paged)* | ADMIN, WAREHOUSE, LOGISTICS |
+| Shipments | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`)*, `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /lonely-packages` *(paged, only the loose package items - not in any package yet)*, `GET /packages/{id}`, `GET /shipment-packages/{id}` *(single entries, same shape as the lists; 404 if unknown)* | ADMIN, WAREHOUSE, LOGISTICS |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
@@ -702,10 +702,10 @@ selection inside `produce()`, the loops in `OrderHandlingServiceImpl` and `ready
   packed, so packing the same line again into a package skips it or reports an overflow. An endpoint
   that assigns existing items to a package is still missing.
 - **The same line twice in one `POST /packing/{orderNo}` request** passes the quantity check but
-  violates the unique constraint `uq_package_order_item` on `(shipment_package_id, order_item_id)` at
-  flush, which ends in a 500. Loose items are not affected — their package id is `NULL`.
-- **`ShipmentController` injects `ShipmentPackageRepository` directly**, bypassing the service layer
-  every other controller goes through.
+  violates the unique constraint `uq_package_item_order_item_run` on
+  `(shipment_package_id, order_item_id, run_no)` at flush — both items come from the same call and so
+  share a run — which ends in a 500. Items of one line from *different* runs may share a package.
+  Loose items are not affected — their package id is `NULL`.
 - `UserController.create/update` still accept the raw `User` entity as request body. A caller can
   set `roles` through it, and the endpoint is open to `MANAGER` — so a manager can grant themselves
   `ADMIN`. The response side is already covered by `UserDto`; the request side is not.

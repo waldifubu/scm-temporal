@@ -43,7 +43,7 @@ public class ShipmentPackage {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private ShipmentPackageStatus status;
+    private ShipmentPackageStatus shipmentPackageStatus;
 
     @Enumerated(EnumType.STRING)
     private ShipmentPackageType shipmentPackageType;
@@ -56,10 +56,17 @@ public class ShipmentPackage {
 
     private LocalDateTime packedAt;
 
+    /**
+     * The items currently in this package. A PackageItem outlives its package: loose items exist
+     * without one (POST /packing), and an item taken out of a package goes back to being loose. So
+     * neither orphanRemoval nor a REMOVE cascade here - either would delete the row, and with it the
+     * packed quantity, while the order line still reads PACKING or PACKED; the same quantity could
+     * then be packed a second time. Taking an item out means setting its shipmentPackage to null.
+     * PERSIST and MERGE stay, so a package created together with its items still saves them in one go.
+     */
     @OneToMany(
             mappedBy = "shipmentPackage",
-            cascade = CascadeType.ALL,
-            orphanRemoval = true
+            cascade = {CascadeType.PERSIST, CascadeType.MERGE}
     )
     private List<PackageItem> items = new ArrayList<>();
 
@@ -71,15 +78,14 @@ public class ShipmentPackage {
     }
 
     public void complete() {
-
-        if (status != ShipmentPackageStatus.OPEN) {
+        if (shipmentPackageStatus != ShipmentPackageStatus.OPEN) {
             throw new IllegalStateException(
                     "Package is not open"
             );
         }
 
         packedAt = LocalDateTime.now();
-        status = ShipmentPackageStatus.PACKED;
+        shipmentPackageStatus = ShipmentPackageStatus.PACKED;
     }
 
     public BigDecimal getVolume() {
@@ -129,8 +135,8 @@ public class ShipmentPackage {
 
     @PrePersist
     void applyDefault() {
-        if (status == null) {
-            status = ShipmentPackageStatus.OPEN;
+        if (shipmentPackageStatus == null) {
+            shipmentPackageStatus = ShipmentPackageStatus.OPEN;
         }
 
         createdAt = LocalDateTime.now();

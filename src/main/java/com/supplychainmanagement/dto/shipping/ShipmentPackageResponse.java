@@ -19,19 +19,15 @@ public record ShipmentPackageResponse(
         BigDecimal height,
         List<PackageItemResponse> items
 ) {
-    public static ShipmentPackageResponse from(
-            ShipmentPackage shipmentPackage) {
-
-        List<PackageItemResponse> items =
-                shipmentPackage.getItems()
-                        .stream()
-                        .map(PackageItemResponse::from)
-                        .toList();
-
-            return new ShipmentPackageResponse(
+    /**
+     * @param items the package's items as responses - built by PackageItemResponseAssembler, since
+     *              their siblings need a database lookup this record cannot make
+     */
+    public static ShipmentPackageResponse from(ShipmentPackage shipmentPackage, List<PackageItemResponse> items) {
+        return new ShipmentPackageResponse(
                 shipmentPackage.getId(),
                 shipmentPackage.getPackageNumber(),
-                shipmentPackage.getStatus(),
+                shipmentPackage.getShipmentPackageStatus(),
                 shipmentPackage.getShipmentPackageType(),
                 shipmentPackage.getWeight(),
                 shipmentPackage.getPackageWeight(),

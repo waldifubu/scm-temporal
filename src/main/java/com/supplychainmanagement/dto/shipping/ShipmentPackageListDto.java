@@ -21,20 +21,27 @@ public record ShipmentPackageListDto(
         BigDecimal packageWeight,
         BigDecimal volume,
         LocalDate dueDate,
-        int packages
-
+        int packages,
+        /*
+         * DTOs, never the PackageItem entities: an entity serializes its shipmentPackage, whose items
+         * serialize their shipmentPackage again - Jackson runs in circles - and drags the LAZY order
+         * line, order and product along. ShipmentPackageItemDto does not name the package at all -
+         * the row it sits in is that package.
+         */
+        List<ShipmentPackageItemDto> items
 ) {
     public static ShipmentPackageListDto from(ShipmentPackage shipmentPackage) {
         return new ShipmentPackageListDto(
                 shipmentPackage.getId(),
                 shipmentPackage.getPackageNumber(),
-                shipmentPackage.getStatus(),
+                shipmentPackage.getShipmentPackageStatus(),
                 shipmentPackage.getShipmentPackageType(),
                 shipmentPackage.getWeight(),
                 shipmentPackage.getPackageWeight(),
                 shipmentPackage.getVolume(),
                 resolveDueDate(shipmentPackage.getItems()),
-                shipmentPackage.getItems().size()
+                shipmentPackage.getItems().size(),
+                shipmentPackage.getItems().stream().map(ShipmentPackageItemDto::from).toList()
         );
     }
 
