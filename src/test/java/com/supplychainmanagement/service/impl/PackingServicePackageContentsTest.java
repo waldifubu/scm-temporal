@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
+import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
@@ -96,9 +97,17 @@ class PackingServicePackageContentsTest {
         return item;
     }
 
+    /** Gives the item's product a unit weight and the item a quantity. */
+    private static PackageItem weighing(PackageItem item, String unitWeight, int quantity) {
+        Product product = new Product();
+        product.setWeight(new BigDecimal(unitWeight));
+        item.getOrderItem().setProduct(product);
+        item.setQuantity(quantity);
+        return item;
+    }
+
     private static PackageItem in(ShipmentPackage shipmentPackage, PackageItem item) {
-        item.setShipmentPackage(shipmentPackage);
-        shipmentPackage.getItems().add(item);
+        shipmentPackage.addItem(item);
         return item;
     }
 
@@ -345,22 +354,119 @@ class PackingServicePackageContentsTest {
                 .hasMessageContaining("PackageItem 101 is not in ShipmentPackage 5");
     }
 
+    // ------------------------------------------------------------------ weight
+
+    /** The weight follows the contents: adding an item adds its weight. */
+    @Test
+    void addingItemsAddsTheirWeight() {
+        ShipmentPackage shipmentPackage = openPackage();
+        in(shipmentPackage, weighing(item(101L, 11L, ORDER_ID), "2", 1));
+        PackageItem loose = weighing(item(102L, 12L, ORDER_ID), "0.5", 3);
+        storedItems(loose);
+
+        service.addPackageItems(PACKAGE_ID, ids(102L));
+
+        assertThat(shipmentPackage.getWeight()).isEqualByComparingTo("3.5");
+    }
+
+    /** Taking the last item out leaves an empty package, and an empty package weighs 0. */
+    @Test
+    void anEmptiedPackageWeighsNothing() {
+        ShipmentPackage shipmentPackage = openPackage();
+        PackageItem held = in(shipmentPackage, weighing(item(101L, 11L, ORDER_ID), "2", 4));
+        storedItems(held);
+
+        service.removePackageItem(PACKAGE_ID, 101L);
+
+        assertThat(shipmentPackage.getWeight()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    void replacingTheContentsTakesTheWeightOfTheNewOnes() {
+        ShipmentPackage shipmentPackage = openPackage();
+        PackageItem leaving = in(shipmentPackage, weighing(item(101L, 11L, ORDER_ID), "5", 1));
+        PackageItem arriving = weighing(item(102L, 12L, ORDER_ID), "1.25", 2);
+        storedItems(leaving, arriving);
+
+        service.updateCustomShipment(PACKAGE_ID, ids(102L));
+
+        assertThat(shipmentPackage.getWeight()).isEqualByComparingTo("2.5");
+    }
+
+    // ------------------------------------------------------------------ complete
+
+    /** Completing closes the package: PACKED, stamped, saved - from now on it can go into a shipment. */
+    @Test
+    void completesAnOpenPackage() {
+        ShipmentPackage shipmentPackage = openPackage();
+        in(shipmentPackage, item(101L, 11L, ORDER_ID));
+
+        ShipmentPackage completed = service.completePackage(PACKAGE_ID);
+
+        assertThat(completed.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
+        assertThat(completed.getPackedAt()).isNotNull();
+        verify(shipmentPackageRepository).save(shipmentPackage);
+    }
+
+    /**
+     * Only an OPEN package is completed. The service checks that before complete() is called, so the
+     * client gets a 409 - not the IllegalStateException complete() itself would throw, which ends as a
+     * 500.
+     */
+    @Test
+    void completesAnOpenPackageOnly() {
+        shipmentPackage(PACKAGE_ID, ShipmentPackageStatus.PACKED);
+
+        assertThatThrownBy(() -> service.completePackage(PACKAGE_ID))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessageContaining("only an OPEN package can be changed");
+        verify(shipmentPackageRepository, never()).save(any());
+    }
+
+    @Test
+    void answersAnUnknownPackageToCompleteWith404() {
+        when(shipmentPackageRepository.findForUpdateById(99L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.completePackage(99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    /**
+     * Never without items: an empty package goes to no customer, and once PACKED it could not be
+     * filled any more. Refused with 400 and left OPEN.
+     */
+    @Test
+    void neverCompletesAnEmptyPackage() {
+        ShipmentPackage shipmentPackage = openPackage();
+
+        assertThatThrownBy(() -> service.completePackage(PACKAGE_ID))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessageContaining("holds no items");
+        assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
+        verify(shipmentPackageRepository, never()).save(any());
+    }
+
     // ------------------------------------------------------------------ package data
 
-    /** Same defaults as a new package; only the printed number is kept when left out. */
+    /**
+     * Same defaults as a new package; only the printed number is kept when left out. The weight is
+     * not part of the request, and changing the package data leaves it alone - it is the weight of
+     * what the package holds, and that did not change.
+     */
     @Test
     void updatesThePackageDataWithTheDefaultsOfANewPackage() {
         ShipmentPackage shipmentPackage = openPackage();
         shipmentPackage.setPackageNumber("PKG-1");
         shipmentPackage.setShipmentPackageType(ShipmentPackageType.CARTON);
-        shipmentPackage.setWeight(new BigDecimal("3"));
-        PackageItem held = in(shipmentPackage, item(101L, 11L, ORDER_ID));
+        PackageItem held = in(shipmentPackage, weighing(item(101L, 11L, ORDER_ID), "1.5", 2));
 
-        service.updatePackageData(PACKAGE_ID, new UpdatePackageRequest(null, null,
+        service.updatePackageData(PACKAGE_ID, new UpdatePackageRequest(null,
                 new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), null));
 
         assertThat(shipmentPackage.getShipmentPackageType()).isEqualTo(ShipmentPackageType.OTHER);
-        assertThat(shipmentPackage.getWeight()).isEqualByComparingTo(BigDecimal.ZERO);
+        assertThat(shipmentPackage.getWeight()).isEqualByComparingTo("3.0");
         assertThat(shipmentPackage.getLength()).isEqualByComparingTo("40");
         assertThat(shipmentPackage.getPackageNumber()).isEqualTo("PKG-1");
         assertThat(shipmentPackage.getItems()).containsExactly(held);
@@ -372,7 +478,7 @@ class PackingServicePackageContentsTest {
         shipmentPackage.setPackageNumber("PKG-1");
 
         service.updatePackageData(PACKAGE_ID, new UpdatePackageRequest(
-                ShipmentPackageType.CARTON, null, null, null, null, "PKG-2"));
+                ShipmentPackageType.CARTON, null, null, null, "PKG-2"));
 
         assertThat(shipmentPackage.getPackageNumber()).isEqualTo("PKG-2");
     }
@@ -382,7 +488,7 @@ class PackingServicePackageContentsTest {
         shipmentPackage(PACKAGE_ID, ShipmentPackageStatus.DISPATCHED);
 
         assertThatThrownBy(() -> service.updatePackageData(PACKAGE_ID,
-                new UpdatePackageRequest(null, null, null, null, null, null)))
+                new UpdatePackageRequest(null, null, null, null, null)))
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }

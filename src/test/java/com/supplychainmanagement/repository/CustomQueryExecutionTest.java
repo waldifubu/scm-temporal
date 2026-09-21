@@ -3,6 +3,7 @@ package com.supplychainmanagement.repository;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -49,6 +50,8 @@ class CustomQueryExecutionTest {
     private OrderItemRepository orderItemRepository;
     @Autowired
     private PackageItemRepository packageItemRepository;
+    @Autowired
+    private ShipmentRepository shipmentRepository;
 
     /** The one that broke: two named parameters, and the second was bound under a different name. */
     @Test
@@ -206,5 +209,37 @@ class CustomQueryExecutionTest {
     @Test
     void findItemIdsByOrderItemIdInRuns() {
         assertThat(packageItemRepository.findItemIdsByOrderItemIdIn(List.of(UNKNOWN_ID))).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ shipments
+
+    /** The locking reads a shipment change takes: the shipment, then its packages in id order. */
+    @Test
+    void shipmentLockingReadsRun() {
+        assertThat(shipmentRepository.findForUpdateById(UNKNOWN_ID)).isEmpty();
+        assertThat(shipmentPackageRepository.findAllForUpdateByIdIn(List.of(UNKNOWN_ID, -2L))).isEmpty();
+    }
+
+    /** The customer behind a package, through items, order lines and orders - an interface projection. */
+    @Test
+    void findCustomersByShipmentPackageIdInRuns() {
+        assertThat(shipmentPackageRepository.findCustomersByShipmentPackageIdIn(List.of(UNKNOWN_ID))).isEmpty();
+    }
+
+    /** The shipment list: paged with the customer fetched, with and without status. */
+    @Test
+    void shipmentPagesRun() {
+        var pageable = PageRequest.of(0, 5, Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        assertThat(shipmentRepository.findAllWithCustomerBy(pageable).getTotalElements()).isNotNegative();
+        assertThat(shipmentRepository.findAllWithCustomerByStatus(ShipmentStatus.CREATED, pageable).getTotalElements())
+                .isNotNegative();
+    }
+
+    /** The entity graphs with the packages collection only resolve when the query runs. */
+    @Test
+    void shipmentPackageGraphsRun() {
+        assertThat(shipmentRepository.findWithPackagesByIdIn(List.of(UNKNOWN_ID))).isEmpty();
+        assertThat(shipmentRepository.findWithPackagesById(UNKNOWN_ID)).isEmpty();
     }
 }

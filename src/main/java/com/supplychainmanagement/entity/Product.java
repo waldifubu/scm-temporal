@@ -12,6 +12,7 @@ import org.hibernate.annotations.UpdateTimestamp;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -72,8 +73,11 @@ public class Product {
     void applyDefaultStatus() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
-        weight = components.stream()
+        // A product may be created without components, and a component without a weight - both
+        // simply add nothing instead of failing the insert with a NullPointerException.
+        weight = components == null ? BigDecimal.ZERO : components.stream()
                 .map(Component::getWeight)
+                .filter(Objects::nonNull)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         active = true;
     }

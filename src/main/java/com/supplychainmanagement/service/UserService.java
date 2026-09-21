@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -25,6 +26,12 @@ public interface UserService {
     User create(User user);
 
     User update(Long id, User user);
+
+    /** Creates a user from what a client sent - see {@link UserRequestDto}. */
+    User create(UserRequestDto request);
+
+    /** Updates a user from what a client sent - see {@link UserRequestDto}. */
+    User update(Long id, UserRequestDto request);
 
     void deleteById(Long id);
 

@@ -53,4 +53,34 @@ public interface ShipmentPackageRepository extends JpaRepository<ShipmentPackage
      */
     @EntityGraph(attributePaths = {"items", "items.orderItem", "items.orderItem.product", "items.orderItem.order"})
     Optional<ShipmentPackage> findWithItemsById(Long id);
+
+    /**
+     * Locks the packages about to be put into or taken out of a shipment, in ascending id order - two
+     * calls locking the same packages in opposite orders would otherwise deadlock.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT sp FROM ShipmentPackage sp WHERE sp.id IN :ids ORDER BY sp.id")
+    List<ShipmentPackage> findAllForUpdateByIdIn(@Param("ids") Collection<Long> ids);
+
+    /** Which customer a package goes to - one row per package and customer found through its items. */
+    interface PackageCustomer {
+        Long getShipmentPackageId();
+
+        Long getCustomerId();
+    }
+
+    /**
+     * The customers behind the given packages, through items, order lines and orders. A package holds
+     * the items of one order, so normally one row per package; a package without items has none at
+     * all - that is how an empty package shows. An order without a customer yields a null customerId.
+     */
+    @Query("""
+        SELECT DISTINCT sp.id AS shipmentPackageId, o.customer.id AS customerId
+        FROM ShipmentPackage sp
+        JOIN sp.items pi
+        JOIN pi.orderItem oi
+        JOIN oi.order o
+        WHERE sp.id IN :ids
+    """)
+    List<PackageCustomer> findCustomersByShipmentPackageIdIn(@Param("ids") Collection<Long> ids);
 }

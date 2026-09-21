@@ -203,12 +203,9 @@ public class FulfillmentServiceImpl implements FulfillmentService {
 
     @Override
     public List<Reservation> findConsumedReservations(Order order) {
-        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
-        var pageList = reservationRepository.findAllByStatus(ReservationStatus.CONSUMED, pageable);
-
-        return pageList.getContent().stream()
-                .filter(reservation -> reservation.getOrderId().equals(String.valueOf(order.getId())))
-                .toList();
+        // Asked per order in the database: loading the first 100 CONSUMED rows of all orders and
+        // filtering them here lost every reservation beyond those 100.
+        return reservationRepository.findByOrderIdAndStatus(String.valueOf(order.getId()), ReservationStatus.CONSUMED);
     }
 
     @Override
@@ -297,11 +294,17 @@ public class FulfillmentServiceImpl implements FulfillmentService {
      * fulfillment count as not started, and the order goes back to APPROVED. A partial release
      * leaves the status alone - the remaining lines are still being fulfilled.
      * <p>
+     * A line that is already past RESERVED keeps the order where it is as well: a picked line holds
+     * a CONSUMED reservation, which does not count as active, but its stock has left the shelf -
+     * fulfillment has very much started.
+     * <p>
      * The released rows are gone by now: release() deletes them in its own committed transaction,
      * so this query sees what is really left.
      */
     private void revertOrderStatus(Order order, String username) {
-        if (order.getStatus() != OrderStatus.IN_FULFILLMENT || !findActiveReservations(order).isEmpty()) {
+        if (order.getStatus() != OrderStatus.IN_FULFILLMENT
+                || hasLineBeyondReservation(order)
+                || !findActiveReservations(order).isEmpty()) {
             return;
         }
 
@@ -317,5 +320,14 @@ public class FulfillmentServiceImpl implements FulfillmentService {
                 .orElse(null);
         eventPublisher.publishEvent(
                 new OrderStatusChangedEvent(order.getId(), userId, previousStatus, OrderStatus.APPROVED));
+    }
+
+    /** Whether any line has got further than holding a reservation - picking started or later. */
+    private static boolean hasLineBeyondReservation(Order order) {
+        return order.getOrderItems().stream()
+                .map(OrderItem::getFulfillmentStatus)
+                .anyMatch(status -> status != null
+                        && status != FulfillmentStatus.WAITING
+                        && status != FulfillmentStatus.RESERVED);
     }
 }

@@ -1,19 +1,33 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;
+import com.supplychainmanagement.dto.shipping.ShipmentListDto;
+import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
+import com.supplychainmanagement.dto.shipping.ShipmentResponse;
+import com.supplychainmanagement.dto.shipping.UpdateShipmentRequest;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentStatus;
+import com.supplychainmanagement.service.ShipmentPackageService;
 import com.supplychainmanagement.service.ShippingService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -22,6 +36,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class ShipmentController {
 
     private final ShippingService shippingService;
+    private final ShipmentPackageService shipmentPackageService;
 
     /**
      * All package items - loose ones from POST /packing as well as those in a package, which is what
@@ -81,6 +96,74 @@ public class ShipmentController {
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
     public ShipmentPackageListDto getShipmentPackage(@PathVariable Long shipmentPackageId) {
         return shippingService.findShipmentPackage(shipmentPackageId);
+    }
+
+    // ------------------------------------------------------------------ shipments
+    // Errors go through GlobalExceptionHandler: 404 for an unknown shipment, package or customer,
+    // 400 for a request that breaks the rules, 409 for a state conflict.
+
+    /**
+     * Creates a shipment for one customer with at least one of their PACKED packages - see
+     * {@link CreateShipmentRequest}.
+     */
+    @PostMapping(path = "/shipments", version = "1.0")
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse createShipment(@Valid @RequestBody CreateShipmentRequest request) {
+        return shipmentPackageService.createShipment(request);
+    }
+
+    /** Puts further packages of the shipment's customer into it - the ids as a bare array or wrapped. */
+    @PostMapping(path = "/shipments/{shipmentId}/packages", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse addShipmentPackages(@PathVariable Long shipmentId,
+                                                @Valid @RequestBody ShipmentPackageIdsRequest request) {
+        return shipmentPackageService.addShipmentPackages(shipmentId, request);
+    }
+
+    /** Makes the shipment hold exactly the given packages; an empty list is refused. */
+    @PutMapping(path = "/shipments/{shipmentId}/packages", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse replaceShipmentPackages(@PathVariable Long shipmentId,
+                                                    @Valid @RequestBody ShipmentPackageIdsRequest request) {
+        return shipmentPackageService.replaceShipmentPackages(shipmentId, request);
+    }
+
+    /** Takes one package out of the shipment; it is free again. Never the last one. */
+    @DeleteMapping(path = "/shipments/{shipmentId}/packages/{shipmentPackageId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse removeShipmentPackage(@PathVariable Long shipmentId, @PathVariable Long shipmentPackageId) {
+        return shipmentPackageService.removeShipmentPackage(shipmentId, shipmentPackageId);
+    }
+
+    /** The shipment's own data: address, method, requested delivery date. */
+    @PutMapping(path = "/shipments/{shipmentId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse updateShipmentData(@PathVariable Long shipmentId,
+                                               @Valid @RequestBody UpdateShipmentRequest request) {
+        return shipmentPackageService.updateShipmentData(shipmentId, request);
+    }
+
+    /**
+     * Shipments, all of them or those in one status. Paged like the other lists; {@code sort} takes
+     * the fields of the shipment itself (id, createdAt, requestedDeliveryDate, ...).
+     */
+    @GetMapping(path = "/shipments", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public PageResponse<ShipmentListDto> getShipments(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(required = false) ShipmentStatus status,
+            @RequestParam(defaultValue = "ASC") String order) {
+        return PageResponse.of(shipmentPackageService.findShipments(status, pageRequest(page, size, sort, order)));
+    }
+
+    /** One shipment with its packages and their contents. Unknown id: 404. */
+    @GetMapping(path = "/shipments/{shipmentId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    public ShipmentResponse getShipment(@PathVariable Long shipmentId) {
+        return shipmentPackageService.findShipment(shipmentId);
     }
 
     private static Pageable pageRequest(int page, int size, String sort, String order) {

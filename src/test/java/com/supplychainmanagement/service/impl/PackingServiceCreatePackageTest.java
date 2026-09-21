@@ -102,7 +102,7 @@ class PackingServiceCreatePackageTest {
 
     private CreatePackageRequest request(PackItem... items) {
         return new CreatePackageRequest(List.of(items), ShipmentPackageType.CARTON,
-                new BigDecimal("2.5"), null, null, null, "PKG-TEST");
+                null, null, null, "PKG-TEST");
     }
 
     /** The everyday split: 6 now, 4 later, and the line only reaches PACKED with the second one. */
@@ -138,17 +138,45 @@ class PackingServiceCreatePackageTest {
                 .hasMessageContaining("Cannot pack more than ordered qty");
     }
 
-    /** Below the ordered quantity the same line may well appear twice in one package request. */
+    /**
+     * The same line twice in one package request is folded into one item: two items of one line
+     * and one run in the same package would violate uq_package_item_order_item_run at flush time.
+     */
     @Test
-    void allowsTheSameLineTwiceWhileItStaysWithinTheOrderedQuantity() {
+    void foldsTheSameLineTwiceIntoOneItem() {
         line = line(10, FulfillmentStatus.PICKED);
         when(shipmentPackageRepository.sumQuantityByOrderItemId(LINE_ID)).thenReturn(0);
 
         ShipmentPackage created = service.createShipmentPackage(ORDER_NO,
                 request(new PackItem(LINE_ID, 6), new PackItem(LINE_ID, 4)));
 
-        assertThat(created.getItems()).extracting(PackageItem::getQuantity).containsExactly(6, 4);
+        assertThat(created.getItems()).extracting(PackageItem::getQuantity).containsExactly(10);
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+    }
+
+    /** The same for a package created with items but without an order number. */
+    @Test
+    void foldsTheSameLineTwiceIntoOneItemOfACustomShipment() {
+        line = line(10, FulfillmentStatus.PICKED);
+        when(shipmentPackageRepository.sumQuantityByOrderItemId(LINE_ID)).thenReturn(0);
+
+        ShipmentPackage created = service.createCustomShipment(
+                request(new PackItem(LINE_ID, 3), new PackItem(LINE_ID, 2)));
+
+        assertThat(created.getItems()).extracting(PackageItem::getQuantity).containsExactly(5);
+        assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKING);
+    }
+
+    /** Loose items are folded the same way - one item per line and run. */
+    @Test
+    void foldsTheSameLineTwiceIntoOneLooseItem() {
+        line = line(10, FulfillmentStatus.PICKED);
+        nothingPackedYet();
+
+        List<PackageItem> created = service.createPackageItems(
+                itemsRequest(new PackItem(LINE_ID, 4), new PackItem(LINE_ID, 4)));
+
+        assertThat(created).extracting(PackageItem::getQuantity).containsExactly(8);
     }
 
     /**
@@ -309,7 +337,7 @@ class PackingServiceCreatePackageTest {
 
     /**
      * 10 ordered, the request says 5, 5, 5: the first two fill the line, the third finds nothing left
-     * and is skipped - not rejected.
+     * and is skipped - not rejected. The two packed entries end up as one item of 10.
      */
     @Test
     void skipsARepeatedLineOnceTheRunHasFilledIt() {
@@ -319,7 +347,7 @@ class PackingServiceCreatePackageTest {
         List<PackageItem> created = service.createPackageItems(itemsRequest(
                 new PackItem(LINE_ID, 5), new PackItem(LINE_ID, 5), new PackItem(LINE_ID, 5)));
 
-        assertThat(created).extracting(PackageItem::getQuantity).containsExactly(5, 5);
+        assertThat(created).extracting(PackageItem::getQuantity).containsExactly(10);
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
     }
 
@@ -414,7 +442,7 @@ class PackingServiceCreatePackageTest {
         when(shipmentPackageRepository.save(any(ShipmentPackage.class))).thenAnswer(call -> call.getArgument(0));
 
         ShipmentPackage created = service.createCustomShipment(
-                new CreatePackageRequest(null, null, null, null, null, null, null));
+                new CreatePackageRequest(null, null, null, null, null, null));
 
         assertThat(created.getItems()).isEmpty();
         assertThat(created.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
@@ -434,9 +462,9 @@ class PackingServiceCreatePackageTest {
 
         assertThat(empty)
                 .extracting(ShipmentPackage::getShipmentPackageStatus, ShipmentPackage::getShipmentPackageType,
-                        ShipmentPackage::getWeight, ShipmentPackage::getPackageNumber)
+                        ShipmentPackage::getPackageNumber)
                 .containsExactly(packed.getShipmentPackageStatus(), packed.getShipmentPackageType(),
-                        packed.getWeight(), packed.getPackageNumber());
+                        packed.getPackageNumber());
     }
 
     /**

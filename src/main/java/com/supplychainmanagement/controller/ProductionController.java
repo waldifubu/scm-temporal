@@ -1,8 +1,8 @@
 package com.supplychainmanagement.controller;
 
-import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.fullfillment.AvailableDto;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
+import com.supplychainmanagement.dto.fullfillment.ProductionPageResponse;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.service.FulfillmentService;
@@ -59,9 +59,9 @@ public class ProductionController {
 
     @PostMapping(path = "/produce", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'WAREHOUSE')")
-    public PageResponse<ProductionResultDto> produce() {
+    public ProductionPageResponse produce() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         Page<ProductionResultDto> productionPage = productionService.produce(pageable);
-        return PageResponse.of(productionPage);
+        return ProductionPageResponse.of(productionPage);
     }
 }

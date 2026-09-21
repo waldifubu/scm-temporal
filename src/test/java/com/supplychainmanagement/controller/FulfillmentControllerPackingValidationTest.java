@@ -62,6 +62,7 @@ class FulfillmentControllerPackingValidationTest {
         when(packingService.addPackageItems(any(), any())).thenReturn(new ShipmentPackage());
         when(packingService.removePackageItem(any(), any())).thenReturn(new ShipmentPackage());
         when(packingService.updatePackageData(any(), any())).thenReturn(new ShipmentPackage());
+        when(packingService.completePackage(any())).thenReturn(new ShipmentPackage());
     }
 
     /** No items key at all: rejected before the service is ever called. */
@@ -207,6 +208,25 @@ class FulfillmentControllerPackingValidationTest {
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(packingService);
+    }
+
+    @Test
+    void completePackageTakesTheIdFromThePath() throws Exception {
+        mockMvc.perform(put("/api/1.0/packing/shipment/5/complete"))
+                .andExpect(status().isOk());
+
+        verify(packingService).completePackage(5L);
+    }
+
+    /** Completing a package that is not OPEN is a 409, in the {"message": ...} shape of these endpoints. */
+    @Test
+    void answersCompletingAPackedPackageWith409() throws Exception {
+        when(packingService.completePackage(5L)).thenThrow(new APIException(HttpStatus.CONFLICT,
+                "ShipmentPackage 5 is PACKED, only an OPEN package can be changed"));
+
+        mockMvc.perform(put("/api/1.0/packing/shipment/5/complete"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("ShipmentPackage 5 is PACKED, only an OPEN package can be changed"));
     }
 
     /** A conflict from the service reaches the client at its own status, as {"message": ...}. */

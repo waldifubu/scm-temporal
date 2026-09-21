@@ -108,10 +108,8 @@ public class PackingServiceImpl implements PackingService {
         request.items().stream()
                 .sorted(Comparator.comparing(PackItem::orderItemId))
                 .forEach(packItem -> packLine(packItem, orderNo, runNo, shipmentPackage.getItems(), skipped)
-                        .ifPresent(packageItem -> {
-                            packageItem.setShipmentPackage(shipmentPackage);
-                            shipmentPackage.getItems().add(packageItem);
-                        }));
+                        .filter(packageItem -> addToRun(shipmentPackage.getItems(), packageItem))
+                        .ifPresent(packageItem -> packageItem.setShipmentPackage(shipmentPackage)));
 
         // Every line was skipped, so there is nothing to ship - an empty package is not a result.
         if (shipmentPackage.getItems().isEmpty()) {
@@ -147,7 +145,7 @@ public class PackingServiceImpl implements PackingService {
                 // is skipped, more than the room left is a 400. An unlocked findById before it would
                 // also have validated a state read before the lock was taken.
                 .forEach(packItem -> packLine(packItem, null, runNo, packageItems, skipped)
-                        .ifPresent(packageItems::add));
+                        .ifPresent(packageItem -> addToRun(packageItems, packageItem)));
 
         // Every line was skipped - a run that packed nothing is not a result.
         if (packageItems.isEmpty()) {
@@ -247,6 +245,30 @@ public class PackingServiceImpl implements PackingService {
         return Optional.of(packageItem);
     }
 
+    /**
+     * Adds a freshly packed item to the run - or, when the run already holds an item of the same
+     * order line, adds its quantity to that one instead.
+     * <p>
+     * One item per line and run: two entries of one line in one request belong to the same run, and
+     * as two items in one package they would violate uq_package_item_order_item_run at flush time -
+     * a 500. Folded only after packLine, so every entry is still measured on its own: 5 + 5 + 5 on a
+     * line of 10 packs 10 and skips the third, 8 + 8 is still refused. packedInThisRun keeps counting
+     * correctly, because the grown item carries the sum.
+     *
+     * @return true if the item was added as a new one, false if it was folded into an existing one
+     */
+    private static boolean addToRun(List<PackageItem> inThisRun, PackageItem packed) {
+        Long lineId = packed.getOrderItem().getId();
+        for (PackageItem existing : inThisRun) {
+            if (Objects.equals(existing.getOrderItem().getId(), lineId)) {
+                existing.setQuantity(existing.getQuantity() + packed.getQuantity());
+                return false;
+            }
+        }
+        inThisRun.add(packed);
+        return true;
+    }
+
     private int packedInThisRun(List<PackageItem> inThisRun, OrderItem orderItem) {
         return inThisRun.stream()
                 .filter(item -> Objects.equals(item.getOrderItem().getId(), orderItem.getId()))
@@ -277,10 +299,8 @@ public class PackingServiceImpl implements PackingService {
             request.items().stream()
                     .sorted(Comparator.comparing(PackItem::orderItemId))
                     .forEach(packItem -> packLine(packItem, null, runNo, shipmentPackage.getItems(), skipped)
-                            .ifPresent(packageItem -> {
-                                packageItem.setShipmentPackage(shipmentPackage);
-                                shipmentPackage.getItems().add(packageItem);
-                            }));
+                            .filter(packageItem -> addToRun(shipmentPackage.getItems(), packageItem))
+                            .ifPresent(packageItem -> packageItem.setShipmentPackage(shipmentPackage)));
 
             // Every line was skipped, so there is nothing to ship - an empty package is not a result.
             if (shipmentPackage.getItems().isEmpty()) {
@@ -301,7 +321,7 @@ public class PackingServiceImpl implements PackingService {
         ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
 
         applyPackageFields(shipmentPackage, request.shipmentPackageType(),
-                request.weight(), request.length(), request.width(), request.height());
+                request.length(), request.width(), request.height());
         if (request.packageNumber() != null) {
             shipmentPackage.setPackageNumber(request.packageNumber());
         }
@@ -385,6 +405,26 @@ public class PackingServiceImpl implements PackingService {
         }
         detach(item, shipmentPackage);
 
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
+    /**
+     * Closes the package: OPEN to PACKED. From then on its contents are fixed and it can go into a
+     * shipment. Never without items - an empty package goes to no customer and, once PACKED, could not
+     * be filled any more.
+     * <p>
+     * Transactional like the content methods: the lock from findForUpdateById has to hold until the
+     * status is written, or an item added at the same time could slip in after the check.
+     */
+    @Override
+    @Transactional
+    public ShipmentPackage completePackage(Long shipmentPackageId) {
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+        if (shipmentPackage.getItems().isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "ShipmentPackage " + shipmentPackageId + " holds no items and cannot be completed");
+        }
+        shipmentPackage.complete();
         return shipmentPackageRepository.save(shipmentPackage);
     }
 
@@ -472,15 +512,13 @@ public class PackingServiceImpl implements PackingService {
                 && Objects.equals(item.getShipmentPackage().getId(), shipmentPackage.getId());
     }
 
-    /** Both sides: the item owns the foreign key, the package's list is what the response shows. */
+    /** Through the package, which sets both sides of the relation and keeps its weight. */
     private static void attach(PackageItem item, ShipmentPackage shipmentPackage) {
-        item.setShipmentPackage(shipmentPackage);
-        shipmentPackage.getItems().add(item);
+        shipmentPackage.addItem(item);
     }
 
     private static void detach(PackageItem item, ShipmentPackage shipmentPackage) {
-        item.setShipmentPackage(null);
-        shipmentPackage.getItems().remove(item);
+        shipmentPackage.removeItem(item);
     }
 
     /**
@@ -492,19 +530,18 @@ public class PackingServiceImpl implements PackingService {
         shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
         shipmentPackage.setShipmentPackageStatus(ShipmentPackageStatus.OPEN);
         applyPackageFields(shipmentPackage, request.shipmentPackageType(),
-                request.weight(), request.length(), request.width(), request.height());
+                request.length(), request.width(), request.height());
 
         return shipmentPackage;
     }
 
     /**
-     * Type, weight and dimensions, with the same defaults for a new package and an updated one:
-     * no type means OTHER, no weight means 0.
+     * Type and dimensions, with the same defaults for a new package and an updated one: no type
+     * means OTHER. The weight is not among them - the package computes it from its contents.
      */
     private static void applyPackageFields(ShipmentPackage shipmentPackage, ShipmentPackageType type,
-                                           BigDecimal weight, BigDecimal length, BigDecimal width, BigDecimal height) {
+                                           BigDecimal length, BigDecimal width, BigDecimal height) {
         shipmentPackage.setShipmentPackageType(type != null ? type : ShipmentPackageType.OTHER);
-        shipmentPackage.setWeight(weight != null ? weight : BigDecimal.ZERO);
         shipmentPackage.setLength(length);
         shipmentPackage.setWidth(width);
         shipmentPackage.setHeight(height);

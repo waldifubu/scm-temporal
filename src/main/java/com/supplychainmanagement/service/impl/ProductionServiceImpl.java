@@ -37,7 +37,9 @@ public class ProductionServiceImpl implements ProductionService {
             }
         }
 
-        return new PageImpl<>(results, pageable, results.size());
+        // The total is that of the products paged over, not the number produced on this page -
+        // otherwise a client could never page past the first page.
+        return new PageImpl<>(results, pageable, productsPage.getTotalElements());
     }
 
     private ProductionResultDto produceSingleProduct(Product product) {

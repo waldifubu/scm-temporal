@@ -7,6 +7,7 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
+import com.supplychainmanagement.service.ShipmentPackageService;
 import com.supplychainmanagement.service.ShippingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,7 +54,7 @@ class ShipmentControllerTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shippingService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shippingService, mock(ShipmentPackageService.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();

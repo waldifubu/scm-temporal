@@ -7,9 +7,10 @@ import tools.jackson.databind.json.JsonMapper;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * How a package type has to reach the API. The annotation driving this sits on {@link ShipmentPackageType}
- * itself rather than on a property - putting it on {@code ShipmentPackage} has no effect, because
- * that entity is never deserialized: this record is the only thing bound from a request body.
+ * How a package type has to reach the API. The {@code @JsonFormat} driving this sits on the
+ * {@code shipmentPackageType} property of the record - on the enum declaration it is not consulted,
+ * and on {@code ShipmentPackage} it has no effect, because that entity is never deserialized: this
+ * record is the only thing bound from a request body.
  * <p>
  * Uses a plain mapper on purpose. The project configures none, so this is the same behaviour the
  * running application has.
@@ -22,7 +23,7 @@ class CreatePackageRequestTest {
         String json = """
                 {
                   "items": [ { "orderItemId": 11, "qty": 2 } ],
-                  "packageType": "%s",
+                  "shipmentPackageType": "%s",
                   "weight": 18.5
                 }
                 """.formatted(rawType);
@@ -56,6 +57,19 @@ class CreatePackageRequestTest {
     void leavesAnAbsentTypeNull() {
         String json = """
                 { "items": [ { "orderItemId": 11, "qty": 2 } ], "weight": 18.5 }
+                """;
+
+        assertThat(mapper.readValue(json, CreatePackageRequest.class).shipmentPackageType()).isNull();
+    }
+
+    /**
+     * The key before the rename is not an alias: it is ignored like any unknown property, and the
+     * type stays null. A client still sending "packageType" loses its type without an error.
+     */
+    @Test
+    void ignoresTheOldPackageTypeKey() {
+        String json = """
+                { "items": [ { "orderItemId": 11, "qty": 2 } ], "packageType": "CARTON" }
                 """;
 
         assertThat(mapper.readValue(json, CreatePackageRequest.class).shipmentPackageType()).isNull();

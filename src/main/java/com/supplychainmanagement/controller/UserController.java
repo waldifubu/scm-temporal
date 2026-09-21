@@ -4,6 +4,7 @@ import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.mapper.UserMapper;
 import com.supplychainmanagement.dto.user.UserDto;
+import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -48,16 +49,16 @@ public class UserController {
     @NoCheck
     @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ResponseEntity<UserDto> create(@RequestBody User user) {
+    public ResponseEntity<UserDto> create(@RequestBody UserRequestDto request) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(userMapper.mapToDto(userService.create(user)));
+                .body(userMapper.mapToDto(userService.create(request)));
     }
 
     @NoCheck
     @PutMapping(path = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public UserDto update(@PathVariable Long id, @RequestBody User user) {
-        return userMapper.mapToDto(userService.update(id, user));
+    public UserDto update(@PathVariable Long id, @RequestBody UserRequestDto request) {
+        return userMapper.mapToDto(userService.update(id, request));
     }
 
     @NoCheck

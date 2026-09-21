@@ -249,6 +249,17 @@ public class FulfillmentController {
     }
 
     /**
+     * Closes the package: OPEN to PACKED, after which its contents are fixed and it can go into a
+     * shipment. Not OPEN: 409. Without items: 400. Unknown id: 404.
+     */
+    @PutMapping(path = "/packing/shipment/{shipmentPackageId}/complete", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public ResponseEntity<?> completePackage(
+            @PathVariable Long shipmentPackageId) {
+        return packageResponse(() -> packingService.completePackage(shipmentPackageId));
+    }
+
+    /**
      * The package in the response shape of the packing endpoints, and an APIException as
      * {"message": ...} at its own status, like the endpoints above answer it.
      */

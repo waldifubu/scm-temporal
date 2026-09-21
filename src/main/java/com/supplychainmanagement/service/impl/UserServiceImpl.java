@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.*;
 import com.supplychainmanagement.exception.APIException;
@@ -167,6 +168,57 @@ public class UserServiceImpl implements UserService {
                 .ifPresent(existing -> {
                     throw new APIException(HttpStatus.CONFLICT, "Email already exists");
                 });
+    }
+
+    @Override
+    @Transactional
+    public User create(UserRequestDto request) {
+        return create(toUser(request));
+    }
+
+    @Override
+    @Transactional
+    public User update(Long id, UserRequestDto request) {
+        return update(id, toUser(request));
+    }
+
+    /**
+     * The request as the User the existing create/update work on - only the fields a client may
+     * send. The roles are looked up by name here, inside the transaction, so they arrive as managed
+     * entities; which roles the caller may hand out is not checked (yet).
+     */
+    private User toUser(UserRequestDto request) {
+        if (request == null) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "User is required");
+        }
+
+        User user = new User();
+        user.setFirstName(request.firstName());
+        user.setLastName(request.lastName());
+        user.setUsername(request.username());
+        user.setEmail(request.email());
+        user.setPassword(request.password());
+        user.setColor(request.color());
+        user.setIsActive(request.isActive());
+        user.setRoles(resolveRoles(request.roles()));
+        return user;
+    }
+
+    /** Role names to Role entities; none sent stays null, which create and update each default. */
+    private Set<Role> resolveRoles(Set<RoleEnum> roleNames) {
+        if (roleNames == null || roleNames.isEmpty()) {
+            return null;
+        }
+
+        Set<Role> roles = new HashSet<>();
+        for (RoleEnum roleName : roleNames) {
+            if (roleName == null) {
+                throw new APIException(HttpStatus.BAD_REQUEST, "Role must not be null");
+            }
+            roles.add(roleRepository.findByRolename(roleName)
+                    .orElseThrow(() -> new APIException(HttpStatus.BAD_REQUEST, "Role " + roleName + " not found")));
+        }
+        return roles;
     }
 
     private User prepareUserForCreate(User user) {

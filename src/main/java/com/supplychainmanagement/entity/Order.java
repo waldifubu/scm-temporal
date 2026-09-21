@@ -5,6 +5,7 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Future;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ public class Order {
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
     private LocalDateTime created;
 
+    @Future
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate dueDate;
 

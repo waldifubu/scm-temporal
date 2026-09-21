@@ -50,13 +50,13 @@ class PackItemValidationTest {
     @Test
     void appliesToThePackageRequestAsWell() {
         CreatePackageRequest request = new CreatePackageRequest(
-                List.of(new PackItem(11L, 0)), ShipmentPackageType.CARTON, null, null, null, null, null);
+                List.of(new PackItem(11L, 0)), ShipmentPackageType.CARTON, null, null, null, null);
 
         assertThat(violatedPaths(request)).containsExactly("items[0].qty");
     }
 
     private static CreatePackageRequest packageRequest(List<PackItem> items) {
-        return new CreatePackageRequest(items, ShipmentPackageType.CARTON, null, null, null, null, null);
+        return new CreatePackageRequest(items, ShipmentPackageType.CARTON, null, null, null, null);
     }
 
     /** A package created on its own: plain @Valid (Default group) lets items be left out. */

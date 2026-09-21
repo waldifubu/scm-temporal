@@ -170,6 +170,31 @@ class FulfillmentServiceReleaseItemsTest {
     }
 
     /**
+     * One line already picked, the other released: no reservation is active any more - the picked
+     * one is CONSUMED - but stock has left the shelf, so the order stays IN_FULFILLMENT and no
+     * status change is recorded.
+     */
+    @Test
+    void keepsTheOrderInFulfillmentWhenALineIsAlreadyPicked() {
+        Order order = orderWithActiveReservation();
+        order.setStatus(OrderStatus.IN_FULFILLMENT);
+
+        OrderItem picked = new OrderItem();
+        picked.setId(6L);
+        picked.setQuantity(2);
+        picked.setFulfillmentStatus(FulfillmentStatus.PICKED);
+        order.setOrderItems(new LinkedHashSet<>(List.of(orderItem, picked)));
+
+        service.releaseItems(order, USERNAME);
+
+        assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
+        assertThat(picked.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PICKED);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
+        verify(orderRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    /**
      * A sweep runs as "system", which resolves to no user at all. The audit row still has to be
      * written - OrderHistory.user_id is nullable for exactly this case.
      */

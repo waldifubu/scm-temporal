@@ -30,4 +30,7 @@ public interface PackingService {
 
     /** Takes one item out of the package - it goes back to being loose, it is not deleted. */
     ShipmentPackage removePackageItem(Long shipmentPackageId, Long packageItemId);
+
+    /** Closes an OPEN package with at least one item: PACKED, contents fixed, ready for a shipment. */
+    ShipmentPackage completePackage(Long shipmentPackageId);
 }

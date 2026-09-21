@@ -22,8 +22,13 @@ mvn test -Dtest=ApplicationTests
 ```
 `ApplicationTests` loads the full Spring context and therefore needs a reachable database and a
 complete `application.properties` - it runs with no active profile, so anything defined only in
-`application-dev.properties` is missing there. `CustomQueryExecutionTest` and `ReservationDtoTest`
-load the context too. Everything else is plain Mockito/AssertJ and runs in a couple of seconds.
+`application-dev.properties` is missing there. `CustomQueryExecutionTest` (runs every hand-written
+query and entity graph once) and `ReservationDtoTest` load the context too - add new repository
+queries to `CustomQueryExecutionTest`, a unit test mocks them away. Everything else is plain
+Mockito/AssertJ and runs in a couple of seconds. Controller tests use standalone MockMvc with the
+project's own version resolver from `ApiVersioningTestSupport`, so they call `/api/1.0/...` like a
+client; security filters are not part of them. Context tests run against the same database as the
+app, including any active startup migration in `config`.
 
 Run the app (dev profile, uses `application-dev.properties`):
 ```
@@ -93,6 +98,7 @@ The chain is split by responsibility, not by entity. Which service owns which st
 | `RESERVED → PICKED` | `OrderHandlingService` | `FulfillmentController` |
 | `PICKED → PACKED` | `PackingService` | `FulfillmentController` |
 | `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | `FulfillmentController` |
+| packages → shipment | `ShipmentPackageService` | `ShipmentController` |
 | dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
 
 - **`ProductionService`** — `checkItems(order)` reports stock availability per line without
@@ -106,7 +112,9 @@ The chain is split by responsibility, not by entity. Which service owns which st
   variant for a subset any more - and returns what the inventory layer reports actually released.
   An order holding nothing yields an empty list, not an error, so the endpoint answers `200 []`
   rather than 404. It takes the acting user because a release takes the order back to `APPROVED`
-  once nothing is held any more, and that transition wants an audit row.
+  once nothing is held any more, and that transition wants an audit row. "Nothing held" includes
+  the lines: once any line is past `RESERVED` (a picked line holds only a `CONSUMED` reservation,
+  which does not count as active) the order stays `IN_FULFILLMENT`.
 - **`OrderService.acknowledge`** accepts an incoming order and confirms a delivery date for it: two
   lead times in working days (`app.order.leadDays.inStock` / `.replenishment`, defaulted inline)
   depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
@@ -124,7 +132,9 @@ The chain is split by responsibility, not by entity. Which service owns which st
   Do not key any of this by SKU again. An order carries every article at most once - enforced by
   `uk_order_item_order_product` on `order_items`, and upheld by
   `OrderServiceImpl.mergeDuplicateProducts`, which folds a repeated article into the first line and
-  adds up the quantities rather than rejecting the request - so SKU and line coincide. Keying by line is still the
+  adds up the quantities rather than rejecting the request - so SKU and line coincide. The quantity
+  limit per line (`MAX_LINE_QUANTITY`, 20) is checked there, after the merge, as a 400 - not as
+  `@Max` on `OrderItem`, which only fired at flush time as a 500. Keying by line is still the
   right choice: it says what a reservation belongs to instead of relying on that rule holding. The guard, the release/consume lookup and the RESERVED marking in `reserveItems` were all
   keyed by SKU and would all have failed together.
 - **One line, at most one reservation.** A line is covered by a single storehouse or not at all -
@@ -149,19 +159,61 @@ The chain is split by responsibility, not by entity. Which service owns which st
   the snapshot: `Record has changed since last read in table 'reservation'`. Do not add a
   `reservation.setStatus(...)` in `pick` - a modified managed entity is flushed without any `save`.
 - **Packing goes through `PackingServiceImpl.packLine`**, shared by `createShipmentPackage`
-  (`POST /packing/{orderNo}`, a package with its items) and `createPackageItems` (`POST /packing`,
-  loose items without a package that share one `runNo`). `createEmptyShipment`
-  (`POST /package/empty`) creates the package alone; all three set the package up through
-  `newShipmentPackage`. Per line, on the row locked with `findForUpdateById` and in ascending id
+  (`POST /packing/{orderNo}`, controller `createShipmentPackageByOrder`: a package with its items,
+  all of that order), `createPackageItems` (`POST /packing`: loose items without a package that share
+  one `runNo`, lines of any order) and `createCustomShipment` (`POST /packing/shipment`: a package,
+  with items only if some are sent - they are then not tied to an order number). All three set the
+  package up through `newShipmentPackage`. Per line, on the row locked with `findForUpdateById` and in ascending id
   order: unknown id -> 404; line of another order -> 400; already packed = every `package_item` of
   the line (in a package or loose) plus earlier entries of the same request; full -> skipped; more
   than the room left -> 400, never clipped; status not `PICKED`/`PACKING` -> skipped; otherwise packed
   and set to `PACKING` or `PACKED`. Quantities are checked before the status, so an overflow is
   reported whatever state the line is in. `requireValidItems` rejects an empty list and `qty` < 1
   before any line is locked. When nothing at all is packed the 400 names every skipped line with its
-  reason. Throw `APIException`/`ResourceNotFoundException` from here, never `IllegalStateException`,
-  which `GlobalExceptionHandler` answers with a 500. `validateOrderItemPacking` is currently unused
+  reason. Each entry goes through `packLine` on its own, but what it packs is folded into the item of
+  the same line already in the run (`addToRun`): one item per line and run, as
+  `uq_package_item_order_item_run` demands - 6 + 4 becomes one item of 10. Throw `APIException`/`ResourceNotFoundException` from here, never `IllegalStateException`,
+  which `GlobalExceptionHandler` answers with a 500. A `PackageItem` outlives its package, so
+  `ShipmentPackage.items` has neither `orphanRemoval` nor a `REMOVE` cascade - taking an item out
+  means `setShipmentPackage(null)`; deleting it would drop the packed quantity while the line still
+  reads `PACKING`/`PACKED`. `validateOrderItemPacking` is currently unused
   and kept on purpose for a manual "complete" endpoint.
+- **Changing what a package holds** (`PackingServiceImpl`): `addPackageItems`
+  (`POST /packing/shipment/{id}/items`), `updateCustomShipment` (`PUT .../items`, replaces the
+  contents; `[]` empties the package), `removePackageItem` (`DELETE .../items/{itemId}`) and
+  `updatePackageData` (`PUT /packing/shipment/{id}`, type/weight/dimensions/number only). Items only
+  move between loose and in-a-package - no quantity check, no status change on the order line. The
+  package is read with `findForUpdateById`, the items with `findAllForUpdateByIdIn` (ascending ids),
+  and only an `OPEN` package may change (409). An item already in another package is a 409, never
+  moved silently; a package holds the items of one order only (400); and at most one item per order
+  line **and run** (409) - that is the key of `uq_package_item_order_item_run`
+  `(shipment_package_id, order_item_id, run_no)`, so one line packed in two runs (5 + 5) may share a
+  package. On replace, what leaves is flushed before anything is attached, so swapping two items of
+  the same line and run never shows the constraint both at once.
+- **Completing a package** (`PUT /packing/shipment/{id}/complete`, `PackingServiceImpl.completePackage`)
+  takes it from `OPEN` to `PACKED`; from then on its contents are fixed and it can go into a
+  shipment. Never an empty package (400) - it would go to no customer and could not be filled any
+  more. Not `OPEN` is a 409, checked before `ShipmentPackage.complete()`, whose
+  `IllegalStateException` would end as a 500.
+- **Shipments group PACKED packages for one customer** (`ShipmentPackageServiceImpl`, `/shipments`). Built
+  like a package's contents: `ShipmentPackage.shipment` owns the foreign key, `Shipment.packages` has
+  no setter, no cascade and no orphanRemoval, and packages move through `addPackage`/`removePackage`
+  - taken out, a package is free again, never deleted. A shipment is never empty: created with a
+  `customerId` and at least one package, and neither `PUT .../packages []` nor removing the last one
+  is allowed (400). The customer has to be a `Customer` (checked after `Hibernate.unproxy`), and every
+  package has to hold items of an order of that customer - `findCustomersByShipmentPackageIdIn`
+  answers that for all packages in one query; an empty package has no row and is refused. Only
+  `PACKED` packages (409), none from another shipment (409), no package number twice
+  (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up front), and only a
+  `CREATED` shipment changes (409). Shipment first, then its packages in ascending id order, both
+  `FOR UPDATE`. Errors go through `GlobalExceptionHandler`, not a controller-local try/catch.
+- **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
+  contents (0 without items) and has no setter; no request carries a weight. The package keeps it
+  itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's
+  `attach`/`detach` go through them, and `items` has no setter. Not `@PreUpdate`: a change of contents
+  only touches `package_item` rows, the package is not dirty and the callback would not run - and
+  where it did, it would load the items in the middle of a flush. `getPackageWeight()` is content
+  plus the tare of the type.
 - **`Reservation.release()`** marks status `RELEASED`, but the row is then *deleted* (not kept)
   because the unique constraint would otherwise permanently block re-reserving the same
   order/sku/storehouse combination.
@@ -186,7 +238,7 @@ reconciliation the latter.
 ### Scheduled routines
 
 `AutomaticReservationService` holds what runs without a request; `@EnableScheduling` comes from
-`AutomaticProductionService`. During development the `@Scheduled` annotations of all three routines
+`AutomaticProductionService`. During development the `@Scheduled` annotations of all four routines
 are commented out; the intervals below are the ones they carry. Each works the first 100 orders of
 its status. `AutomaticProductionService.assemble()` on the other hand is active and runs `produce()`
 every 150 s.
@@ -199,6 +251,9 @@ every 150 s.
   reservation past `expiresAt`, each once - and calls `releaseItems` for each. `expiresAt` only
   decides which orders are picked: the release then covers *all* active reservations of the order,
   a fresh one next to an expired one included. A full release takes the order back to `APPROVED`.
+- `tryToDelete()` (every 150 s) deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders
+  two days after their `expiresAt`. No code sets an *order* to `READY_FOR_DISPATCH` yet, so today it
+  finds nothing; see `issues.txt` before switching it on.
 
 There is no open-in-view session out here, so every order reaching these routines has to arrive with
 its `orderItems` already fetched, or it turns into a `LazyInitializationException`.
@@ -227,6 +282,10 @@ a 400 through `GlobalExceptionHandler`, not a null.
 
 ### Responses are DTOs, never entities
 
+The same holds for request bodies: a controller binds a record under `dto/`, never an entity -
+bound from JSON, an entity accepts every field it has (`UserController` took `User` and with it
+`id`, `userType` and full `Role` objects; it now takes `UserRequestDto`, roles as names).
+
 Controllers answer with records under `dto/`. Handing a JPA entity to the response writer breaks
 twice over: `spring.jpa.open-in-view` is at its default `true`, so every LAZY reference resolves
 silently during serialization (one query per row and level), and `Reservation → orderItem → order →
@@ -253,14 +312,32 @@ join with ON, because `OrderItem` has no reference to its reservation, and a lef
 `WAITING` line has none. The count query leaves that join out; it cannot drop or duplicate lines as
 long as `uk_reservation_order_item` holds.
 
+The shipment read side lives in `ShippingService` (`ShipmentController`): `GET /shipment-packages`
+(by `ShipmentPackageStatus`, optional `packageNumber`), `GET /packages` (all package items),
+`GET /lonely-packages` (items without a package) and the single-entry variants `/{id}`. A package
+list page is two queries - the page, then `findWithItemsByIdIn` with the items, lines, products and
+orders - because a collection fetch in a paged query makes Hibernate page in memory. An empty
+`packageNumber` must not reach the `...Containing` finder: `LIKE '%%'` never matches a `NULL` number.
+The items inside a package row are `ShipmentPackageItemDto` (no package id - the row is the package);
+everywhere else a package item is a `PackageItemResponse`. Its `siblings` are computed, not stored:
+build it through `PackageItemResponseAssembler`, which looks the ids up for all items of a response
+in one query - `PackageItemResponse.from` and `ShipmentPackageResponse.from` take the computed parts
+as arguments for that reason. Never put the `PackageItem` entity into a response: it serializes its
+package, whose items serialize their package again.
+
 ### Validation groups on request bodies
 
 `CreatePackageRequest.items` is required for `POST /packing/{orderNo}` and optional for
-`POST /package/empty`. One DTO covers both through a validation group: `@NotEmpty` on `items` belongs
+`POST /packing/shipment`. One DTO covers both through a validation group: `@NotEmpty` on `items` belongs
 to `CreatePackageRequest.WithItems`, the `@Valid` on each `PackItem` to `Default`. An endpoint that
 requires items declares `@Validated({Default.class, CreatePackageRequest.WithItems.class})`; a plain
 `@Valid` lets `items` be missing. `WithItems` alone would skip the per-item rules - always pair it
 with `Default`.
+
+`CreatePackageItemsRequest` and `PackageItemIdsRequest` also accept the bare JSON array (`[...]`)
+next to the wrapped form, through a static factory with `@JsonCreator(mode = DELEGATING)`; the
+record's canonical constructor still reads the object form. Both end in the same record, so the
+validation applies to either.
 
 ### Paged list endpoints
 

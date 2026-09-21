@@ -2,7 +2,6 @@ package com.supplychainmanagement.entity;
 
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -44,7 +43,6 @@ public class OrderItem {
     private Product product;
 
     @Column(name = "quantity", nullable = false)
-    @Max(value = 20, message = "Your amount is above our limit")
     @Min(value = 1, message = "Your amount must be at least 1")
     private Integer quantity;
 

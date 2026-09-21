@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.business;
 
+import com.supplychainmanagement.dto.fullfillment.ProductionPageResponse;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.model.enums.OrderStatus;
@@ -35,7 +36,9 @@ public class AutomaticProductionService {
     public void assemble() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         Page<ProductionResultDto> pageProducts = productionService.produce(pageable);
+
+        var productionPageResponse = ProductionPageResponse.of(pageProducts);
         log.info("Tried assembling  {}", LocalDateTime.now());
-        log.info("Products: {} Total Elements: {}", pageProducts.getContent(), pageProducts.getTotalElements());
+        log.info("Products: {} Total Elements: {}", productionPageResponse.content(), productionPageResponse.produced());
     }
 }

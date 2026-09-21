@@ -37,6 +37,14 @@ import java.util.*;
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class OrderServiceImpl implements OrderService {
+
+    /**
+     * The most one order line may carry. Checked in the service rather than as @Max on the entity:
+     * mergeDuplicateProducts adds up the quantities of a repeated article, so the limit only means
+     * something after that, and bean validation on the entity would report it at flush time as a 500.
+     */
+    static final int MAX_LINE_QUANTITY = 20;
+
     private static final LocalTime END_OF_WORKING_DAY = LocalTime.of(17, 0);
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
@@ -383,6 +391,9 @@ public class OrderServiceImpl implements OrderService {
      * line is the one that is kept and grown, while the repeated ones drop out and are removed as
      * orphans. Lines without a resolvable product are passed through untouched; resolveProduct
      * reports those properly a moment later.
+     * <p>
+     * Every resulting line is then held against {@link #MAX_LINE_QUANTITY} - after the merge, because
+     * two lines of 11 are fine on their own and 22 together.
      */
     private Set<OrderItem> mergeDuplicateProducts(Collection<OrderItem> orderItems) {
         Map<Long, OrderItem> byArticleNo = new LinkedHashMap<>();
@@ -402,6 +413,14 @@ public class OrderServiceImpl implements OrderService {
             }
 
             alreadySeen.setQuantity(quantityOf(alreadySeen) + quantityOf(orderItem));
+        }
+
+        for (OrderItem orderItem : merged) {
+            if (quantityOf(orderItem) > MAX_LINE_QUANTITY) {
+                Long articleNo = orderItem.getProduct() != null ? orderItem.getProduct().getArticleNo() : null;
+                throw new APIException(HttpStatus.BAD_REQUEST, "Article " + articleNo + ": quantity "
+                        + orderItem.getQuantity() + " is above the limit of " + MAX_LINE_QUANTITY + " per order");
+            }
         }
 
         return merged;

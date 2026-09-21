@@ -28,7 +28,8 @@ public record CreatePackageRequest(
                 JsonFormat.Feature.READ_UNKNOWN_ENUM_VALUES_USING_DEFAULT_VALUE
         })
         ShipmentPackageType shipmentPackageType,
-        BigDecimal weight,
+        // No weight: ShipmentPackage computes it from its contents. A "weight" key sent anyway is
+        // ignored like any unknown property.
         BigDecimal length,
         BigDecimal width,
         BigDecimal height,
