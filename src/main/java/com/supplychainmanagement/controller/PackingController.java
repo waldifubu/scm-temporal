@@ -1,9 +1,7 @@
 package com.supplychainmanagement.controller;
 
-import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.order.OrderItemListDto;
-import com.supplychainmanagement.dto.picking.PickingOrderDto;
 import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
 import com.supplychainmanagement.dto.shipping.PackageItemIdsRequest;
@@ -13,9 +11,7 @@ import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
-import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
-import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackageItemResponseAssembler;
 import com.supplychainmanagement.service.PackingService;
@@ -36,33 +32,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
+/**
+ * Packing - everything under /packing: packing order lines into packages or loose items, changing
+ * what a package holds, and completing it. The writing side of packages ({@link PackingService});
+ * reading them is {@link PackageController}'s job. Also /order-items, the picked lines waiting to be
+ * packed - the input of this step.
+ */
 @RestController
 @RequiredArgsConstructor
 @RequestMapping({"/api/{version}"})
-public class FulfillmentController {
+public class PackingController {
 
-    private final OrderHandlingService orderHandlingService;
     private final PackingService packingService;
     private final PackageItemResponseAssembler packageItemResponseAssembler;
-
-    /**
-     * Paged like the order list in {@code OrderController.list}, down to the parameter names, so the
-     * two list views are driven the same way. Sorted by {@code expiresAt} by default: the
-     * reservation closest to expiry is the one to pick first.
-     */
-    @GetMapping(path = "/picking-orders", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public PageResponse<PickingOrderDto> getPickingOrders(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size,
-            @RequestParam(defaultValue = "expiresAt") String sort,
-            @RequestParam(defaultValue = "ACTIVE") ReservationStatus status,
-            @RequestParam(defaultValue = "ASC") String order) {
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
-
-        return PageResponse.of(orderHandlingService.pickingOrders(status, pageable));
-    }
+    private final OrderHandlingService orderHandlingService;
 
     /**
      * Order lines in one fulfillment status across all orders - PICKED by default, the lines waiting
@@ -84,55 +67,6 @@ public class FulfillmentController {
 
         return PageResponse.of(orderHandlingService.getOrderItems(status, pageable));
     }
-
-
-    /**
-     * Pick a reservation by its ID. This is the first step in the fulfillment process, where the warehouse staff retrieves the items from storage based on the reservation details.
-     * Caution: Picking will nearly always work, because RESERVED was successfully. You can just pick all or nothing, not just some items.
-     *
-     * @param reservationId The ID of the reservation to be picked.
-     * @return ResponseEntity containing the PickingOrderDto if successful, or an error message if the reservation cannot be picked.
-     */
-    @PostMapping(path = "/picking/{reservationId}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> pickingByReservationId(@PathVariable Long reservationId) {
-        PickingOrderDto reservation;
-        try {
-            reservation = orderHandlingService.pickingReservationById(reservationId);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(reservation);
-    }
-
-    /**
-     * Pick all reservations associated with a specific order number. This allows warehouse staff to process all items related to a single order in one operation.
-     *
-     * @param orderNo The order number for which to pick all reservations.
-     * @return ResponseEntity containing a list of PickingOrderDto if successful, or an error message if the reservations cannot be picked.
-     */
-    @PostMapping(path = "/picking/order/{orderNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> pickingByOrderNo(@PathVariable String orderNo) {
-        List<PickingOrderDto> pickingOrders;
-        try {
-            pickingOrders = orderHandlingService.pickingReservationByOrderNo(orderNo);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        if (pickingOrders.isEmpty()) {
-            throw new ResourceNotFoundException("Picking", "Order", Long.parseLong(orderNo));
-        }
-
-        return ResponseEntity.ok(pickingOrders);
-    }
-
 
     /**
      * Packs the given lines into a new package, so items are required here - hence the WithItems
@@ -259,16 +193,16 @@ public class FulfillmentController {
         return packageResponse(() -> packingService.completePackage(shipmentPackageId));
     }
 
-    /**
-     * The package in the response shape of the packing endpoints, and an APIException as
-     * {"message": ...} at its own status, like the endpoints above answer it.
-     */
     /** The package in the response shape, its items with their siblings. */
     private ShipmentPackageResponse toResponse(ShipmentPackage shipmentPackage) {
         return ShipmentPackageResponse.from(shipmentPackage,
                 packageItemResponseAssembler.toResponses(shipmentPackage.getItems()));
     }
 
+    /**
+     * The package in the response shape of the packing endpoints, and an APIException as
+     * {"message": ...} at its own status, like the endpoints above answer it.
+     */
     private ResponseEntity<?> packageResponse(Supplier<ShipmentPackage> action) {
         try {
             return ResponseEntity.ok(toResponse(action.get()));
@@ -278,107 +212,4 @@ public class FulfillmentController {
             return ResponseEntity.status(e.getStatus()).body(response);
         }
     }
-
-
-
-
-
-
-    @NoCheck
-    @PostMapping(path = "/dispatch/{reservationId}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> readyForDispatch(@PathVariable Long reservationId) {
-        PickingOrderDto packingOrderItem = null;
-        try {
-            packingOrderItem = orderHandlingService.readyForDispatch(reservationId);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(packingOrderItem);
-    }
-
-
-
-    /*
-alle Packages PACKED
-        ↓
-Shipment READY
-        ↓
-Distributor übernimmt
-        ↓
-IN_TRANSIT
-
-
-
-     !!! Auch wenn ein Shipment mehrere Orders enthalten darf, würde ich ein Package niemals mit unterschiedlichen Orders mischen. !!!
-     Ein Package sollte weiterhin nur eine Order enthalten
-
-### Warehouse
-
-Order
-  ↓
-Picking
-  ↓
-PackageItem
-  ↓
-ShipmentPackage
-  ↓
-PACKED
-
-
-### Logistics
-
-PACKED ShipmentPackages
-  ↓
-Shipment
-  ↓
-Distributor
-  ↓
-Dispatch
-
-
-
-ORDER
-  │
-  ▼
-RESERVATION
-  │
-  ▼
-PICKING
-  │
-  ▼
-PACKAGE ITEMS
-  │
-  ▼
-SHIPMENT PACKAGE
-  │
-  │  Warehouse
-  │
-  ▼
-PACKED
-  │
-  │  Logistics
-  ▼
-SHIPMENT
-  │
-  ▼
-DISTRIBUTOR
-  │
-  ▼
-IN_TRANSIT
-  │
-  ▼
-DELIVERED
-     */
-    
-    /*
-    /receipts
-    /picklists
-    /shipments
-    /stock
-    /locations
-     */
 }

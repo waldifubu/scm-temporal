@@ -14,7 +14,7 @@ import org.springframework.data.domain.Pageable;
  * package's contents in {@link PackingService} - packages move in and out of a shipment and are never
  * deleted with it. Every answer is a DTO mapped inside the transaction.
  */
-public interface ShipmentPackageService {
+public interface ShipmentService {
 
     /** Creates a shipment for the customer with the given packages - never an empty one. */
     ShipmentResponse createShipment(CreateShipmentRequest request);
@@ -36,4 +36,7 @@ public interface ShipmentPackageService {
 
     /** One shipment with its packages and their contents. */
     ShipmentResponse findShipment(Long shipmentId);
+
+    /** Hands the shipment to a distributor - the user behind the id has to be a Distributor. */
+    ShipmentResponse assignDistributor(Long shipmentId, Long distributorId);
 }

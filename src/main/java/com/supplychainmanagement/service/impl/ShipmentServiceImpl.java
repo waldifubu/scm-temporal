@@ -8,6 +8,7 @@ import com.supplychainmanagement.dto.shipping.UpdateShipmentRequest;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Customer;
+import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
@@ -16,7 +17,7 @@ import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.repository.UserRepository;
-import com.supplychainmanagement.service.ShipmentPackageService;
+import com.supplychainmanagement.service.ShipmentService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
@@ -32,7 +33,7 @@ import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
-public class ShipmentPackageServiceImpl implements ShipmentPackageService {
+public class ShipmentServiceImpl implements ShipmentService {
 
     private final ShipmentRepository shipmentRepository;
     private final ShipmentPackageRepository shipmentPackageRepository;
@@ -162,7 +163,7 @@ public class ShipmentPackageServiceImpl implements ShipmentPackageService {
 
     /**
      * One page of shipments, mapped while the transaction is open. Two queries like the package list
-     * in ShippingServiceImpl: the page with the customers, then the packages of that page - a
+     * in PackageQueryServiceImpl: the page with the customers, then the packages of that page - a
      * collection fetch in the page query would make Hibernate page in memory.
      */
     @Override
@@ -183,11 +184,42 @@ public class ShipmentPackageServiceImpl implements ShipmentPackageService {
         return page.map(shipment -> ShipmentListDto.from(withPackages.getOrDefault(shipment.getId(), shipment)));
     }
 
+    /**
+     * Mapped here, while the transaction is open, like every other answer of this service: the
+     * package contents come in one query through {@link #toResponse}, not one per package from the
+     * open-in-view session.
+     */
     @Override
     @Transactional(readOnly = true)
     public ShipmentResponse findShipment(Long shipmentId) {
-        Shipment shipment = shipmentRepository.findWithPackagesById(shipmentId)
+        return toResponse(loadShipment(shipmentId));
+    }
+
+    private Shipment loadShipment(Long shipmentId) {
+        return shipmentRepository.findWithPackagesById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+    }
+
+    @Override
+    @Transactional
+    public ShipmentResponse assignDistributor(Long shipmentId, Long distributorId) {
+        var shipment = loadShipment(shipmentId);
+
+        var allowedStatuses = Set.of(ShipmentStatus.CREATED, ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED);
+
+        if(!allowedStatuses.contains(shipment.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
+                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in CREATED, READY, or DISPATCH_REQUESTED status");
+        }
+
+        // Checked before it is used as one, and on the unproxied instance: a cast up front fails any
+        // other user with a ClassCastException (a 500), and a User proxy is never a Distributor.
+        User user = userRepository.findById(distributorId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", distributorId));
+        if (!(Hibernate.unproxy(user) instanceof Distributor distributor)) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "User " + distributorId + " is not a distributor");
+        }
+        shipment.setDistributor(distributor);
         return toResponse(shipment);
     }
 

@@ -420,6 +420,7 @@ public class PackingServiceImpl implements PackingService {
     @Transactional
     public ShipmentPackage completePackage(Long shipmentPackageId) {
         ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+
         if (shipmentPackage.getItems().isEmpty()) {
             throw new APIException(HttpStatus.BAD_REQUEST,
                     "ShipmentPackage " + shipmentPackageId + " holds no items and cannot be completed");

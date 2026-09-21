@@ -35,7 +35,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
-class ShippingServiceImplTest {
+class PackageQueryServiceImplTest {
 
     private static final Pageable SECOND_PAGE = PageRequest.of(1, 2);
 
@@ -44,12 +44,12 @@ class ShippingServiceImplTest {
     @Mock
     private PackageItemRepository packageItemRepository;
 
-    private ShippingServiceImpl service;
+    private PackageQueryServiceImpl service;
 
     /** A real assembler over the mocked repository, so the responses are built as in production. */
     @BeforeEach
     void setUp() {
-        service = new ShippingServiceImpl(shipmentPackageRepository, packageItemRepository,
+        service = new PackageQueryServiceImpl(shipmentPackageRepository, packageItemRepository,
                 new PackageItemResponseAssembler(packageItemRepository));
     }
 

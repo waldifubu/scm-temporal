@@ -13,7 +13,8 @@ import java.util.List;
 /**
  * One shipment with its packages and their contents - the answer of the single-shipment endpoints
  * and of every change. {@code weight} is what the carrier carries: the gross weight of all packages,
- * content plus packaging.
+ * content plus packaging. Customer and distributor appear as id and name only - the User entities
+ * would carry the password hash and roles into the response.
  */
 public record ShipmentResponse(
         Long id,
@@ -29,6 +30,8 @@ public record ShipmentResponse(
         LocalDateTime deliveredAt,
         int packageCount,
         BigDecimal weight,
+        Long distributorId,
+        String distributorName,
         List<ShipmentPackageListDto> packages
 ) {
 
@@ -51,14 +54,17 @@ public record ShipmentResponse(
                 shipment.getDeliveredAt(),
                 packages.size(),
                 packages.stream().map(ShipmentPackage::getPackageWeight).reduce(BigDecimal.ZERO, BigDecimal::add),
+                shipment.getDistributor() != null ? shipment.getDistributor().getId() : null,
+                nameOf(shipment.getDistributor()),
                 packages.stream().map(ShipmentPackageListDto::from).toList()
         );
     }
 
-    static String nameOf(User customer) {
-        if (customer == null) {
+    /** First and last name of a customer or distributor; null without one. */
+    static String nameOf(User user) {
+        if (user == null) {
             return null;
         }
-        return (customer.getFirstName() + " " + customer.getLastName()).trim();
+        return (user.getFirstName() + " " + user.getLastName()).trim();
     }
 }

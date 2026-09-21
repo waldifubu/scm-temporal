@@ -10,7 +10,7 @@ import org.springframework.data.domain.Pageable;
  * Reading shipment packages for the outbound side. Changing what a package holds is
  * {@link PackingService}'s job; this one lists them.
  */
-public interface ShippingService {
+public interface PackageQueryService {
 
     /** One page of the packages in the given status, as list rows. */
     Page<ShipmentPackageListDto> findShipmentPackages(ShipmentPackageStatus status, String packageNumber, Pageable pageable);

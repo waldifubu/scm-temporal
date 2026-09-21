@@ -40,7 +40,7 @@ public interface ShipmentPackageRepository extends JpaRepository<ShipmentPackage
     /**
      * The packages of one page with everything a list row reads: items, their order lines, the
      * products for the content weight and the orders for the due date. Separate from the page query,
-     * because a collection fetch in a paged query is paged in memory - see ShippingServiceImpl.
+     * because a collection fetch in a paged query is paged in memory - see PackageQueryServiceImpl.
      */
     @EntityGraph(attributePaths = {"items", "items.orderItem", "items.orderItem.product", "items.orderItem.order"})
     List<ShipmentPackage> findWithItemsByIdIn(Collection<Long> ids);

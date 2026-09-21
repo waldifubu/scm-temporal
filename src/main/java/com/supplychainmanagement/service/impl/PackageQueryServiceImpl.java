@@ -8,7 +8,7 @@ import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.repository.PackageItemRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.service.PackageItemResponseAssembler;
-import com.supplychainmanagement.service.ShippingService;
+import com.supplychainmanagement.service.PackageQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -22,7 +22,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
-public class ShippingServiceImpl implements ShippingService {
+public class PackageQueryServiceImpl implements PackageQueryService {
 
     private final ShipmentPackageRepository shipmentPackageRepository;
     private final PackageItemRepository packageItemRepository;

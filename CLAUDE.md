@@ -76,7 +76,7 @@ Security see it, so clients can omit the version and still hit versioned endpoin
 new endpoint, follow the existing pattern: `@RequestMapping({"/api/{version}/...")` at class level,
 `version = "x.y"` per mapping.
 
-### Domain: Order → Fulfillment → Picking → Packing → Dispatch
+### Domain: Order → Fulfillment → Picking → Packing → Shipment → Dispatch
 
 This is the most involved part of the codebase, spread across several services with distinct
 responsibilities — read all of them together before changing reservation/fulfillment logic:
@@ -85,20 +85,28 @@ responsibilities — read all of them together before changing reservation/fulfi
   IN_FULFILLMENT → READY_FOR_DISPATCH → IN_TRANSIT → DELIVERED → COMPLETED`, plus
   `REJECTED`/`CANCELLED`). Only the part up to `IN_FULFILLMENT` is driven by code today.
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
-  PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item. This chain *is* implemented end
-  to end. Note there is no `RESERVING` — it was removed because nothing could ever observe it
-  inside the synchronous reserve transaction.
+  PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item. It is implemented up to `PACKED`;
+  the last step, `OrderHandlingService.readyForDispatch()`, has no endpoint at the moment (its
+  mapping is commented out in `ShipmentController`). Note there is no `RESERVING` — it was removed
+  because nothing could ever observe it inside the synchronous reserve transaction.
+- **`ShipmentPackage`** has `ShipmentPackageStatus` (`OPEN → PACKED → DISPATCHED`): filled while
+  `OPEN`, closed by `completePackage`. `DISPATCHED` is not reached by code yet. **`Shipment`** has
+  `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT → DELIVERED`, plus
+  `CANCELLED`); only `CREATED` is set by code so far.
 
-The chain is split by responsibility, not by entity. Which service owns which stretch:
+The chain is split by responsibility, not by entity. Which service owns which stretch - one
+controller per service, named after what it does (`PickingController`, `PackingController`,
+`PackageController`, `ShipmentController`):
 
 | Stretch | Service | Controller |
 |---------|---------|------------|
 | availability check, production | `ProductionService` | `ProductionController` |
 | `WAITING ⇄ RESERVED` | `FulfillmentService` | `InventoryController` |
-| `RESERVED → PICKED` | `OrderHandlingService` | `FulfillmentController` |
-| `PICKED → PACKED` | `PackingService` | `FulfillmentController` |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | `FulfillmentController` |
-| packages → shipment | `ShipmentPackageService` | `ShipmentController` |
+| `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
+| `PICKED → PACKED` | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`, the picked lines to pack) |
+| reading packages and package items | `PackageQueryService` | `PackageController` |
+| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | — (endpoint currently commented out) |
+| packages → shipment | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
 | dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
 
 - **`ProductionService`** — `checkItems(order)` reports stock availability per line without
@@ -172,16 +180,17 @@ The chain is split by responsibility, not by entity. Which service owns which st
   before any line is locked. When nothing at all is packed the 400 names every skipped line with its
   reason. Each entry goes through `packLine` on its own, but what it packs is folded into the item of
   the same line already in the run (`addToRun`): one item per line and run, as
-  `uq_package_item_order_item_run` demands - 6 + 4 becomes one item of 10. Throw `APIException`/`ResourceNotFoundException` from here, never `IllegalStateException`,
-  which `GlobalExceptionHandler` answers with a 500. A `PackageItem` outlives its package, so
+  `uq_package_item_order_item_run` demands - 6 + 4 becomes one item of 10. Throw
+  `APIException`/`ResourceNotFoundException` from here, never `IllegalStateException`, which
+  `GlobalExceptionHandler` answers with a 500. A `PackageItem` outlives its package, so
   `ShipmentPackage.items` has neither `orphanRemoval` nor a `REMOVE` cascade - taking an item out
-  means `setShipmentPackage(null)`; deleting it would drop the packed quantity while the line still
-  reads `PACKING`/`PACKED`. `validateOrderItemPacking` is currently unused
-  and kept on purpose for a manual "complete" endpoint.
+  goes through `ShipmentPackage.removeItem` (the item's package set to `null`); deleting it would
+  drop the packed quantity while the line still reads `PACKING`/`PACKED`.
+  `validateOrderItemPacking` is unused and kept on purpose - `completePackage` does not call it.
 - **Changing what a package holds** (`PackingServiceImpl`): `addPackageItems`
   (`POST /packing/shipment/{id}/items`), `updateCustomShipment` (`PUT .../items`, replaces the
   contents; `[]` empties the package), `removePackageItem` (`DELETE .../items/{itemId}`) and
-  `updatePackageData` (`PUT /packing/shipment/{id}`, type/weight/dimensions/number only). Items only
+  `updatePackageData` (`PUT /packing/shipment/{id}`, type/dimensions/number only). Items only
   move between loose and in-a-package - no quantity check, no status change on the order line. The
   package is read with `findForUpdateById`, the items with `findAllForUpdateByIdIn` (ascending ids),
   and only an `OPEN` package may change (409). An item already in another package is a 409, never
@@ -195,7 +204,7 @@ The chain is split by responsibility, not by entity. Which service owns which st
   shipment. Never an empty package (400) - it would go to no customer and could not be filled any
   more. Not `OPEN` is a 409, checked before `ShipmentPackage.complete()`, whose
   `IllegalStateException` would end as a 500.
-- **Shipments group PACKED packages for one customer** (`ShipmentPackageServiceImpl`, `/shipments`). Built
+- **Shipments group PACKED packages for one customer** (`ShipmentServiceImpl`, `/shipments`). Built
   like a package's contents: `ShipmentPackage.shipment` owns the foreign key, `Shipment.packages` has
   no setter, no cascade and no orphanRemoval, and packages move through `addPackage`/`removePackage`
   - taken out, a package is free again, never deleted. A shipment is never empty: created with a
@@ -206,7 +215,12 @@ The chain is split by responsibility, not by entity. Which service owns which st
   `PACKED` packages (409), none from another shipment (409), no package number twice
   (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up front), and only a
   `CREATED` shipment changes (409). Shipment first, then its packages in ascending id order, both
-  `FOR UPDATE`. Errors go through `GlobalExceptionHandler`, not a controller-local try/catch.
+  `FOR UPDATE`. The list (`GET /shipments`, optional `status`) is two queries like the package list:
+  the page with the customer, then the packages of that page. A distributor is assigned with
+  `PUT /shipments/{id}/distributor/{distributorId}` (`assignDistributor`, only while `CREATED`,
+  `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor`, checked on the unproxied
+  instance before it is used as one - 400 otherwise). `ShipmentResponse` names customer and
+  distributor by id and name only, never the `User` entities.
 - **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
   contents (0 without items) and has no setter; no request carries a weight. The package keeps it
   itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's
@@ -312,7 +326,7 @@ join with ON, because `OrderItem` has no reference to its reservation, and a lef
 `WAITING` line has none. The count query leaves that join out; it cannot drop or duplicate lines as
 long as `uk_reservation_order_item` holds.
 
-The shipment read side lives in `ShippingService` (`ShipmentController`): `GET /shipment-packages`
+The package read side lives in `PackageQueryService` (`PackageController`): `GET /shipment-packages`
 (by `ShipmentPackageStatus`, optional `packageNumber`), `GET /packages` (all package items),
 `GET /lonely-packages` (items without a package) and the single-entry variants `/{id}`. A package
 list page is two queries - the page, then `findWithItemsByIdIn` with the items, lines, products and
@@ -334,10 +348,18 @@ requires items declares `@Validated({Default.class, CreatePackageRequest.WithIte
 `@Valid` lets `items` be missing. `WithItems` alone would skip the per-item rules - always pair it
 with `Default`.
 
-`CreatePackageItemsRequest` and `PackageItemIdsRequest` also accept the bare JSON array (`[...]`)
-next to the wrapped form, through a static factory with `@JsonCreator(mode = DELEGATING)`; the
+`CreatePackageItemsRequest`, `PackageItemIdsRequest` and `ShipmentPackageIdsRequest` also accept the
+bare JSON array (`[...]`) next to the wrapped form, through a static factory with `@JsonCreator(mode = DELEGATING)`; the
 record's canonical constructor still reads the object form. Both end in the same record, so the
 validation applies to either.
+
+### Error responses
+
+Two shapes are in use. `PickingController` and `PackingController` catch `APIException` themselves
+and answer `{"message": ...}` at its status; everything else - `ResourceNotFoundException` there too,
+and all of `PackageController`, `ShipmentController` and `UserController` - goes through
+`GlobalExceptionHandler` and answers `ErrorDetails`, bean validation as a map of field to message.
+New endpoints use the global handler; a controller-local try/catch is legacy, not the pattern.
 
 ### Paged list endpoints
 
@@ -375,9 +397,11 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 
 ### Business/aspect utilities
 
-- `service/business/AutomaticConstructionService` — builds products from component stock
-  (`ProductionServiceImpl.produce`/`produceSingleProduct` picks the storehouse with enough
-  components and decrements them, then adds the produced unit as stock).
+- `service/business/AutomaticProductionService` — `assemble()` builds products from component
+  stock every 150 s (`ProductionServiceImpl.produce`/`produceSingleProduct` picks the storehouse
+  with enough components and decrements them, then adds the produced unit as stock). `POST /produce`
+  runs the same by hand and answers `ProductionPageResponse` (the page plus `produced`, the number
+  actually built).
 - `@NoCheck` (`annotation/NoCheck.java`) + `NoCheckAspect` — a marker annotation logged via AOP
   `@After` advice; check existing usages before assuming it changes authorization/validation
   behavior (currently logging-only).

@@ -11,6 +11,7 @@ import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Customer;
+import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
@@ -51,7 +52,7 @@ import static org.mockito.Mockito.when;
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class ShipmentPackageServiceImplTest {
+class ShipmentServiceImplTest {
 
     private static final Long CUSTOMER_ID = 3L;
     private static final Long OTHER_CUSTOMER_ID = 4L;
@@ -65,7 +66,7 @@ class ShipmentPackageServiceImplTest {
     private UserRepository userRepository;
 
     @InjectMocks
-    private ShipmentPackageServiceImpl service;
+    private ShipmentServiceImpl service;
 
     /** Every package the "database" knows, with the customer its items belong to (null: empty). */
     private final Map<Long, ShipmentPackage> packages = new TreeMap<>();
@@ -450,6 +451,82 @@ class ShipmentPackageServiceImplTest {
         assertThat(shipment.getShippingAddress()).isEqualTo("Neue Str. 2");
         assertThat(shipment.getShippingMethod()).isEqualTo("UPS");
         assertThat(shipment.getRequestedDeliveryDate()).isEqualTo(LocalDate.of(2026, 11, 2));
+    }
+
+    // ------------------------------------------------------------------ distributor
+
+    /** The shipment as findWithPackagesById answers it - the non-locking read. */
+    private Shipment loadedShipment(ShipmentStatus status) {
+        Shipment shipment = existingShipment(status, packed(5L));
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+        return shipment;
+    }
+
+    /** Assigned, and answered with id and name - never the Distributor entity with its password hash. */
+    @Test
+    void assignsADistributor() {
+        Shipment shipment = loadedShipment(ShipmentStatus.CREATED);
+        Distributor distributor = new Distributor();
+        distributor.setId(20L);
+        distributor.setFirstName("Grace");
+        distributor.setLastName("Hopper");
+        when(userRepository.findById(20L)).thenReturn(Optional.of(distributor));
+
+        ShipmentResponse response = service.assignDistributor(SHIPMENT_ID, 20L);
+
+        assertThat(shipment.getDistributor()).isSameAs(distributor);
+        assertThat(response.distributorId()).isEqualTo(20L);
+        assertThat(response.distributorName()).isEqualTo("Grace Hopper");
+    }
+
+    /** Any other user is a 400 - the cast before the check used to make it a ClassCastException (500). */
+    @Test
+    void refusesAUserWhoIsNotADistributor() {
+        Shipment shipment = loadedShipment(ShipmentStatus.CREATED);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.assignDistributor(SHIPMENT_ID, CUSTOMER_ID));
+
+        assertStatus(thrown, HttpStatus.BAD_REQUEST);
+        assertThat(thrown).hasMessageContaining("User 3 is not a distributor");
+        assertThat(shipment.getDistributor()).isNull();
+    }
+
+    @Test
+    void answersAnUnknownDistributorWith404() {
+        loadedShipment(ShipmentStatus.CREATED);
+
+        assertThatThrownBy(() -> service.assignDistributor(SHIPMENT_ID, 99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    /** Once in transit the distributor is fixed. */
+    @Test
+    void assignsADistributorBeforeTheShipmentIsAcceptedOnly() {
+        loadedShipment(ShipmentStatus.IN_TRANSIT);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.assignDistributor(SHIPMENT_ID, 20L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+    }
+
+    /** The single shipment is mapped in the service, with the package contents fetched in one query. */
+    @Test
+    void findsAShipmentAsResponse() {
+        loadedShipment(ShipmentStatus.CREATED);
+
+        ShipmentResponse response = service.findShipment(SHIPMENT_ID);
+
+        assertThat(response.id()).isEqualTo(SHIPMENT_ID);
+        assertThat(response.packages()).extracting(p -> p.id()).containsExactly(5L);
+        assertThat(response.distributorId()).isNull();
+        verify(shipmentPackageRepository).findWithItemsByIdIn(anyCollection());
+    }
+
+    @Test
+    void answersAnUnknownShipmentWith404() {
+        assertThatThrownBy(() -> service.findShipment(99L)).isInstanceOf(ResourceNotFoundException.class);
     }
 
     /** Without a status the list covers every shipment. */

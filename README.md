@@ -125,9 +125,9 @@ Which service owns which stretch:
 | Stretch | Service | Controller |
 |---------|---------|------------|
 | `WAITING ⇄ RESERVED` | `FulfillmentService` | `InventoryController` |
-| `RESERVED → PICKED` | `OrderHandlingService` | `FulfillmentController` |
-| `PICKED → PACKED` | `PackingService` | `FulfillmentController` |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | `FulfillmentController` |
+| `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
+| `PICKED → PACKED` | `PackingService` | `PackingController` |
+| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | — (endpoint currently commented out) |
 
 - **Reservation is partial.** Lines that a single storehouse can cover become `RESERVED`; the rest
   stay `WAITING` and are attempted again on the next reserve call, which skips whatever is already

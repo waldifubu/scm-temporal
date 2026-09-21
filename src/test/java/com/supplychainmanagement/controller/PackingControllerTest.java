@@ -6,13 +6,16 @@ import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.repository.PackageItemRepository;
-import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackageItemResponseAssembler;
+import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -28,6 +31,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -41,17 +45,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Standalone MockMvc with the project's own API version resolver from WebConfig, so the requests go
  * to /api/1.0/... like real ones. No security filters - @PreAuthorize is not what is tested here.
  */
-class FulfillmentControllerPackingValidationTest {
+class PackingControllerTest {
 
-    private final OrderHandlingService orderHandlingService = mock(OrderHandlingService.class);
     private final PackingService packingService = mock(PackingService.class);
+    private final OrderHandlingService orderHandlingService = mock(OrderHandlingService.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new FulfillmentController(orderHandlingService, packingService,
-                        new PackageItemResponseAssembler(mock(PackageItemRepository.class))))
+        mockMvc = MockMvcBuilders.standaloneSetup(new PackingController(packingService,
+                        new PackageItemResponseAssembler(mock(PackageItemRepository.class)), orderHandlingService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
@@ -227,6 +231,20 @@ class FulfillmentControllerPackingValidationTest {
         mockMvc.perform(put("/api/1.0/packing/shipment/5/complete"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.message").value("ShipmentPackage 5 is PACKED, only an OPEN package can be changed"));
+    }
+
+    /** The packing work list: PICKED lines by default, sorted by updatedAt, paged as sent. */
+    @Test
+    void listsThePickedOrderItemsByDefault() throws Exception {
+        when(orderHandlingService.getOrderItems(any(), any())).thenAnswer(call ->
+                new org.springframework.data.domain.PageImpl<>(List.of(), call.getArgument(1), 0));
+
+        mockMvc.perform(get("/api/1.0/order-items").param("page", "2").param("size", "10"))
+                .andExpect(status().isOk());
+
+        verify(orderHandlingService).getOrderItems(eq(FulfillmentStatus.PICKED), argThat((Pageable pageable) ->
+                pageable.getPageNumber() == 2 && pageable.getPageSize() == 10
+                        && pageable.getSort().equals(Sort.by(Sort.Direction.ASC, "updatedAt"))));
     }
 
     /** A conflict from the service reaches the client at its own status, as {"message": ...}. */

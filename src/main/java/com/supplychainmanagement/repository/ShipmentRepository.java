@@ -36,7 +36,7 @@ public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
 
     /**
      * The shipments of one page with their packages. Separate from the page query, because a
-     * collection fetch in a paged query is paged in memory - the same split as ShippingServiceImpl.
+     * collection fetch in a paged query is paged in memory - the same split as PackageQueryServiceImpl.
      */
     @EntityGraph(attributePaths = "packages")
     List<Shipment> findWithPackagesByIdIn(Collection<Long> ids);
