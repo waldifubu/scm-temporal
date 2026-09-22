@@ -39,4 +39,7 @@ public interface ShipmentService {
 
     /** Hands the shipment to a distributor - the user behind the id has to be a Distributor. */
     ShipmentResponse assignDistributor(Long shipmentId, Long distributorId);
+
+    /** Checks if the shipment is ready for dispatch. A shipment is considered ready if all its packages are packed and address is given. */
+    ShipmentResponse checkShipmentReady(Long shipmentId);
 }

@@ -13,11 +13,9 @@ import java.util.List;
  * given customer, which ShipmentServiceImpl checks against the packages' contents.
  */
 public record CreateShipmentRequest(
-        @NotNull(message = "customerId is required")
-        Long customerId,
         @NotEmpty(message = "At least one shipment package is required")
         List<@NotNull(message = "a shipment package id must not be null") Long> shipmentPackageIds,
-        @NotBlank(message = "shippingAddress is required")
+
         String shippingAddress,
         String shippingMethod,
         LocalDate requestedDeliveryDate

@@ -124,7 +124,7 @@ public class InventoryReservationTransactionService {
                 // reservation for that line for good.
                 reservationRepository.delete(reservation);
             } catch (IllegalArgumentException | IllegalStateException ile) {
-                log.warn(ile.getMessage() + " - skipping consumption for order item: " + item.orderItemId());
+                log.warn(ile.getMessage() + " - skipping release for order item: " + item.orderItemId());
                 continue;
             }
 

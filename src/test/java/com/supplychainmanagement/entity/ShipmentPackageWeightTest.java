@@ -27,7 +27,7 @@ class ShipmentPackageWeightTest {
     void weighsNothingWithoutItems() {
         ShipmentPackage shipmentPackage = new ShipmentPackage();
 
-        shipmentPackage.applyDefault();
+        shipmentPackage.onCreate();
 
         assertThat(shipmentPackage.getWeight()).isEqualByComparingTo(BigDecimal.ZERO);
     }
@@ -40,7 +40,7 @@ class ShipmentPackageWeightTest {
         shipmentPackage.getItems().add(item("0.25", 4));
         shipmentPackage.getItems().add(item(null, 3));
 
-        shipmentPackage.applyDefault();
+        shipmentPackage.onCreate();
 
         assertThat(shipmentPackage.getWeight()).isEqualByComparingTo("4.0");
     }

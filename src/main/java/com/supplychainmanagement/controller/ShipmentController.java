@@ -104,6 +104,16 @@ public class ShipmentController {
     }
 
     /**
+     * Checks if the shipment is ready for dispatch. A shipment is considered ready if all its packages are packed.
+     * If the shipment is ready, it will be marked as READY and returned in the response.
+     */
+    @PutMapping(path = "/shipments/{shipmentId}/ready", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
+    public ShipmentResponse checkShipmentIsReady(@PathVariable Long shipmentId) {
+        return shipmentService.checkShipmentReady(shipmentId);
+    }
+
+    /**
      * Assigns a distributor to the shipment. This is the step where the shipment is handed over to the distributor for delivery. The distributor must be valid and capable of handling the shipment.
      */
     @PutMapping(path = "/shipments/{shipmentId}/distributor/{distributorId}", version = "1.0")
@@ -111,7 +121,8 @@ public class ShipmentController {
     public ShipmentResponse assignDistributor(@PathVariable Long shipmentId, @PathVariable Long distributorId) {
         return shipmentService.assignDistributor(shipmentId, distributorId);
     }
-    
+
+
 
 /*
     // Packing (/packing/**) lives in PackingController

@@ -33,7 +33,7 @@ public class PackageController {
      * of the package item itself (id, created, quantity, runNo, ...).
      */
     @GetMapping(path = "/packages", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS','WAREHOUSE')")
     public PageResponse<PackageItemResponse> getPackageItems(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,

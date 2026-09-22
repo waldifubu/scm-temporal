@@ -46,7 +46,7 @@ public class Component {
     private UUID sku;
 
     @PrePersist
-    void applyDefaultStatus() {
+    void onCreate() {
         if (this.weight == null || this.weight.compareTo(BigDecimal.ZERO) == 0) {
             this.weight = BigDecimal.valueOf(10.0 + new Random().nextDouble() * 20); // Set a random weight value between 10 and 30
         }

@@ -3,6 +3,7 @@ package com.supplychainmanagement.entity;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -65,7 +66,8 @@ public class Reservation {
     @Column(nullable = false, length = 16)
     private ReservationStatus status;
 
-    private LocalDateTime createdAt = LocalDateTime.now();
+    @CreationTimestamp
+    private LocalDateTime createdAt;
 
     private LocalDateTime expiresAt;
 

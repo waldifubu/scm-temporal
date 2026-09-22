@@ -52,7 +52,7 @@ public class OrderItem {
      * timestamp stale - and one of them did.
      */
     @UpdateTimestamp
-    private LocalDateTime updatedAt = LocalDateTime.now();
+    private LocalDateTime updatedAt;
 
     @Enumerated(EnumType.STRING)
     private FulfillmentStatus fulfillmentStatus = FulfillmentStatus.WAITING;

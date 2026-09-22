@@ -22,7 +22,7 @@ class ProductWeightTest {
         Product product = new Product();
         product.setComponents(List.of(component("1.5"), component("2.25")));
 
-        product.applyDefaultStatus();
+        product.onCreate();
 
         assertThat(product.getWeight()).isEqualByComparingTo("3.75");
     }
@@ -33,7 +33,7 @@ class ProductWeightTest {
         Product product = new Product();
         product.setComponents(null);
 
-        product.applyDefaultStatus();
+        product.onCreate();
 
         assertThat(product.getWeight()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(product.isActive()).isTrue();
@@ -47,7 +47,7 @@ class ProductWeightTest {
         components.add(component(null));
         product.setComponents(components);
 
-        product.applyDefaultStatus();
+        product.onCreate();
 
         assertThat(product.getWeight()).isEqualByComparingTo("2");
     }

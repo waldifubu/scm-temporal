@@ -255,7 +255,7 @@ public class OrderServiceImpl implements OrderService {
         existingOrder.setDueDate(order.getDueDate());
         existingOrder.setStatus(order.getStatus());
         existingOrder.setDeliveryDate(order.getDeliveryDate());
-        existingOrder.setCustomer(order.getCustomer());
+        //existingOrder.setCustomer(order.getCustomer());
         bindCustomer(existingOrder);
 
         applyOrderItems(existingOrder, order.getOrderItems());

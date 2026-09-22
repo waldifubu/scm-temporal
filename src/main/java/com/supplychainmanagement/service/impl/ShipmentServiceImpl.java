@@ -48,16 +48,18 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Transactional
     public ShipmentResponse createShipment(CreateShipmentRequest request) {
         requireValidRequest(request);
-        Customer customer = findCustomer(request.customerId());
 
         List<ShipmentPackage> packages = findPackagesForUpdate(request.shipmentPackageIds());
+        Long customerId = customerOf(packages.getFirst());
+
+        Customer customer = findCustomer(customerId);
         requireShippable(null, customer.getId(), packages);
         requireDistinctPackageNumbers(null, packages);
 
         Shipment shipment = new Shipment();
         shipment.setCustomer(customer);
-        shipment.setStatus(ShipmentStatus.CREATED);
-        shipment.setShippingAddress(request.shippingAddress().trim());
+        // Optional when creating - it has to be there before the shipment is READY.
+        shipment.setShippingAddress(blankToNull(request.shippingAddress()));
         shipment.setShippingMethod(request.shippingMethod());
         shipment.setRequestedDeliveryDate(request.requestedDeliveryDate());
         // Saved before the packages point at it: the shipment id is what their foreign key takes.
@@ -205,11 +207,11 @@ public class ShipmentServiceImpl implements ShipmentService {
     public ShipmentResponse assignDistributor(Long shipmentId, Long distributorId) {
         var shipment = loadShipment(shipmentId);
 
-        var allowedStatuses = Set.of(ShipmentStatus.CREATED, ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED);
+        var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED);
 
         if(!allowedStatuses.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
-                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in CREATED, READY, or DISPATCH_REQUESTED status");
+                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in READY or DISPATCH_REQUESTED status");
         }
 
         // Checked before it is used as one, and on the unproxied instance: a cast up front fails any
@@ -220,25 +222,60 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new APIException(HttpStatus.BAD_REQUEST, "User " + distributorId + " is not a distributor");
         }
         shipment.setDistributor(distributor);
+        shipment.setStatus(ShipmentStatus.DISPATCH_REQUESTED);
+        shipmentRepository.save(shipment);
+        return toResponse(shipment);
+    }
+
+    @Override
+    @Transactional
+    public ShipmentResponse checkShipmentReady(Long shipmentId) {
+        var shipment = loadShipment(shipmentId);
+
+        if (shipment.getShippingAddress() == null || shipment.getShippingAddress().isBlank()) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " has no shipping address");
+        }
+
+        boolean allPackagesPacked = shipment.getPackages().stream()
+                .allMatch(pkg -> pkg.getShipmentPackageStatus() == ShipmentPackageStatus.PACKED);
+
+        if (!allPackagesPacked) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is not ready for dispatch: not all packages are packed");
+        }
+
+        shipment.setStatus(ShipmentStatus.READY);
+        shipmentRepository.save(shipment);
         return toResponse(shipment);
     }
 
     // ------------------------------------------------------------------ checks
 
     /** The rules of the DTO again, for every caller that does not come through a validated controller. */
-    private static void requireValidRequest(CreateShipmentRequest request) {
-        if (request == null || request.customerId() == null) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "customerId is required");
+    /**
+     * The customer a package goes to, read from its first item - a package holds the items of one
+     * order only, so any item names the same customer. requireShippable then checks every package.
+     * An empty package goes to no customer: a 400, not the NoSuchElementException getFirst() throws.
+     */
+    private static Long customerOf(ShipmentPackage shipmentPackage) {
+        if (shipmentPackage.getItems().isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "ShipmentPackage " + shipmentPackage.getId()
+                    + " holds no items, so it goes to no customer");
         }
+        return shipmentPackage.getItems().getFirst().getOrderItem().getOrder().getCustomer().getId();
+    }
+
+    /** Trimmed, and null for a blank value - so it is left out of the response instead of shown as "". */
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static void requireValidRequest(CreateShipmentRequest request) {
         if (request.shipmentPackageIds() == null || request.shipmentPackageIds().isEmpty()) {
             throw new APIException(HttpStatus.BAD_REQUEST, "At least one shipment package is required");
         }
         // Not contains(null): an immutable list such as List.of(...) answers that with an NPE.
         if (request.shipmentPackageIds().stream().anyMatch(Objects::isNull)) {
             throw new APIException(HttpStatus.BAD_REQUEST, "a shipment package id must not be null");
-        }
-        if (request.shippingAddress() == null || request.shippingAddress().isBlank()) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "shippingAddress is required");
         }
     }
 
@@ -362,8 +399,7 @@ public class ShipmentServiceImpl implements ShipmentService {
      */
     private ShipmentResponse toResponse(Shipment shipment) {
         List<Long> ids = shipment.getPackages().stream().map(ShipmentPackage::getId).toList();
-        Map<Long, ShipmentPackage> withContents = ids.isEmpty() ? Map.of()
-                : shipmentPackageRepository.findWithItemsByIdIn(ids).stream()
+        Map<Long, ShipmentPackage> withContents = shipmentPackageRepository.findWithItemsByIdIn(ids).stream()
                         .collect(Collectors.toMap(ShipmentPackage::getId, Function.identity(), (first, same) -> first));
 
         List<ShipmentPackage> packages = shipment.getPackages().stream()

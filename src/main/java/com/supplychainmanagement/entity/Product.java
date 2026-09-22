@@ -35,11 +35,11 @@ public class Product {
     @Column(nullable = true)
     private String description;
 
-    @CreationTimestamp()
-    @Column(nullable = false, insertable = false, updatable = false, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
-    @UpdateTimestamp()
+    @UpdateTimestamp
     @Column(nullable = true, columnDefinition = "TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")
     private LocalDateTime updatedAt;
 
@@ -70,9 +70,7 @@ public class Product {
     private boolean active = true;
 
     @PrePersist
-    void applyDefaultStatus() {
-        this.createdAt = LocalDateTime.now();
-        this.updatedAt = LocalDateTime.now();
+    void onCreate() {
         // A product may be created without components, and a component without a weight - both
         // simply add nothing instead of failing the insert with a NullPointerException.
         weight = components == null ? BigDecimal.ZERO : components.stream()

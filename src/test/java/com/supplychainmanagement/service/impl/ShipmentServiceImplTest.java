@@ -118,8 +118,18 @@ class ShipmentServiceImplTest {
         packages.put(id, shipmentPackage);
         if (customerId != null) {
             customerOfPackage.put(id, customerId);
+            shipmentPackage.getItems().add(itemOfCustomer(customerId));
         }
         return shipmentPackage;
+    }
+
+    /** One item on a line of an order of the given customer - where createShipment finds the customer. */
+    private static PackageItem itemOfCustomer(Long customerId) {
+        Customer owner = new Customer();
+        owner.setId(customerId);
+        PackageItem item = itemOfAnOrder();
+        item.getOrderItem().getOrder().setCustomer(owner);
+        return item;
     }
 
     /** A package item on an order line, with what the response reads from it. */
@@ -146,8 +156,9 @@ class ShipmentServiceImplTest {
         return shipmentPackage(id, ShipmentPackageStatus.PACKED, CUSTOMER_ID);
     }
 
-    private static CreateShipmentRequest create(Long customerId, Long... packageIds) {
-        return new CreateShipmentRequest(customerId, List.of(packageIds), " Musterstr. 1, Berlin ", "DHL",
+    /** The customer is not part of the request - it comes from the packages. */
+    private static CreateShipmentRequest create(Long... packageIds) {
+        return new CreateShipmentRequest(List.of(packageIds), " Musterstr. 1, Berlin ", "DHL",
                 LocalDate.of(2026, 10, 1));
     }
 
@@ -180,13 +191,14 @@ class ShipmentServiceImplTest {
         ShipmentPackage first = packed(5L);
         ShipmentPackage second = packed(7L);
 
-        ShipmentResponse response = service.createShipment(create(CUSTOMER_ID, 7L, 5L));
+        ShipmentResponse response = service.createShipment(create(7L, 5L));
 
         assertThat(first.getShipment()).isNotNull();
         assertThat(second.getShipment()).isSameAs(first.getShipment());
         Shipment shipment = first.getShipment();
         assertThat(shipment.getCustomer()).isSameAs(customer);
-        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CREATED);
+        // The status defaults to CREATED in Shipment's @PrePersist, which a mocked save does not run -
+        // see ShipmentPrePersistTest.
         assertThat(shipment.getShippingAddress()).isEqualTo("Musterstr. 1, Berlin");
 
         assertThat(response.id()).isEqualTo(SHIPMENT_ID);
@@ -206,7 +218,7 @@ class ShipmentServiceImplTest {
         shipmentPackage.addItem(itemOfAnOrder());
         shipmentPackage.complete();
 
-        service.createShipment(create(CUSTOMER_ID, 5L));
+        service.createShipment(create(5L));
 
         assertThat(shipmentPackage.getShipment()).isNotNull();
     }
@@ -216,9 +228,9 @@ class ShipmentServiceImplTest {
         Manager manager = new Manager();
         manager.setId(8L);
         when(userRepository.findById(8L)).thenReturn(Optional.of(manager));
-        packed(5L);
+        shipmentPackage(5L, ShipmentPackageStatus.PACKED, 8L);
 
-        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> service.createShipment(create(8L, 5L)));
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> service.createShipment(create(5L)));
 
         assertStatus(thrown, HttpStatus.BAD_REQUEST);
         assertThat(thrown).hasMessageContaining("User 8 is not a customer");
@@ -227,7 +239,9 @@ class ShipmentServiceImplTest {
 
     @Test
     void answersAnUnknownCustomerWith404() {
-        assertThatThrownBy(() -> service.createShipment(create(99L, 5L)))
+        shipmentPackage(5L, ShipmentPackageStatus.PACKED, 99L);
+
+        assertThatThrownBy(() -> service.createShipment(create(5L)))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
@@ -236,7 +250,7 @@ class ShipmentServiceImplTest {
         packed(5L);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L, 6L, 8L)));
+                () -> service.createShipment(create(5L, 6L, 8L)));
 
         assertStatus(thrown, HttpStatus.NOT_FOUND);
         assertThat(thrown).hasMessageContaining("[6, 8]");
@@ -249,7 +263,7 @@ class ShipmentServiceImplTest {
         shipmentPackage(6L, ShipmentPackageStatus.OPEN, CUSTOMER_ID);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L, 6L)));
+                () -> service.createShipment(create(5L, 6L)));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
         assertThat(thrown).hasMessageContaining("ShipmentPackage 6 is OPEN");
@@ -264,7 +278,7 @@ class ShipmentServiceImplTest {
         taken.setShipment(other);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L)));
+                () -> service.createShipment(create(5L)));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
         assertThat(thrown).hasMessageContaining("already in Shipment 40");
@@ -277,7 +291,7 @@ class ShipmentServiceImplTest {
         shipmentPackage(6L, ShipmentPackageStatus.PACKED, OTHER_CUSTOMER_ID);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L, 6L)));
+                () -> service.createShipment(create(5L, 6L)));
 
         assertStatus(thrown, HttpStatus.BAD_REQUEST);
         assertThat(thrown).hasMessageContaining("ShipmentPackage 6 holds items of customer [4]");
@@ -290,7 +304,7 @@ class ShipmentServiceImplTest {
         shipmentPackage(5L, ShipmentPackageStatus.PACKED, null);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L)));
+                () -> service.createShipment(create(5L)));
 
         assertStatus(thrown, HttpStatus.BAD_REQUEST);
         assertThat(thrown).hasMessageContaining("holds no items");
@@ -303,20 +317,33 @@ class ShipmentServiceImplTest {
         packed(6L).setPackageNumber("PKG-SAME");
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
-                () -> service.createShipment(create(CUSTOMER_ID, 5L, 6L)));
+                () -> service.createShipment(create(5L, 6L)));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
         assertThat(thrown).hasMessageContaining("PKG-SAME");
     }
 
-    /** The DTO rules again, for callers that do not come through the validated controller. */
+    /** The address is optional when creating - a blank one is stored as null, not as "". */
     @Test
-    void refusesARequestWithoutAddress() {
+    void createsAShipmentWithoutAddress() {
         packed(5L);
 
-        assertThatThrownBy(() -> service.createShipment(new CreateShipmentRequest(CUSTOMER_ID, List.of(5L), " ", null, null)))
-                .isInstanceOf(APIException.class)
-                .hasMessageContaining("shippingAddress is required");
+        ShipmentResponse response = service.createShipment(new CreateShipmentRequest(List.of(5L), " ", null, null));
+
+        assertThat(response.shippingAddress()).isNull();
+    }
+
+    /** The customer is read from the first package - an empty one is a 400, not a NoSuchElementException. */
+    @Test
+    void refusesAnEmptyFirstPackage() {
+        shipmentPackage(5L, ShipmentPackageStatus.PACKED, null);
+        packed(6L);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(() -> service.createShipment(create(5L, 6L)));
+
+        assertStatus(thrown, HttpStatus.BAD_REQUEST);
+        assertThat(thrown).hasMessageContaining("ShipmentPackage 5 holds no items");
+        verify(shipmentRepository, never()).save(any());
     }
 
     // ------------------------------------------------------------------ add
@@ -393,6 +420,21 @@ class ShipmentServiceImplTest {
         assertThat(arriving.getShipment()).isNotNull();
     }
 
+    /** Replacing is held to the same customer: a package of another customer never arrives. */
+    @Test
+    void refusesToReplaceWithAPackageOfAnotherCustomer() {
+        ShipmentPackage held = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, held);
+        shipmentPackage(7L, ShipmentPackageStatus.PACKED, OTHER_CUSTOMER_ID);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.replaceShipmentPackages(SHIPMENT_ID, ids(7L)));
+
+        assertStatus(thrown, HttpStatus.BAD_REQUEST);
+        assertThat(thrown).hasMessageContaining("ShipmentPackage 7 holds items of customer [4]");
+        assertThat(shipment.getPackages()).containsExactly(held);
+    }
+
     @Test
     void refusesToEmptyAShipment() {
         existingShipment(ShipmentStatus.CREATED, packed(5L));
@@ -465,7 +507,7 @@ class ShipmentServiceImplTest {
     /** Assigned, and answered with id and name - never the Distributor entity with its password hash. */
     @Test
     void assignsADistributor() {
-        Shipment shipment = loadedShipment(ShipmentStatus.CREATED);
+        Shipment shipment = loadedShipment(ShipmentStatus.READY);
         Distributor distributor = new Distributor();
         distributor.setId(20L);
         distributor.setFirstName("Grace");
@@ -482,7 +524,7 @@ class ShipmentServiceImplTest {
     /** Any other user is a 400 - the cast before the check used to make it a ClassCastException (500). */
     @Test
     void refusesAUserWhoIsNotADistributor() {
-        Shipment shipment = loadedShipment(ShipmentStatus.CREATED);
+        Shipment shipment = loadedShipment(ShipmentStatus.READY);
 
         Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
                 () -> service.assignDistributor(SHIPMENT_ID, CUSTOMER_ID));
@@ -494,10 +536,21 @@ class ShipmentServiceImplTest {
 
     @Test
     void answersAnUnknownDistributorWith404() {
-        loadedShipment(ShipmentStatus.CREATED);
+        loadedShipment(ShipmentStatus.READY);
 
         assertThatThrownBy(() -> service.assignDistributor(SHIPMENT_ID, 99L))
                 .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    /** A shipment that is still being put together gets no distributor yet - READY first. */
+    @Test
+    void assignsNoDistributorToACreatedShipment() {
+        loadedShipment(ShipmentStatus.CREATED);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.assignDistributor(SHIPMENT_ID, 20L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
     }
 
     /** Once in transit the distributor is fixed. */

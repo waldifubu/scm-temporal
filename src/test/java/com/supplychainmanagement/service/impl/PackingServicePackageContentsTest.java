@@ -9,6 +9,7 @@ import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.repository.OrderItemRepository;
@@ -94,6 +95,12 @@ class PackingServicePackageContentsTest {
         item.setOrderItem(line);
         item.setQuantity(1);
         item.setRunNo(runNo);
+        return item;
+    }
+
+    /** The item's order line as it reads once all of it is packed. */
+    private static PackageItem fullyPacked(PackageItem item) {
+        item.getOrderItem().setFulfillmentStatus(FulfillmentStatus.PACKED);
         return item;
     }
 
@@ -399,7 +406,7 @@ class PackingServicePackageContentsTest {
     @Test
     void completesAnOpenPackage() {
         ShipmentPackage shipmentPackage = openPackage();
-        in(shipmentPackage, item(101L, 11L, ORDER_ID));
+        in(shipmentPackage, fullyPacked(item(101L, 11L, ORDER_ID)));
 
         ShipmentPackage completed = service.completePackage(PACKAGE_ID);
 
@@ -421,6 +428,21 @@ class PackingServicePackageContentsTest {
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT))
                 .hasMessageContaining("only an OPEN package can be changed");
+        verify(shipmentPackageRepository, never()).save(any());
+    }
+
+    /** One order per package: an OPEN package holding items of two orders is not completed. */
+    @Test
+    void neverCompletesAPackageWithItemsOfTwoOrders() {
+        ShipmentPackage shipmentPackage = openPackage();
+        in(shipmentPackage, fullyPacked(item(101L, 11L, ORDER_ID)));
+        in(shipmentPackage, fullyPacked(item(102L, 12L, 43L)));
+
+        assertThatThrownBy(() -> service.completePackage(PACKAGE_ID))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessageContaining("ShipmentPackage 5 can only hold items of one order, got items of orders [42, 43]");
+        assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
         verify(shipmentPackageRepository, never()).save(any());
     }
 

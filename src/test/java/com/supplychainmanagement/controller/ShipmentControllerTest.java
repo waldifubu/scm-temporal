@@ -65,7 +65,7 @@ class ShipmentControllerTest {
     void createsAShipmentWith201() throws Exception {
         mockMvc.perform(post("/api/1.0/shipments").contentType(APPLICATION_JSON)
                         .content("""
-                                { "customerId": 3, "shipmentPackageIds": [5, 7],
+                                { "shipmentPackageIds": [5, 7],
                                   "shippingAddress": "Musterstr. 1", "shippingMethod": "DHL",
                                   "requestedDeliveryDate": "2026-10-01" }
                                 """))
@@ -74,22 +74,24 @@ class ShipmentControllerTest {
                 .andExpect(jsonPath("$.customerName").value("Ada Lovelace"));
 
         verify(shipmentService).createShipment(argThat((CreateShipmentRequest request) ->
-                request.customerId() == 3L
-                        && request.shipmentPackageIds().equals(List.of(5L, 7L))
+                request.shipmentPackageIds().equals(List.of(5L, 7L))
                         && LocalDate.of(2026, 10, 1).equals(request.requestedDeliveryDate())));
     }
 
-    /** Customer, at least one package and an address are required - refused before the service. */
+    /**
+     * At least one package is required - refused before the service. The customer is not sent (it
+     * comes from the packages), and the address is optional, so neither shows up as an error.
+     */
     @Test
-    void refusesACreateRequestWithoutCustomerPackagesOrAddress() throws Exception {
+    void refusesACreateRequestWithoutPackages() throws Exception {
         mockMvc.perform(post("/api/1.0/shipments").contentType(APPLICATION_JSON)
                         .content("""
-                                { "shipmentPackageIds": [], "shippingAddress": " " }
+                                { "shipmentPackageIds": [] }
                                 """))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.customerId").value("customerId is required"))
                 .andExpect(jsonPath("$.shipmentPackageIds").value("At least one shipment package is required"))
-                .andExpect(jsonPath("$.shippingAddress").value("shippingAddress is required"));
+                .andExpect(jsonPath("$.customerId").doesNotExist())
+                .andExpect(jsonPath("$.shippingAddress").doesNotExist());
 
         verifyNoInteractions(shipmentService);
     }

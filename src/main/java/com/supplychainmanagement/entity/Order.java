@@ -41,7 +41,7 @@ public class Order {
     @OrderBy("id")
     private Set<OrderItem> orderItems;
 
-    @CreationTimestamp()
+    @CreationTimestamp
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
     private LocalDateTime created;
 
@@ -54,7 +54,7 @@ public class Order {
     private OrderStatus status;
 
     @ManyToOne
-    @JoinColumn(name = "customer_id")
+    @JoinColumn(name = "customer_id", nullable = false)
     private User customer;
 
     @UpdateTimestamp
@@ -70,7 +70,7 @@ public class Order {
     private Integer amountOfItems;
 
     @PrePersist
-    void applyDefaultStatus() {
+    void onCreate() {
         if (status == null) {
             status = OrderStatus.CREATED;
         }

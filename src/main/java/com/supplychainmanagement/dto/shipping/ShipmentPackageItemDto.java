@@ -17,11 +17,13 @@ public record ShipmentPackageItemDto(
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
         LocalDateTime createdAt,
         Long orderItemId,
+        //@TODO: Remove after dev
         Long orderNo,
         String sku,
         Integer quantity,
         Integer totalQuantity,
         UUID runNo,
+        //@TODO: Remove after dev
         FulfillmentStatus fulfillmentStatus
 ) {
 

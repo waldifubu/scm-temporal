@@ -7,6 +7,7 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -35,6 +36,7 @@ public class ShipmentPackage {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @CreationTimestamp
     @Column(nullable = false)
     private LocalDateTime createdAt;
 
@@ -149,12 +151,11 @@ public class ShipmentPackage {
     }
 
     @PrePersist
-    void applyDefault() {
+    void onCreate() {
         if (shipmentPackageStatus == null) {
             shipmentPackageStatus = ShipmentPackageStatus.OPEN;
         }
 
-        createdAt = LocalDateTime.now();
         // A new package holds its items in memory, so this loads nothing.
         recalculateWeight();
         if (length == null) {

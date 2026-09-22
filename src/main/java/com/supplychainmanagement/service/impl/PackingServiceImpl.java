@@ -1,11 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.annotation.NoCheck;
-import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
-import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
-import com.supplychainmanagement.dto.shipping.PackItem;
-import com.supplychainmanagement.dto.shipping.PackageItemIdsRequest;
-import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
+import com.supplychainmanagement.dto.shipping.*;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
@@ -76,6 +72,113 @@ public class PackingServiceImpl implements PackingService {
 
         return new APIException(HttpStatus.BAD_REQUEST,
                 message + ": " + String.join("; ", skipped.stream().distinct().toList()));
+    }
+
+    /**
+     * Adds a freshly packed item to the run - or, when the run already holds an item of the same
+     * order line, adds its quantity to that one instead.
+     * <p>
+     * One item per line and run: two entries of one line in one request belong to the same run, and
+     * as two items in one package they would violate uq_package_item_order_item_run at flush time -
+     * a 500. Folded only after packLine, so every entry is still measured on its own: 5 + 5 + 5 on a
+     * line of 10 packs 10 and skips the third, 8 + 8 is still refused. packedInThisRun keeps counting
+     * correctly, because the grown item carries the sum.
+     *
+     * @return true if the item was added as a new one, false if it was folded into an existing one
+     */
+    private static boolean addToRun(List<PackageItem> inThisRun, PackageItem packed) {
+        Long lineId = packed.getOrderItem().getId();
+        for (PackageItem existing : inThisRun) {
+            if (Objects.equals(existing.getOrderItem().getId(), lineId)) {
+                existing.setQuantity(existing.getQuantity() + packed.getQuantity());
+                return false;
+            }
+        }
+        inThisRun.add(packed);
+        return true;
+    }
+
+    /**
+     * An item may be loose or already in this package - never taken silently out of another one.
+     */
+    private static void requireLooseOrIn(ShipmentPackage shipmentPackage, List<PackageItem> items) {
+        for (PackageItem item : items) {
+            if (item.getShipmentPackage() != null && !isIn(item, shipmentPackage)) {
+                throw new APIException(HttpStatus.CONFLICT, "PackageItem " + item.getId()
+                        + " is already in ShipmentPackage " + item.getShipmentPackage().getId());
+            }
+        }
+    }
+
+    /**
+     * A package goes to one customer, so it holds the items of one order only.
+     */
+    private static void requireOneOrder(Long shipmentPackageId, List<PackageItem> contents) {
+        List<Long> orderIds = contents.stream()
+                .map(item -> item.getOrderItem().getOrder().getId())
+                .distinct()
+                .toList();
+        if (orderIds.size() > 1) {
+            // No id yet while the package is being created.
+            String packageName = shipmentPackageId != null ? "ShipmentPackage " + shipmentPackageId : "A package";
+            throw new APIException(HttpStatus.BAD_REQUEST, packageName
+                    + " can only hold items of one order, got items of orders " + orderIds);
+        }
+    }
+
+    /**
+     * At most one item per order line and packing run in a package - uq_package_item_order_item_run
+     * would otherwise fail at flush with a 500. Items of the same line from different runs may share a
+     * package; the line's quantity there is the sum of its items. Two items of the same line from the
+     * same run only exist when that run listed the line twice.
+     * <p>
+     * A record key rather than groupingBy over the runNo alone: legacy rows may carry no runNo, and
+     * groupingBy refuses a null key. Two such items of one line are refused here although the database
+     * would take them - NULLs are distinct in a unique index - which errs on the safe side.
+     */
+    private static void requireOneItemPerLineAndRun(Long shipmentPackageId, List<PackageItem> contents) {
+        Map<LineRun, List<Long>> itemIdsByLineRun = contents.stream()
+                .collect(Collectors.groupingBy(item -> new LineRun(item.getOrderItem().getId(), item.getRunNo()),
+                        LinkedHashMap::new, Collectors.mapping(PackageItem::getId, Collectors.toList())));
+
+        itemIdsByLineRun.forEach((lineRun, itemIds) -> {
+            if (itemIds.size() > 1) {
+                throw new APIException(HttpStatus.CONFLICT, "OrderItem " + lineRun.orderItemId()
+                        + " from run " + lineRun.runNo() + " would be in ShipmentPackage " + shipmentPackageId
+                        + " twice, as package items " + itemIds);
+            }
+        });
+    }
+
+    /**
+     * True if the item is already in the package, false if it is loose or in another package.
+     */
+    private static boolean isIn(PackageItem item, ShipmentPackage shipmentPackage) {
+        return item.getShipmentPackage() != null
+                && Objects.equals(item.getShipmentPackage().getId(), shipmentPackage.getId());
+    }
+
+    /**
+     * Through the package, which sets both sides of the relation and keeps its weight.
+     */
+    private static void attach(PackageItem item, ShipmentPackage shipmentPackage) {
+        shipmentPackage.addItem(item);
+    }
+
+    private static void detach(PackageItem item, ShipmentPackage shipmentPackage) {
+        shipmentPackage.removeItem(item);
+    }
+
+    /**
+     * Type and dimensions, with the same defaults for a new package and an updated one: no type
+     * means OTHER. The weight is not among them - the package computes it from its contents.
+     */
+    private static void applyPackageFields(ShipmentPackage shipmentPackage, ShipmentPackageType type,
+                                           BigDecimal length, BigDecimal width, BigDecimal height) {
+        shipmentPackage.setShipmentPackageType(type != null ? type : ShipmentPackageType.OTHER);
+        shipmentPackage.setLength(length);
+        shipmentPackage.setWidth(width);
+        shipmentPackage.setHeight(height);
     }
 
     //@TODO: This method is not used anywhere, so it can be removed. The validation is done in packLine and requireValidItems.
@@ -245,30 +348,6 @@ public class PackingServiceImpl implements PackingService {
         return Optional.of(packageItem);
     }
 
-    /**
-     * Adds a freshly packed item to the run - or, when the run already holds an item of the same
-     * order line, adds its quantity to that one instead.
-     * <p>
-     * One item per line and run: two entries of one line in one request belong to the same run, and
-     * as two items in one package they would violate uq_package_item_order_item_run at flush time -
-     * a 500. Folded only after packLine, so every entry is still measured on its own: 5 + 5 + 5 on a
-     * line of 10 packs 10 and skips the third, 8 + 8 is still refused. packedInThisRun keeps counting
-     * correctly, because the grown item carries the sum.
-     *
-     * @return true if the item was added as a new one, false if it was folded into an existing one
-     */
-    private static boolean addToRun(List<PackageItem> inThisRun, PackageItem packed) {
-        Long lineId = packed.getOrderItem().getId();
-        for (PackageItem existing : inThisRun) {
-            if (Objects.equals(existing.getOrderItem().getId(), lineId)) {
-                existing.setQuantity(existing.getQuantity() + packed.getQuantity());
-                return false;
-            }
-        }
-        inThisRun.add(packed);
-        return true;
-    }
-
     private int packedInThisRun(List<PackageItem> inThisRun, OrderItem orderItem) {
         return inThisRun.stream()
                 .filter(item -> Objects.equals(item.getOrderItem().getId(), orderItem.getId()))
@@ -306,6 +385,10 @@ public class PackingServiceImpl implements PackingService {
             if (shipmentPackage.getItems().isEmpty()) {
                 throw nothingToPack("No valid items to pack for this shipment", skipped);
             }
+            // No order number narrows this request down, so the lines may come from any order - but a
+            // package holds the items of one order only. Thrown before anything is saved; the line
+            // statuses packLine already advanced roll back with the transaction.
+            requireOneOrder(null, shipmentPackage.getItems());
         }
 
         return shipmentPackageRepository.save(shipmentPackage);
@@ -392,7 +475,9 @@ public class PackingServiceImpl implements PackingService {
         return shipmentPackageRepository.save(shipmentPackage);
     }
 
-    /** Takes one item out of the package; it goes back to being loose. */
+    /**
+     * Takes one item out of the package; it goes back to being loose.
+     */
     @Override
     @Transactional
     public ShipmentPackage removePackageItem(Long shipmentPackageId, Long packageItemId) {
@@ -425,11 +510,30 @@ public class PackingServiceImpl implements PackingService {
             throw new APIException(HttpStatus.BAD_REQUEST,
                     "ShipmentPackage " + shipmentPackageId + " holds no items and cannot be completed");
         }
+
+        // One order per package - the same check, and the same 400, as every other way into a package.
+        requireOneOrder(shipmentPackageId, shipmentPackage.getItems());
+
+        shipmentPackage.getItems().forEach(item -> {
+            /**
+             * Every item in a completed package must be packed, so the order line is PACKED and the
+             * quantity is counted. A loose item that was packed but then taken out of its packagege
+             * would still be PACKED, but it is not in a completed package and cannot be shipped. A PACKING item is still open and could be packed again, so it is not ready
+             */
+            if (item.getOrderItem().getFulfillmentStatus() != FulfillmentStatus.PACKED) {
+                throw new APIException(HttpStatus.CONFLICT, "OrderItem " + item.getOrderItem().getId()
+                        + " is " + item.getOrderItem().getFulfillmentStatus()
+                        + ", only PACKED items can be in a completed ShipmentPackage");
+            }
+        });
+
         shipmentPackage.complete();
         return shipmentPackageRepository.save(shipmentPackage);
     }
 
-    /** Locked, and only while OPEN - a packed or dispatched package keeps what it holds. */
+    /**
+     * Locked, and only while OPEN - a packed or dispatched package keeps what it holds.
+     */
     private ShipmentPackage findOpenPackageForUpdate(Long shipmentPackageId) {
         ShipmentPackage shipmentPackage = shipmentPackageRepository.findForUpdateById(shipmentPackageId)
                 .orElseThrow(() -> new ResourceNotFoundException("ShipmentPackage", "id", shipmentPackageId));
@@ -441,7 +545,9 @@ public class PackingServiceImpl implements PackingService {
         return shipmentPackage;
     }
 
-    /** Locked, each id once; an id that does not exist is a 404 naming every missing one. */
+    /**
+     * Locked, each id once; an id that does not exist is a 404 naming every missing one.
+     */
     private List<PackageItem> findPackageItemsForUpdate(List<Long> packageItemIds) {
         Set<Long> ids = new TreeSet<>(packageItemIds);
         if (ids.isEmpty()) {
@@ -455,71 +561,6 @@ public class PackingServiceImpl implements PackingService {
             throw new APIException(HttpStatus.NOT_FOUND, "PackageItem not found: " + missing);
         }
         return items;
-    }
-
-    /** An item may be loose or already in this package - never taken silently out of another one. */
-    private static void requireLooseOrIn(ShipmentPackage shipmentPackage, List<PackageItem> items) {
-        for (PackageItem item : items) {
-            if (item.getShipmentPackage() != null && !isIn(item, shipmentPackage)) {
-                throw new APIException(HttpStatus.CONFLICT, "PackageItem " + item.getId()
-                        + " is already in ShipmentPackage " + item.getShipmentPackage().getId());
-            }
-        }
-    }
-
-    /** A package goes to one customer, so it holds the items of one order only. */
-    private static void requireOneOrder(Long shipmentPackageId, List<PackageItem> contents) {
-        List<Long> orderIds = contents.stream()
-                .map(item -> item.getOrderItem().getOrder().getId())
-                .distinct()
-                .toList();
-        if (orderIds.size() > 1) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "ShipmentPackage " + shipmentPackageId
-                    + " can only hold items of one order, got items of orders " + orderIds);
-        }
-    }
-
-    /** One order line from one packing run - the key of uq_package_item_order_item_run. */
-    private record LineRun(Long orderItemId, UUID runNo) {
-    }
-
-    /**
-     * At most one item per order line and packing run in a package - uq_package_item_order_item_run
-     * would otherwise fail at flush with a 500. Items of the same line from different runs may share a
-     * package; the line's quantity there is the sum of its items. Two items of the same line from the
-     * same run only exist when that run listed the line twice.
-     * <p>
-     * A record key rather than groupingBy over the runNo alone: legacy rows may carry no runNo, and
-     * groupingBy refuses a null key. Two such items of one line are refused here although the database
-     * would take them - NULLs are distinct in a unique index - which errs on the safe side.
-     */
-    private static void requireOneItemPerLineAndRun(Long shipmentPackageId, List<PackageItem> contents) {
-        Map<LineRun, List<Long>> itemIdsByLineRun = contents.stream()
-                .collect(Collectors.groupingBy(item -> new LineRun(item.getOrderItem().getId(), item.getRunNo()),
-                        LinkedHashMap::new, Collectors.mapping(PackageItem::getId, Collectors.toList())));
-
-        itemIdsByLineRun.forEach((lineRun, itemIds) -> {
-            if (itemIds.size() > 1) {
-                throw new APIException(HttpStatus.CONFLICT, "OrderItem " + lineRun.orderItemId()
-                        + " from run " + lineRun.runNo() + " would be in ShipmentPackage " + shipmentPackageId
-                        + " twice, as package items " + itemIds);
-            }
-        });
-    }
-
-    /** True if the item is already in the package, false if it is loose or in another package. */
-    private static boolean isIn(PackageItem item, ShipmentPackage shipmentPackage) {
-        return item.getShipmentPackage() != null
-                && Objects.equals(item.getShipmentPackage().getId(), shipmentPackage.getId());
-    }
-
-    /** Through the package, which sets both sides of the relation and keeps its weight. */
-    private static void attach(PackageItem item, ShipmentPackage shipmentPackage) {
-        shipmentPackage.addItem(item);
-    }
-
-    private static void detach(PackageItem item, ShipmentPackage shipmentPackage) {
-        shipmentPackage.removeItem(item);
     }
 
     /**
@@ -537,14 +578,8 @@ public class PackingServiceImpl implements PackingService {
     }
 
     /**
-     * Type and dimensions, with the same defaults for a new package and an updated one: no type
-     * means OTHER. The weight is not among them - the package computes it from its contents.
+     * One order line from one packing run - the key of uq_package_item_order_item_run.
      */
-    private static void applyPackageFields(ShipmentPackage shipmentPackage, ShipmentPackageType type,
-                                           BigDecimal length, BigDecimal width, BigDecimal height) {
-        shipmentPackage.setShipmentPackageType(type != null ? type : ShipmentPackageType.OTHER);
-        shipmentPackage.setLength(length);
-        shipmentPackage.setWidth(width);
-        shipmentPackage.setHeight(height);
+    private record LineRun(Long orderItemId, UUID runNo) {
     }
 }

@@ -17,7 +17,7 @@ public enum RoleEnum {
         this.label = label;
     }
 */
-
+    //@TODO: Really required?
     public static boolean contains(String s) {
         return Arrays.stream(values()).anyMatch(choice -> choice.name().equalsIgnoreCase(s));
     }

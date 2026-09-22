@@ -207,20 +207,24 @@ controller per service, named after what it does (`PickingController`, `PackingC
 - **Shipments group PACKED packages for one customer** (`ShipmentServiceImpl`, `/shipments`). Built
   like a package's contents: `ShipmentPackage.shipment` owns the foreign key, `Shipment.packages` has
   no setter, no cascade and no orphanRemoval, and packages move through `addPackage`/`removePackage`
-  - taken out, a package is free again, never deleted. A shipment is never empty: created with a
-  `customerId` and at least one package, and neither `PUT .../packages []` nor removing the last one
-  is allowed (400). The customer has to be a `Customer` (checked after `Hibernate.unproxy`), and every
-  package has to hold items of an order of that customer - `findCustomersByShipmentPackageIdIn`
-  answers that for all packages in one query; an empty package has no row and is refused. Only
-  `PACKED` packages (409), none from another shipment (409), no package number twice
-  (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up front), and only a
-  `CREATED` shipment changes (409). Shipment first, then its packages in ascending id order, both
-  `FOR UPDATE`. The list (`GET /shipments`, optional `status`) is two queries like the package list:
-  the page with the customer, then the packages of that page. A distributor is assigned with
-  `PUT /shipments/{id}/distributor/{distributorId}` (`assignDistributor`, only while `CREATED`,
-  `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor`, checked on the unproxied
-  instance before it is used as one - 400 otherwise). `ShipmentResponse` names customer and
-  distributor by id and name only, never the `User` entities.
+  - taken out, a package is free again, never deleted. A shipment is never empty: created with at
+  least one package, and neither `PUT .../packages []` nor removing the last one is allowed (400).
+  The request carries **no customer** - it is read from the first package's first item
+  (`customerOf`, an empty first package is a 400) and has to be a `Customer` (checked after
+  `Hibernate.unproxy`); every package then has to hold items of an order of that customer -
+  `findCustomersByShipmentPackageIdIn` answers that for all packages in one query. A package holds
+  the items of one order only (`requireOneOrder`, 400 on every way in, completing included), so it
+  always has exactly one customer. Only `PACKED` packages (409), none from another shipment (409), no
+  package number twice (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up
+  front), and only a `CREATED` shipment changes its packages or data (409). Shipment first, then its
+  packages in ascending id order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
+  `@PrePersist`. `shippingAddress` is optional when creating (blank is stored as `null` and left out
+  of the JSON) but required for `GET /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
+  also requires every package `PACKED`). A distributor is assigned with
+  `PUT /shipments/{id}/distributor/{distributorId}` only while `READY` or `DISPATCH_REQUESTED`; the
+  user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. The list
+  (`GET /shipments`, optional `status`) is two queries like the package list. `ShipmentResponse`
+  names customer and distributor by id and name only, never the `User` entities.
 - **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
   contents (0 without items) and has no setter; no request carries a weight. The package keeps it
   itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's

@@ -9,6 +9,8 @@ import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 import org.hibernate.annotations.UuidGenerator;
 
 import java.time.LocalDateTime;
@@ -36,6 +38,7 @@ public class RequestComponent {
 
     private int qty;
 
+    @CreationTimestamp
     private LocalDateTime requestDate;
 
     @JsonIgnore
@@ -48,6 +51,7 @@ public class RequestComponent {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String comment;
 
+    @UpdateTimestamp
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private LocalDateTime updated;
 }

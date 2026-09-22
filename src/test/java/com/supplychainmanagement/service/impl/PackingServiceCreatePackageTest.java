@@ -167,6 +167,26 @@ class PackingServiceCreatePackageTest {
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKING);
     }
 
+    /**
+     * A package holds the items of one order only. A custom package names no order, so the lines
+     * may come from anywhere - two orders in one request are refused before anything is saved.
+     */
+    @Test
+    void refusesACustomPackageWithLinesOfTwoOrders() {
+        line = line(10, FulfillmentStatus.PICKED);
+        OrderItem other = line(12L, 5, FulfillmentStatus.PICKED);
+        line.getOrder().setId(1L);
+        other.getOrder().setId(2L);
+        when(shipmentPackageRepository.sumQuantityByOrderItemId(anyLong())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.createCustomShipment(
+                request(new PackItem(LINE_ID, 2), new PackItem(other.getId(), 2))))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
+                .hasMessageContaining("A package can only hold items of one order, got items of orders [1, 2]");
+        verify(shipmentPackageRepository, never()).save(any());
+    }
+
     /** Loose items are folded the same way - one item per line and run. */
     @Test
     void foldsTheSameLineTwiceIntoOneLooseItem() {

@@ -2,8 +2,9 @@
 
 A Spring Boot demo application modeling a simplified supply-chain process: customers place orders,
 orders are checked against warehouse stock, inventory is reserved, and the reserved goods are then
-picked, packed and made ready for dispatch. It exposes a versioned JSON REST API secured with JWT,
-plus a classic server-rendered Thymeleaf site.
+picked and packed. Closed packages are grouped into shipments for one customer and handed to a
+distributor. It exposes a versioned JSON REST API secured with JWT, plus a classic server-rendered
+Thymeleaf site.
 
 > This document covers the **backend/REST API**. The project also ships a Vaadin-based admin UI
 > (`src/main/java/com/supplychainmanagement/vaadin`) and a React frontend (`src/main/frontend`),
@@ -13,6 +14,7 @@ plus a classic server-rendered Thymeleaf site.
 
 - [Order workflow](#order-workflow)
 - [Fulfillment workflow](#fulfillment-workflow)
+- [Packages and shipments](#packages-and-shipments)
 - [Tech stack](#tech-stack)
 - [Getting started](#getting-started)
 - [Configuration](#configuration)
@@ -42,6 +44,7 @@ stateDiagram-v2
 
     pre --> REJECTED : POST /orders/{orderNo}/reject
     pre --> IN_FULFILLMENT : POST /orders/{orderId}/reserve
+    IN_FULFILLMENT --> APPROVED : POST /orders/{orderId}/release - nothing held, no line picked
 
     IN_FULFILLMENT --> READY_FOR_DISPATCH
     READY_FOR_DISPATCH --> IN_TRANSIT
@@ -81,12 +84,13 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   least one line.
 - **Back to `APPROVED`** is the one backwards transition: `releaseItems` returns an order to
   `APPROVED` once the release leaves it holding no reservation at all — the mirror image of the
-  `IN_FULFILLMENT` step. A partial release leaves the status alone. Like every other transition it
-  publishes an event, and it does so even when the acting user cannot be resolved (a scheduled sweep
-  runs as `"system"`), writing the audit row with a null `user_id`.
+  `IN_FULFILLMENT` step. It does **not** when any line is already past `RESERVED`: a picked line
+  holds only a `CONSUMED` reservation, which does not count as active, but its stock has left the
+  shelf. A partial release leaves the status alone. Like every other transition it publishes an
+  event, and it does so even when the acting user cannot be resolved (a scheduled sweep runs as
+  `"system"`), writing the audit row with a null `user_id`.
 - **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED` → `COMPLETED`** and **`CANCELLED`** are
-  defined in `OrderStatus` but not yet wired up at the *order* level — the per-line equivalent up to
-  `READY_FOR_DISPATCH` is implemented, see below and
+  defined in `OrderStatus` but not yet wired up at the *order* level — see below and
   [Known gaps](#known-gaps--work-in-progress).
 - Every status change goes through `OrderServiceImpl.update()` or `FulfillmentServiceImpl`, both of
   which publish an `OrderStatusChangedEvent`. `OrderStatusChangedListener` picks this up
@@ -104,7 +108,7 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
 ## Fulfillment workflow
 
 Independently of the order-level status, each **`OrderItem`** tracks its own, finer-grained
-`FulfillmentStatus`. Unlike the order-level chain, this one is implemented end to end:
+`FulfillmentStatus`. It is implemented up to `PACKED`:
 
 ```mermaid
 stateDiagram-v2
@@ -114,20 +118,24 @@ stateDiagram-v2
     RESERVED --> WAITING : POST /orders/{orderId}/release
     RESERVED --> PICKING : POST /picking/{reservationId}
     PICKING --> PICKED : same call, after the stock was consumed
-    PICKED --> PACKING : POST /packing/{orderNo} or POST /packing - partial quantity
-    PICKED --> PACKED : POST /packing/{orderNo} or POST /packing - full quantity
+    PICKED --> PACKING : POST /packing/... - partial quantity
+    PICKED --> PACKED : POST /packing/... - full quantity
     PACKING --> PACKED : a later package or run fills the rest
-    PACKED --> READY_FOR_DISPATCH : POST /dispatch/{reservationId}
+    PACKED --> READY_FOR_DISPATCH : readyForDispatch() - no endpoint at the moment
 ```
 
-Which service owns which stretch:
+Which service owns which stretch — one controller per service, named after what it does:
 
 | Stretch | Service | Controller |
 |---------|---------|------------|
+| availability check, production | `ProductionService` | `ProductionController` |
 | `WAITING ⇄ RESERVED` | `FulfillmentService` | `InventoryController` |
 | `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
-| `PICKED → PACKED` | `PackingService` | `PackingController` |
+| `PICKED → PACKED`, package contents, completing a package | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`) |
+| reading packages and package items | `PackageQueryService` | `PackageController` |
+| packages → shipment, distributor | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
 | `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | — (endpoint currently commented out) |
+| dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
 
 - **Reservation is partial.** Lines that a single storehouse can cover become `RESERVED`; the rest
   stay `WAITING` and are attempted again on the next reserve call, which skips whatever is already
@@ -139,19 +147,23 @@ Which service owns which stretch:
   no active reservation) the pick is aborted with **400** instead of marking the line `PICKED`.
   `consume` writes `CONSUMED` in its own transaction and `pick` does not write the reservation a
   second time — on MariaDB 11.6+ (`innodb_snapshot_isolation`) that second update fails with
-  `Record has changed since last read in table 'reservation'`.
+  `Record has changed since last read in table 'reservation'`. Picking a line that is not `RESERVED`
+  is rejected with **400**, not silently skipped.
+- **The packing work list** is `GET /order-items`: order lines by fulfillment status, `PICKED` by
+  default, sorted by `updatedAt`, each with its `reservationId`.
 - **Three ways to pack.** `POST /packing/{orderNo}` builds a `ShipmentPackage` together with its
-  items; `items` is required. `POST /packing` creates loose `PackageItem`s without a package — every
-  item of one call shares a `runNo`, which is how a packing run is found again, and the lines may
-  belong to different orders. `POST /package/empty` creates a package without items; `items` may be
-  left out. All three set the package up alike (type falling back to `OTHER`, dimensions, generated
-  package number).
+  items; `items` is required and every line has to belong to that order. `POST /packing` creates
+  loose `PackageItem`s without a package — every item of one call shares a `runNo`, which is how a
+  packing run is found again, and the lines may belong to different orders. `POST /packing/shipment`
+  creates a package; `items` may be left out, and items that are sent are validated and packed like
+  the others, without being tied to an order number. All three set the package up alike (type
+  falling back to `OTHER`, dimensions, generated package number).
 - **Packing is quantity-aware**, the same for packages and loose items. Every line is read locked
   and handled in ascending id order, quantities before status:
   1. unknown order item → **404**; a line of another order (`/packing/{orderNo}` only) → **400**
   2. *already packed* counts every package item of the line, in a package or loose, plus what earlier
      entries of the same request hold
-  3. line already full → skipped (`5, 5, 5` on 10 packs two items)
+  3. line already full → skipped
   4. more than the room left → **400**, never clipped to the rest
   5. status not `PICKED`/`PACKING` → skipped — so `PACKED` and `READY_FOR_DISPATCH` lines are never
      packed again, even without package items
@@ -160,15 +172,10 @@ Which service owns which stretch:
   An empty list or a `qty` below 1 is rejected with **400** before any line is locked. When nothing
   at all could be packed, the 400 names every skipped line with its reason, e.g.
   `No valid items to pack for order 1042: OrderItem 11 is RESERVED, only PICKED or PACKING can be packed`.
-- **A package knows three weights.** `weight` is the declared one and is stored as `0` when the
-  request carries none; `contentWeight` sums product weight × packed quantity; `packageWeight` is
-  content plus the tare of its `ShipmentPackageType` (a Euro pallet brings 25 kg of its own, a pallet
-  cage 70) — it does not consult `weight`. Do not add a `getWeight()` of your own to
-  `ShipmentPackage`: a hand-written getter suppresses Lombok's and made the declared weight write-only
-  once already.
-- Picking and dispatch validate the status they are coming from and answer **400** with a message
-  when the line is not in the expected one — picking a line that is not `RESERVED`, or dispatching one
-  that is not `PACKED`, is rejected rather than silently skipped. Packing skips instead, see above.
+- **One item per line and run.** Each entry of a request is measured on its own, but what it packs is
+  folded into the item of the same line already created in that call: `6 + 4` on a line of 10 becomes
+  one item of 10, `5, 5, 5` packs one item of 10 and skips the third entry, `8 + 8` is still a 400.
+  Two items of one line from the same run would violate `uq_package_item_order_item_run`.
 
 ### Reservation flow in detail
 
@@ -190,9 +197,9 @@ sequenceDiagram
     end
     FS->>IS: reserveWithRetry(orderId, coverableItems)
     IS->>TX: reserve(orderId, items) [REQUIRES_NEW]
-    TX->>DB: findActive(orderId) - which SKUs are already held
+    TX->>DB: findActive(orderId) - which order lines already hold a reservation
     loop per item
-        TX->>TX: skip if SKU already reserved, or stock no longer sufficient
+        TX->>TX: skip if the line is already reserved, or stock no longer sufficient
         TX->>DB: Stock.reserve(qty) + save Reservation(ACTIVE, order_item_id)
     end
     TX-->>IS: ReservationResult(created, active)
@@ -252,14 +259,13 @@ repeat call safe.
 
 Releasing (`releaseItems()` / `InventoryReservationTransactionService.release()`) frees the reserved
 stock and **deletes** the `Reservation` row (rather than just flipping it to `RELEASED`) — the
-unique constraint above would otherwise permanently block re-reserving the same
-order/SKU/storehouse combination.
+unique constraint above would otherwise permanently block re-reserving the same order line.
 
 ### Scheduled routines
 
 `AutomaticReservationService` (`service/business`) holds what runs without a request.
 `@EnableScheduling` is switched on by `AutomaticProductionService`, so a `@Scheduled` on a bean is
-enough. During development the `@Scheduled` annotations of these three are commented out; the
+enough. During development the `@Scheduled` annotations of these four are commented out; the
 intervals are the ones they carry:
 
 | Routine | Does | Interval |
@@ -267,8 +273,9 @@ intervals are the ones they carry:
 | `checkCreatedOrders()` | checks coverage per `CREATED` order and acknowledges the ones whose every line is coverable | every 300 s |
 | `tryToReserve()` | calls `reserveItems` for every order in `IN_FULFILLMENT` | every 150 s |
 | `tryToRelease()` | calls `releaseItems` for every order holding a reservation past `expiresAt` (`findOrdersWithExpiredReservations()`) — **all** of that order's active reservations | every 150 s |
+| `tryToDelete()` | deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders two days after `expiresAt` — finds nothing today, no order reaches that status | every 150 s |
 
-All three change state; each works the first 100 orders of its status. `checkItems` itself still
+All four change state; each works the first 100 orders of its status. `checkItems` itself still
 writes nothing — it is the `acknowledge` call after it that does.
 
 `AutomaticProductionService.assemble()` is active: every 150 s it runs `produce()`, which builds
@@ -289,6 +296,100 @@ more than elsewhere: `releaseItems` walks `orderItems` only after the stock has 
 in its own `REQUIRES_NEW` transaction, so a lazy failure there would leave the lines on `RESERVED`
 over reservations that are already gone.
 
+## Packages and shipments
+
+Packing produces `ShipmentPackage`s holding `PackageItem`s; closed packages of one customer are then
+grouped into a `Shipment`. Both levels follow the same pattern: the child owns the foreign key, it
+outlives its parent (taken out, it is free again — never deleted), and only the parent's methods
+change the relation.
+
+```mermaid
+stateDiagram-v2
+    state "ShipmentPackage" as sp {
+        [*] --> OPEN : POST /packing/{orderNo}, POST /packing/shipment
+        OPEN --> OPEN : add / replace / remove items, PUT package data
+        OPEN --> PACKED : PUT /packing/shipment/{id}/complete
+        PACKED --> DISPATCHED : not implemented yet
+    }
+    state "Shipment" as sh {
+        [*] --> CREATED : POST /shipments
+        CREATED --> CREATED : add / replace / remove packages, PUT shipment data
+        CREATED --> READY : not implemented yet
+    }
+```
+
+### Changing what a package holds
+
+Only an **`OPEN`** package can change (otherwise **409**). Items move between *loose* and *in a
+package* — there is no quantity check and no status change on the order line, the items were counted
+as packed when they were created.
+
+| Endpoint | Does |
+|----------|------|
+| `POST /packing/shipment/{id}/items` | puts loose items into the package; items already in it stay, so a repeat changes nothing |
+| `PUT /packing/shipment/{id}/items` | makes the package hold exactly these items; the others become loose, `[]` empties it |
+| `DELETE /packing/shipment/{id}/items/{itemId}` | takes one item out; it becomes loose |
+| `PUT /packing/shipment/{id}` | the package's own data: type, dimensions, package number |
+
+The id lists accept both `{"packageItemIds": [101, 102]}` and the bare array `[101, 102]`. An item
+already in another package is a **409** (never moved silently), a package holds the items of one
+order only (**400**), and at most one item per order line **and run** (**409**) — the key of
+`uq_package_item_order_item_run (shipment_package_id, order_item_id, run_no)`, so one line packed in
+two runs may share a package.
+
+### Completing a package
+
+`PUT /packing/shipment/{id}/complete` takes a package from `OPEN` to `PACKED` and stamps `packedAt`;
+from then on its contents are fixed and it can go into a shipment. A package without items is
+refused with **400** — it would go to no customer and could not be filled any more. Not `OPEN` is a
+**409**.
+
+### Package weight
+
+A package's `weight` is **computed, never sent** — no request carries a weight. It is the weight of
+the contents (product weight × packed quantity, 0 without items), kept current by the package itself:
+on insert, and through `addItem`/`removeItem` whenever the contents change. `packageWeight` adds the
+tare of the `ShipmentPackageType` (a Euro pallet brings 25 kg of its own, a pallet cage 70). Do not add
+a `getWeight()` of your own to `ShipmentPackage`: a hand-written getter suppresses Lombok's.
+
+### Shipments
+
+A shipment groups **`PACKED`** packages for **one customer** and is never empty:
+
+```json
+POST /api/1.0/shipments
+{
+  "customerId": 3,
+  "shipmentPackageIds": [5, 7],
+  "shippingAddress": "Musterstr. 1, 12345 Berlin",
+  "shippingMethod": "DHL",
+  "requestedDeliveryDate": "2026-10-01"
+}
+```
+
+| Rule | Answer |
+|------|--------|
+| `customerId`, at least one package, `shippingAddress` missing | **400** |
+| customer unknown / not a `Customer` | **404** / **400** |
+| a package id unknown | **404**, naming every missing id |
+| package not `PACKED` | **409** |
+| package already in another shipment | **409** |
+| package empty, or holding items of another customer's order | **400** |
+| two packages with the same package number | **409** (`uk_shipment_package_number` would otherwise fail the flush) |
+| emptying the shipment (`PUT .../packages []`, removing the last package) | **400** |
+| shipment no longer `CREATED` | **409** |
+
+Packages are added, replaced and removed through `POST`/`PUT /shipments/{id}/packages` (wrapped or
+bare array) and `DELETE /shipments/{id}/packages/{packageId}`; `PUT /shipments/{id}` changes address,
+method and requested date. The customer is fixed — the packages are bound to it.
+
+A distributor is assigned with `PUT /shipments/{id}/distributor/{distributorId}` while the shipment is
+`CREATED`, `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor` (**400** otherwise).
+
+`ShipmentResponse` carries the shipment's data, customer and distributor as id and name, the gross
+`weight` of all packages and the packages with their contents. The list (`GET /shipments`, optional
+`status`) answers `ShipmentListDto` rows with the package ids only.
+
 ## Tech stack
 
 | Layer          | Technology                                                                  |
@@ -300,7 +401,7 @@ over reservations that are already gone.
 | Auth           | JWT (`jjwt`), BCrypt/Argon2 via BouncyCastle                                 |
 | Mapping        | MapStruct, Lombok                                                           |
 | Rate limiting  | Bucket4j                                                                    |
-| Testing        | JUnit 5, Mockito, AssertJ                                                   |
+| Testing        | JUnit 5, Mockito, AssertJ, standalone MockMvc                               |
 | Build          | Maven (wrapper included: `mvnw` / `mvnw.cmd`)                               |
 
 > **Jackson 2 and 3 coexist here.** Spring Boot 4.1 auto-configures **Jackson 3**
@@ -308,7 +409,8 @@ over reservations that are already gone.
 > `tools.jackson.databind.ObjectMapper`, there is no bean for the Jackson 2 one. Jackson 2
 > (`com.fasterxml.jackson.databind`) stays on the classpath because `jjwt-jackson` needs it; do not
 > remove that dependency. The **annotations** did not move: `@JsonInclude`, `@JsonFormat`,
-> `@JsonIgnore` are still `com.fasterxml.jackson.annotation.*` and are honoured by Jackson 3.
+> `@JsonIgnore`, `@JsonCreator` are still `com.fasterxml.jackson.annotation.*` and are honoured by
+> Jackson 3.
 
 `spring-boot-starter-webflux` is still a declared dependency but no longer used by any code — see
 [Synchronous by design](#synchronous-by-design).
@@ -372,7 +474,7 @@ Configuration is split across Spring profiles:
 > with the entity unless you migrate it manually (verify with `information_schema` /
 > `SHOW CREATE TABLE`, don't assume the entity mapping matches what's actually in the DB).
 >
-> The `reservation.order_item_id` column is the current example: `update` adds the column and then
+> The `reservation.order_item_id` column is the classic example: `update` adds the column and then
 > fails to add its foreign key, because existing rows carry a value that references nothing. Adding
 > a `NOT NULL` column to a populated table leaves MariaDB's default (`0`) behind, and `0` is not a
 > valid `order_items.id`. Such a column has to be added nullable, backfilled, and only then
@@ -422,27 +524,39 @@ parameters `page` / `size` / `sort` / `order`, assembled into a `PageRequest`, a
 
 `total` carries the overall count the frontend dataProvider needs for pagination. Defaults are
 `page=0`, `size=25`, `order=ASC`; the default `sort` field differs per endpoint (`id` for orders,
-`expiresAt` for the picking list, `updatedAt` for order lines, `sku` for stock).
+packages and shipments, `expiresAt` for the picking list, `updatedAt` for order lines, `sku` for
+stock).
 
 Note that `sort` is applied as a JPQL path, so only fields resolvable under the query's root alias
 work. On a projection query a sort over a joined column (`productName` → `p.name`) will fail.
 
+Lists whose rows carry a collection — packages with their items, shipments with their packages —
+are two queries: the page itself, then the rows of that page with the collection fetched. A
+collection fetch in the page query would make Hibernate page in memory.
+
 ### Responses are DTOs, not entities
 
 List and detail endpoints answer with records under `dto/`, never with JPA entities. This is not
-cosmetic — handing an entity to the response writer breaks in two ways at once:
+cosmetic — handing an entity to the response writer breaks in several ways at once:
 
 - **N+1 queries.** `spring.jpa.open-in-view` is left at its default (`true`), so the session is
   still open while the response is written and every LAZY reference resolves silently, one query per
   row and per level.
-- **Cycles.** `Reservation → orderItem → order → orderItems → orderItem …` closes on itself, and
-  Jackson cannot get out of it.
+- **Cycles.** `Reservation → orderItem → order → orderItems → orderItem …` closes on itself, and so
+  does `ShipmentPackage → items → shipmentPackage`; Jackson cannot get out of it.
 - **Closed sessions.** Whatever comes back from a `REQUIRES_NEW` transaction — the whole inventory
   layer — was loaded by a session that has already closed. Its LAZY references cannot be resolved
   any more, and serializing it fails with `Could not initialize proxy … - no session`; open-in-view
-  does not help, its session is a different one. `POST /orders/{orderId}/release` hit exactly this.
-  Both reserve and release now answer with `ReservationDto`, which carries related entities as ids
-  only — Hibernate serves `getId()` on a proxy without initializing it.
+  does not help, its session is a different one. Both reserve and release answer with
+  `ReservationDto`, which carries related entities as ids only — Hibernate serves `getId()` on a
+  proxy without initializing it.
+- **Leaks.** A `User` entity carries the password hash and the roles. Customer and distributor
+  appear in responses as id and name only.
+
+The same holds for **request bodies**: a controller binds a record under `dto/`, never an entity —
+bound from JSON, an entity accepts every field it has. `UserController` used to take `User` and with
+it `id`, `userType` and full `Role` objects; it now takes `UserRequestDto`, roles as names
+(`["MANAGER"]`, case-insensitive).
 
 The picking list is the reference example: `PickingOrderDto` is filled by a constructor projection
 in `ReservationRepository.findPickingOrders()`, which is **one query** for the page regardless of
@@ -456,8 +570,23 @@ drop rows, so a plain `count(r)` would report a larger total than the page query
 `GET /order-items` follows the same pattern with `OrderItemListDto`, and adds the line's
 `reservationId` through `left join Reservation r on r.orderItem = oi`: an entity join with `ON`,
 because `OrderItem` has no reference to its reservation, and a left one, because a `WAITING` line has
-none — `reservationId` is `null` then. `POST /packing` answers with `PackageItemResponse`s (`id`,
-`orderItemId`, `sku`, `quantity`, `runNo`, `shipmentPackageId`) in the paged shape.
+none — `reservationId` is `null` then.
+
+A package item is answered as `PackageItemResponse` (`id`, `createdAt`, `orderItemId`, `orderNo`,
+`sku`, `quantity`, `totalQuantity`, `siblings`, `runNo`, `shipmentPackageId`, `fulfillmentStatus`).
+`siblings` — the ids of the other package items of the same order line — is computed, not stored:
+`PackageItemResponseAssembler` looks it up for all items of a response in one query. Inside a
+package row the items are `ShipmentPackageItemDto` (no package id — the row is the package).
+
+### Error responses
+
+Two shapes are in use. `PickingController` and `PackingController` catch `APIException` themselves
+and answer `{"message": "..."}` at the exception's status. Everything else — a
+`ResourceNotFoundException` there too, and all of `PackageController`, `ShipmentController` and
+`UserController` — goes through `GlobalExceptionHandler` and answers `ErrorDetails` with an
+`errorCode`; a failed bean validation comes back as **400** with one message per field, e.g.
+`{"items[0].qty": "qty must be at least 1"}`. New endpoints use the global handler; the
+controller-local try/catch is legacy.
 
 ### Synchronous by design
 
@@ -478,18 +607,30 @@ Only commented-out code still mentions `Mono` (`OrderController`, `ComponentCont
 
 ### Service boundaries
 
-The fulfillment chain is split by responsibility rather than by entity:
+The fulfillment chain is split by responsibility rather than by entity, one controller per service:
 
 - **`ProductionService`** — `checkItems()` (read-only availability per line) and `produce()`
   (builds finished products from component stock: picks a storehouse that holds enough of every
-  required component, decrements them, and adds the produced unit as new stock).
+  required component, decrements them, and adds the produced unit as new stock). `POST /produce`
+  answers the page plus `produced`, the number of products actually built.
 - **`FulfillmentService`** — getting an order reserved: `reserveItems()` / `releaseItems()`.
 - **`OrderHandlingService`** — what the warehouse does with an order that is already reserved:
   the picking list, the order lines by fulfillment status, picking by reservation or by order, and
   the final `readyForDispatch()`.
 - **`PackingService`** — packing picked lines into a `ShipmentPackage` or as loose items of a run,
-  and creating empty packages.
+  changing what a package holds, completing it.
+- **`PackageQueryService`** — reading packages and package items.
+- **`ShipmentService`** — creating and changing shipments, assigning a distributor, reading them.
 - **`LogisticsService`** — declared, not implemented.
+
+### Timestamps
+
+Creation and update times are maintained by Hibernate: `@CreationTimestamp` / `@UpdateTimestamp` on
+the field, set on flush. Do not write them by hand — a manual assignment is overwritten and only
+reads like it does something. Spring Data's `@CreatedDate` / `@LastModifiedDate` are **not** an
+alternative here: they need `@EntityListeners(AuditingEntityListener.class)` and `@EnableJpaAuditing`,
+neither of which is configured, so the fields would stay `null` — and `NOT NULL` columns such as
+`order_history.changed_at` would fail the insert.
 
 ### AOP utilities
 
@@ -512,8 +653,9 @@ erDiagram
     PRODUCT ||--o{ STOCK : "stocked as"
     STOREHOUSE ||--o{ STOCK : holds
     STOREHOUSE ||--o{ RESERVATION : "reserves stock in"
-    ORDER ||--o{ SHIPMENT : ships
-    SHIPMENT ||--o{ SHIPMENT_PACKAGE : contains
+    USER ||--o{ SHIPMENT : "receives (customer)"
+    USER |o--o{ SHIPMENT : "carries (distributor)"
+    SHIPMENT |o--o{ SHIPMENT_PACKAGE : "groups (optional)"
     SHIPMENT_PACKAGE |o--o{ PACKAGE_ITEM : "holds (optional)"
     PACKAGE_ITEM }o--|| ORDER_ITEM : "packs from"
 ```
@@ -526,7 +668,8 @@ erDiagram
   `(order_id, product_id)`. A request repeating an article is not rejected but **folded**:
   `OrderServiceImpl.mergeDuplicateProducts` keeps the first line and adds the repeated quantities to
   it, so three plus two become one line of five. The rule matters beyond tidiness — `(order,
-  product)` identifies the line a reservation belongs to.
+  product)` identifies the line a reservation belongs to. After the merge each line is held against
+  `MAX_LINE_QUANTITY` (20): two lines of 11 become 22 and are refused with **400**.
 - **`Order.orderItems`** is a `Set` ordered by `@OrderBy("id")`. It is a Set rather than a List
   because the `@EntityGraph` on `OrderRepository` fetches three collections at once — with two
   `List`s among them Hibernate raises `MultipleBagFetchException`. `Product.components` is the only
@@ -534,28 +677,31 @@ erDiagram
   keeps the line items in a stable order, since a Set mapping is otherwise loaded into a
   HashSet-backed collection with arbitrary iteration order.
 - **`Product`** has a unique `sku` (`UUID`) and `articleNo` (`Long`), belongs to zero or more
-  `ProductCategory`, and is built from one or more `Component`s (weight is auto-computed from
-  component weights on persist).
+  `ProductCategory`, and is built from `Component`s. Its weight is computed from the component
+  weights on persist; without components (or components without a weight) it is 0 rather than a
+  failed insert.
 - **`Stock`** tracks `onHand`/`reserved` quantity per `(storehouse, sku)` pair (unique constraint),
   with optimistic locking (`@Version`) and domain methods `reserve()`/`release()`/`consume()` that
   enforce non-negative availability. `available` is derived as `onHand - reserved`.
 - **`Reservation`** points at the `OrderItem` it was made for, through a unidirectional, LAZY
   `@OneToOne` on `order_item_id`. It additionally keeps `orderId` (`String`, **not** the numeric
   `Order.id`), `sku` and `quantity` denormalized: `Stock` is keyed by `(sku, storehouse)`, so the
-  hot reserve/release path reaches its data without joining through the order item. Unique
-  unique constraint on `order_item_id` - one line, at most one reservation - and a status of
-  `ACTIVE` / `RELEASED` / `CONSUMED`;
-  released reservations are deleted rather than kept (see
+  hot reserve/release path reaches its data without joining through the order item. A unique
+  constraint on `order_item_id` - one line, at most one reservation - and a status of
+  `ACTIVE` / `RELEASED` / `CONSUMED`; released reservations are deleted rather than kept (see
   [Reservation flow](#reservation-flow-in-detail)).
   - The relation is deliberately **unidirectional** — `OrderItem` does not point back. A back
     reference would drag `Order → orderItems → reservation → orderItem` into every response that
     serializes a reservation.
-- **`Shipment` / `ShipmentPackage` / `PackageItem`** model the outbound side: a shipment belongs to
-  an order and a customer, holds packages (`ShipmentPackageType`, dimensions, weight, `ShipmentPackageStatus`), and
-  each package holds `PackageItem`s that reference an `OrderItem` with a packed quantity (at least
-  1). A `PackageItem` may exist without a package — loose items from `POST /packing` — and carries the
-  `runNo` of the call that created it. Only the package and item level is written today — see
-  [Known gaps](#known-gaps--work-in-progress).
+- **`ShipmentPackage` / `PackageItem`** — a package (`ShipmentPackageType`, dimensions, computed
+  weight, `ShipmentPackageStatus`) holds `PackageItem`s that reference an `OrderItem` with a packed
+  quantity (at least 1) and the `runNo` of the call that created them. A `PackageItem` may exist
+  without a package — loose items from `POST /packing`. `ShipmentPackage.items` has neither
+  `orphanRemoval` nor a `REMOVE` cascade: deleting an item would drop the packed quantity while the
+  line still reads `PACKING`/`PACKED`.
+- **`Shipment`** belongs to a `Customer`, optionally has a `Distributor`, and groups packages;
+  `ShipmentPackage.shipment` owns the foreign key, `Shipment.packages` has no cascade and no
+  orphanRemoval. See [Packages and shipments](#packages-and-shipments).
 - **`OrderHistory`** is an append-only audit trail written by `OrderStatusChangedListener`. Its
   `user_id` is **nullable**: not every status change has an acting user (`reserveItems()` resolves
   one from the login identifier, but `OrderServiceImpl.update(id, order)` has none). A `NOT NULL`
@@ -572,18 +718,19 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
 | Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge` and `/reject` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
-| | `POST /produce` *(paged)* | ADMIN, MANAGER, WAREHOUSE |
+| | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE |
-| Order lines | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)* | ADMIN, WAREHOUSE |
-| Packing | `POST /packing/{orderNo}` (body: `items[]` required, `shipmentPackageType`, `weight`, dimensions, `packageNumber`), `POST /packing` (body: `{"items": [...]}` or the bare array `[...]` - loose items of one run, paged response), `POST /package/empty` (package body, `items` optional) | ADMIN, WAREHOUSE |
-| Dispatch | `POST /dispatch/{reservationId}` | ADMIN, WAREHOUSE |
-| Shipments | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`)*, `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /lonely-packages` *(paged, only the loose package items - not in any package yet)*, `GET /packages/{id}`, `GET /shipment-packages/{id}` *(single entries, same shape as the lists; 404 if unknown)* | ADMIN, WAREHOUSE, LOGISTICS |
+| Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE |
+| Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
+| | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, LOGISTICS |
+| | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE, LOGISTICS |
+| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
 | Stock | `POST /stock/add`, `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* | ADMIN, WAREHOUSE |
-| Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}`, `DELETE /users/{id}` | ADMIN, MANAGER |
+| Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
 
 Notable response-code conventions:
 
@@ -593,15 +740,11 @@ Notable response-code conventions:
   earlier. The body always lists only what *this* call created — an empty array on a repeat.
 - `POST /orders/{orderId}/release` releases every active reservation of the order and lists what was
   actually released. An order holding nothing answers **200** with an empty array, not 404.
-- `POST /orders` returns **201 Created**.
+- `POST /orders` and `POST /shipments` return **201 Created**.
 - `GET /stock/storehouse/{id}` answers **404** only when the storehouse holds no stock at all;
   a page past the end is an empty page, not an error.
-- The picking, packing and dispatch endpoints catch `APIException` and answer with
-  `{"message": "..."}` at the exception's own status, rather than letting it reach
-  `GlobalExceptionHandler`. A `ResourceNotFoundException` (unknown order item while packing) is not
-  caught there and comes back as **404** in the `ErrorDetails` format with
-  `errorCode: RESOURCE_NOT_FOUND`; a failed bean validation of the body as **400** with one message per
-  field, e.g. `{"items[0].qty": "qty must be at least 1"}`.
+- Picking and packing answer an `APIException` as `{"message": "..."}`, everything else goes
+  through `GlobalExceptionHandler` — see [Error responses](#error-responses).
 - `GET /products`, `GET /products/{articleNo}` and all `/users` endpoints return DTOs
   (`ProductDto`, `UserDto`), not entities. `/products` hides `id`, `categories` and `components`
   from non-privileged callers; `/users` never exposes the password hash.
@@ -658,65 +801,77 @@ for every request, Vaadin UIDL and static resources included, and throttle the w
 mvn test
 ```
 
+272 tests. Controller tests use standalone MockMvc with the project's own API version resolver
+(`ApiVersioningTestSupport`), so they call `/api/1.0/...` like a client; security filters are not
+part of them.
+
 | Test | Covers |
 |------|--------|
 | `ApplicationTests` | Spring context load — **needs a reachable database** |
-| `ProductionServiceCheckItemsTest` | storehouse selection, that `checkItems` writes nothing and issues one query per line |
-| `FulfillmentServiceReserveItemsTest` | partial reservation, continuation on repeat, the `CREATED`/`COMPLETE`/`PENDING` outcomes, that only newly created reservations are reported, that the order item id reaches the `ReserveItem`, user attribution |
-| `FulfillmentServiceReleaseItemsTest` | that the status reset happens only after a successful release, only for the lines that held a reservation, and that an order holding nothing is a no-op |
-| `FulfillmentServiceExpiredReservationsTest` | that `findOrdersWithExpiredReservations` names every order once, loads them in one query with their lines, and queries no orders when nothing has expired |
-| `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler and not to the catch-all, and that the catch-all keeps a status the exception carries |
-| `UserMapperTest` | that no password hash or internal field reaches the response |
-| `ProductMapperTest` | field suppression for non-privileged callers, and that the entity is left unmodified |
-| `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, and how a customer's `dueDate` is honoured |
-| `OrderServiceAccessTest` | that a customer reaches only their own order and a privileged caller reaches any |
-| `CreatePackageRequestTest` | that a `ShipmentPackageType` is read from JSON by name, case-insensitively, and falls back to `OTHER` |
-| `CustomQueryExecutionTest` | executes every hand-written `@Query` once — **needs a reachable database** |
-| `InventoryReservationTransactionServiceTest` | the idempotency guard: per order line, so an order carrying the same article twice reserves both; that `consume` returns only what it consumed |
-| `OrderHandlingTransactionServicePickTest` | that `pick` aborts when nothing was consumed instead of marking the line `PICKED`, and that it does not write the reservation itself |
-| `PackingServiceCreatePackageTest` | packages, loose items and empty packages: splitting a line, the over-packing guard, skipping full lines and lines past `PACKING`, quantities before status, the 400/404 answers, the skip reasons, one `runNo` per call |
-| `PackItemValidationTest` | bean validation of the packing requests, including the `WithItems` group that makes `items` required |
+| `CustomQueryExecutionTest` | executes every hand-written `@Query` and entity graph once — **needs a reachable database** |
 | `ReservationDtoTest` | that a reservation from a closed session serializes as `ReservationDto` but not as the entity — **needs a reachable database** |
+| `ProductionServiceCheckItemsTest` | storehouse selection, that `checkItems` writes nothing and issues one query per line |
+| `ProductionServiceProduceTest`, `ProductionPageResponseTest` | the page total of `produce()` and the `produced` count |
+| `FulfillmentServiceReserveItemsTest` | partial reservation, continuation on repeat, the `CREATED`/`COMPLETE`/`PENDING` outcomes, that only newly created reservations are reported, user attribution |
+| `FulfillmentServiceReleaseItemsTest` | status reset only after a successful release and only for the released lines, no fallback to `APPROVED` once a line is picked, an order holding nothing is a no-op |
+| `FulfillmentServiceExpiredReservationsTest` | that `findOrdersWithExpiredReservations` names every order once and loads them in one query |
+| `FulfillmentServiceConsumedReservationsTest` | that consumed reservations are asked for per order in the database |
+| `InventoryReservationTransactionServiceTest` | the idempotency guard per order line; that `consume` returns only what it consumed |
+| `OrderHandlingTransactionServicePickTest` | that `pick` aborts when nothing was consumed and does not write the reservation itself |
+| `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, the customer's `dueDate` |
+| `OrderServiceAccessTest` | that a customer reaches only their own order and a privileged caller reaches any |
+| `OrderServiceLineQuantityTest` | the line limit after merging repeated articles |
+| `PackingServiceCreatePackageTest` | packages, loose items and custom packages: splitting a line, the over-packing guard, skipping, quantities before status, folding one line per run, the 400/404 answers |
+| `PackingServicePackageContentsTest` | adding, replacing and removing items, package data, completing a package, the weight following the contents |
+| `PackingControllerTest` | validation groups, bare-array bodies, `/order-items` paging, the `{"message"}` error shape |
+| `PackItemValidationTest`, `CreatePackageItemsRequestTest`, `CreatePackageRequestTest` | bean validation of the packing requests, both body shapes, reading `shipmentPackageType` |
+| `PackageQueryServiceImplTest`, `PackageControllerTest` | package and item lists, the `packageNumber` filter, single entries and 404 |
+| `PackageItemResponseAssemblerTest`, `ShipmentPackageListDtoTest` | computed `siblings` in one query, package rows without a cycle |
+| `ShipmentPackageMappingTest`, `ShipmentPackageWeightTest`, `ShipmentPackageCompleteTest` | no delete cascade on items, computed weight, `OPEN → PACKED` only with items |
+| `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the DTO answers, binding and status codes |
+| `ProductWeightTest` | product weight from components, 0 without |
+| `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |
+| `UserMapperTest`, `ProductMapperTest` | that no password hash or internal field reaches the response; field suppression for non-privileged callers |
+| `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler, and that the catch-all keeps a status the exception carries |
 
 Three of them need a reachable database: `ApplicationTests` loads the whole context,
 `CustomQueryExecutionTest` runs the hand-written queries against it, and `ReservationDtoTest` needs
-real Hibernate proxies. The rest is plain Mockito/AssertJ and finishes in a couple of seconds:
+real Hibernate proxies. They run against the same database as the app, startup migrations included.
+The rest is plain Mockito/AssertJ and finishes in a couple of seconds:
 
 ```bash
 mvn test -Dtest='!ApplicationTests,!CustomQueryExecutionTest,!ReservationDtoTest'
 ```
 
-Still uncovered: reservation idempotency and the retry loop at the persistence level, the storehouse
-selection inside `produce()`, the loops in `OrderHandlingServiceImpl` and `readyForDispatch()`.
+Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse selection inside
+`produce()`, the loops in `OrderHandlingServiceImpl`, `readyForDispatch()` and the routines in
+`AutomaticReservationService`.
 
 ## Known gaps / work in progress
 
 - **Order-level statuses stop at `IN_FULFILLMENT`.** `READY_FOR_DISPATCH`, `IN_TRANSIT`,
-  `DELIVERED`, `COMPLETED` and `CANCELLED` are defined but nothing advances an *order* into them,
-  even once all its lines have reached `READY_FOR_DISPATCH`.
-- **`LogisticsService` is an empty interface**, and no `Shipment` is ever created — the packing
-  endpoints build `ShipmentPackage`s without attaching them to one, so `ShipmentStatus` is
-  unreachable and a package never leaves `ShipmentPackageStatus.OPEN`: `ShipmentPackage.complete()`
-  exists but has no caller.
-- **Loose package items cannot be put into a package yet.** Items from `POST /packing` count as
-  packed, so packing the same line again into a package skips it or reports an overflow. An endpoint
-  that assigns existing items to a package is still missing.
-- **The same line twice in one `POST /packing/{orderNo}` request** passes the quantity check but
-  violates the unique constraint `uq_package_item_order_item_run` on
-  `(shipment_package_id, order_item_id, run_no)` at flush — both items come from the same call and so
-  share a run — which ends in a 500. Items of one line from *different* runs may share a package.
-  Loose items are not affected — their package id is `NULL`.
-- `UserController.create/update` still accept the raw `User` entity as request body. A caller can
-  set `roles` through it, and the endpoint is open to `MANAGER` — so a manager can grant themselves
-  `ADMIN`. The response side is already covered by `UserDto`; the request side is not.
+  `DELIVERED`, `COMPLETED` and `CANCELLED` are defined but nothing advances an *order* into them.
+- **Order lines stop at `PACKED`.** `OrderHandlingService.readyForDispatch()` exists, but its
+  endpoint (`POST /dispatch/{reservationId}`) is commented out.
+- **Shipments stop at `CREATED`.** Packages can be completed and grouped into shipments and a
+  distributor can be assigned, but nothing moves a shipment on or a package to `DISPATCHED`;
+  `LogisticsService` is an empty interface.
+- **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
+  roles from the request as they are — a manager can grant themselves or others `ADMIN`. An update
+  without `isActive` also re-activates a disabled user.
+- `ShipmentServiceImpl.assignDistributor` reads the shipment without a lock, unlike the other
+  shipment changes.
+- Two error response shapes coexist, see [Error responses](#error-responses).
 - `OrderServiceImpl.randomOrderNo()` draws from only ~9000 numbers and re-checks existence in a
   loop — a TOCTOU race against the insert, and effectively an endless loop once a few thousand
   orders exist.
 - `Reservation.expiresAt` only decides which orders `tryToRelease()` picks up. Once one reservation
   of an order has expired, every active reservation of that order is released — a fresh one reserved
-  in a later call included. Apart from that, only the picking list shows it and sorts by it by
-  default.
+  in a later call included.
+- `tryToDelete()` is not ready to be switched on — see `issues.txt`.
 - `POST /orders/{orderId}/consume` is commented out in `InventoryController`; consumption happens
   only as part of picking.
 - `spring-boot-starter-webflux` is still declared in `pom.xml` although no code uses Reactor
   any more.
+
+`issues.txt` in the repository root keeps the detailed list of findings and what has been fixed.

@@ -1,5 +1,7 @@
 package com.supplychainmanagement.dto.shipping;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.User;
@@ -18,19 +20,29 @@ import java.util.List;
  */
 public record ShipmentResponse(
         Long id,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         Long customerId,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String customerName,
         ShipmentStatus status,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String shippingAddress,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String shippingMethod,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String trackingNumber,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         LocalDate requestedDeliveryDate,
         LocalDateTime createdAt,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         LocalDateTime shippedAt,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         LocalDateTime deliveredAt,
         int packageCount,
         BigDecimal weight,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         Long distributorId,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
         String distributorName,
         List<ShipmentPackageListDto> packages
 ) {
