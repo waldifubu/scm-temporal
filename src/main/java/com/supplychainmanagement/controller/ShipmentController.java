@@ -122,30 +122,14 @@ public class ShipmentController {
         return shipmentService.assignDistributor(shipmentId, distributorId);
     }
 
-
+/*
+POST /api/v1/shipments/{shipmentId}/accept
+POST /api/v1/shipments/{shipmentId}/in-transit
+POST /api/v1/shipments/{shipmentId}/delivered
+ */
 
 /*
-    // Packing (/packing/**) lives in PackingController
 
-
-    @NoCheck
-    @PostMapping(path = "/dispatch/{reservationId}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> readyForDispatch(@PathVariable Long reservationId) {
-        PickingOrderDto packingOrderItem = null;
-        try {
-            packingOrderItem = orderHandlingService.readyForDispatch(reservationId);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(packingOrderItem);
-    }
-
-
-    /*
 alle Packages PACKED
         ↓
 Shipment READY

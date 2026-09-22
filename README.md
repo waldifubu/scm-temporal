@@ -228,8 +228,8 @@ the first, while the order-status and line-status reconciliation needs the secon
 after a first one that committed its reservation but failed before the order was written has to be
 able to catch the order status up, and it creates nothing to go by.
 
-The reservations in the response are `ReservationDto`s: id, orderId, orderItemId, sku, quantity,
-storehouseId, status and expiry. Related entities appear as ids only, so serializing the response
+The reservations in the response are `ReservationDto`s: id, orderId (the numeric `Order.id`),
+orderItemId, sku, quantity, storehouseId, status and expiry. Related entities appear as ids only, so serializing the response
 cannot pull the order line or the storehouse - see [Responses are DTOs](#responses-are-dtos-not-entities).
 
 Two layers guard against creating duplicate reservations for the same order:
@@ -684,9 +684,10 @@ erDiagram
   with optimistic locking (`@Version`) and domain methods `reserve()`/`release()`/`consume()` that
   enforce non-negative availability. `available` is derived as `onHand - reserved`.
 - **`Reservation`** points at the `OrderItem` it was made for, through a unidirectional, LAZY
-  `@OneToOne` on `order_item_id`. It additionally keeps `orderId` (`String`, **not** the numeric
-  `Order.id`), `sku` and `quantity` denormalized: `Stock` is keyed by `(sku, storehouse)`, so the
-  hot reserve/release path reaches its data without joining through the order item. A unique
+  `@OneToOne` on `order_item_id`. It has no order id of its own: the order is the line's
+  (`orderItem.order`), and the reservations of an order are found through the line. `sku` and
+  `quantity` are kept denormalized: `Stock` is keyed by `(sku, storehouse)`, so the hot
+  reserve/release path reaches its data without joining through the order item. A unique
   constraint on `order_item_id` - one line, at most one reservation - and a status of
   `ACTIVE` / `RELEASED` / `CONSUMED`; released reservations are deleted rather than kept (see
   [Reservation flow](#reservation-flow-in-detail)).

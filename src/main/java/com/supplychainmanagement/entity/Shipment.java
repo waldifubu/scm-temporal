@@ -50,6 +50,8 @@ public class Shipment {
     @Column(name = "shipping_address")
     private String shippingAddress;
 
+    private String comment;
+
     @CreationTimestamp
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;

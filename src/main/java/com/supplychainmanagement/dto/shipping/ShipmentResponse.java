@@ -1,6 +1,5 @@
 package com.supplychainmanagement.dto.shipping;
 
-import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
@@ -30,6 +29,7 @@ public record ShipmentResponse(
         @JsonInclude(JsonInclude.Include.NON_NULL)
         String shippingMethod,
         @JsonInclude(JsonInclude.Include.NON_NULL)
+        String comment,
         String trackingNumber,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         LocalDate requestedDeliveryDate,
@@ -59,6 +59,7 @@ public record ShipmentResponse(
                 shipment.getStatus(),
                 shipment.getShippingAddress(),
                 shipment.getShippingMethod(),
+                shipment.getComment(),
                 shipment.getTrackingNumber(),
                 shipment.getRequestedDeliveryDate(),
                 shipment.getCreatedAt(),
@@ -72,7 +73,9 @@ public record ShipmentResponse(
         );
     }
 
-    /** First and last name of a customer or distributor; null without one. */
+    /**
+     * First and last name of a customer or distributor; null without one.
+     */
     static String nameOf(User user) {
         if (user == null) {
             return null;

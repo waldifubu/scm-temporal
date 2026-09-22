@@ -48,8 +48,8 @@ public class OrderHandlingTransactionService {
      * (innodb_snapshot_isolation, on by default since 11.6) refuses to update a row that changed after
      * the snapshot: "Record has changed since last read in table 'reservation'".
      * <p>
-     * The order is handed in rather than looked up from {@code reservation.getOrderId()}: picking a
-     * whole order would otherwise repeat the same lookup for every single line.
+     * The order is handed in rather than read off {@code reservation.getOrderItem().getOrder()}:
+     * picking a whole order already has it, and every line would otherwise reach for it again.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public PickingOrderDto pick(Order order, Reservation reservation) {
@@ -60,7 +60,7 @@ public class OrderHandlingTransactionService {
 
         List<Reservation> consumed;
         try {
-            consumed = inventoryService.consumeWithRetry(String.valueOf(order.getId()), List.of(new ReserveItem(savedOrderItem.getId(), reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
+            consumed = inventoryService.consumeWithRetry(order.getId(), List.of(new ReserveItem(savedOrderItem.getId(), reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
         } catch (Exception e) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Failed to consume items for reservation " + reservation.getId() + ": " + e.getMessage());
         }

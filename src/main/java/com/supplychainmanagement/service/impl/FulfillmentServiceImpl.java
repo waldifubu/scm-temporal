@@ -70,6 +70,17 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     public ReservationSummary reserveItems(Order order, String username) {
         List<AvailableOrderItemDto> availableItems = productionService.checkItems(order);
 
+        /*
+        Hints:
+           /*
+        Candidate criteria for picking a storehouse:
+        available stock
+        distance to the customer
+        delivery time
+        priority
+        cost
+         */
+
         // Only lines that a single storehouse can cover are handed to the reservation. The rest are
         // left out entirely: passing them on would mean sending storehouseId == null into
         // InventoryReservationTransactionService, which cannot match a stock row for it. They stay
@@ -110,7 +121,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         ReservationResult result;
         try {
             // Reserve items in inventory with retry logic
-            result = inventoryService.reserveWithRetry(String.valueOf(order.getId()), reserveItems);
+            result = inventoryService.reserveWithRetry(order.getId(), reserveItems);
         } catch (Exception e) {
             // Handle reservation failure
             throw new APIException(HttpStatus.BAD_REQUEST, "Failed to reserve items for order " + order.getId() + ": " + e.getMessage());
@@ -158,7 +169,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // transaction and their LAZY references belong to a session that is already closed.
         // ReservationDto reads only ids off them, which works without initializing anything.
         List<ReservationDto> createdReservations = result.created().stream()
-                .map(ReservationDto::of)
+                .map(reservation -> ReservationDto.of(reservation, order.getId()))
                 .toList();
 
         return new ReservationSummary(createdReservations, outcomeOf(order, result));
@@ -198,14 +209,14 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     // Helper along the lines of checkItems: returns the currently active reservations for the
     // order instead of checking stock levels the way checkItems does.
     public List<Reservation> findActiveReservations(Order order) {
-        return reservationRepository.findActive(String.valueOf(order.getId()));
+        return reservationRepository.findActive(order.getId());
     }
 
     @Override
     public List<Reservation> findConsumedReservations(Order order) {
         // Asked per order in the database: loading the first 100 CONSUMED rows of all orders and
         // filtering them here lost every reservation beyond those 100.
-        return reservationRepository.findByOrderIdAndStatus(String.valueOf(order.getId()), ReservationStatus.CONSUMED);
+        return reservationRepository.findByOrderItemOrderIdAndStatus(order.getId(), ReservationStatus.CONSUMED);
     }
 
     @Override
@@ -239,7 +250,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
 
         // What the inventory layer reports back, not what was handed in: it is the one that knows
         // which rows it actually deleted.
-        List<Reservation> released = inventoryService.releaseWithRetry(String.valueOf(order.getId()), items);
+        List<Reservation> released = inventoryService.releaseWithRetry(order.getId(), items);
 
         // Matched by the line a reservation points at, not by its SKU. Over the SKU the filter hit
         // every line carrying that product - so the same article held in two storehouses, or ordered
@@ -274,7 +285,8 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         Set<Long> orderIds = reservationRepository
                 .findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now())
                 .stream()
-                .map(reservation -> Long.valueOf(reservation.getOrderId()))
+                // The order line comes with the query; its order is a proxy whose id needs no select.
+                .map(reservation -> reservation.getOrderItem().getOrder().getId())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
 
         if (orderIds.isEmpty()) {

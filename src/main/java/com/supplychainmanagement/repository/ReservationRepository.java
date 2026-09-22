@@ -13,28 +13,8 @@ import org.springframework.data.repository.query.Param;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 public interface ReservationRepository extends JpaRepository<Reservation, Long> {
-
-    @EntityGraph(attributePaths = "storehouse")
-    Optional<Reservation> findByOrderIdAndSkuAndStorehouseIdAndStatus(
-            String orderId,
-            UUID sku,
-            Long storehouseId,
-            ReservationStatus status);
-
-    default Optional<Reservation> findActive(
-            String orderId,
-            UUID sku,
-            Long storehouseId) {
-
-        return findByOrderIdAndSkuAndStorehouseIdAndStatus(
-                orderId,
-                sku,
-                storehouseId,
-                ReservationStatus.ACTIVE);
-    }
 
     @EntityGraph(attributePaths = "storehouse")
     Optional<Reservation> findByOrderItemIdAndStatus(Long orderItemId, ReservationStatus status);
@@ -48,16 +28,18 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
         return findByOrderItemIdAndStatus(orderItemId, ReservationStatus.ACTIVE);
     }
 
-    default List<Reservation> findActive(String orderId) {
-        return findByOrderIdAndStatus(
-                orderId,
-                ReservationStatus.ACTIVE);
+    /** The active reservations of one order - by {@code Order.id}, not by the order number. */
+    default List<Reservation> findActive(Long orderId) {
+        return findByOrderItemOrderIdAndStatus(orderId, ReservationStatus.ACTIVE);
     }
 
+    /**
+     * The reservations of one order in a status, reached through the order line - a reservation
+     * carries no order id of its own. The join goes over two indexed foreign keys
+     * (order_items.order_id, reservation.order_item_id), so it costs no more than a column of its own.
+     */
     @EntityGraph(attributePaths = "storehouse")
-    List<Reservation> findByOrderIdAndStatus(
-            String orderId,
-            ReservationStatus status);
+    List<Reservation> findByOrderItemOrderIdAndStatus(Long orderId, ReservationStatus status);
 
     @EntityGraph(attributePaths = "storehouse")
     List<Reservation> findAllActiveReservationsByStatusOrderByExpiresAt(ReservationStatus status);
@@ -65,15 +47,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     /**
      * Reservations whose hold has run out. Nothing evaluates {@code expiresAt} on the request path -
      * an expired reservation stays ACTIVE and keeps its stock booked until a sweep releases it.
+     * The order line comes along: the sweep reads the order id off it.
      */
-    @EntityGraph(attributePaths = "storehouse")
+    @EntityGraph(attributePaths = {"storehouse", "orderItem"})
     List<Reservation> findByStatusAndExpiresAtBefore(ReservationStatus status, LocalDateTime cutoff);
-
-    @EntityGraph(attributePaths = "storehouse")
-    List<Reservation> findByOrderIdAndStatusAndExpiresAtBefore(
-            String orderId,
-            ReservationStatus status,
-            LocalDateTime cutoff);
 
     /**
      * Paged counterpart of the method above. The ordering is left to the {@link Pageable} instead of
@@ -119,10 +96,11 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
      * is matched by equality - {@code Contains} would translate to a LIKE, which is a String
      * operation and has no meaning for an enum column.
      * <p>
-     * Keyed by id rather than by orderId: an order holds one reservation per SKU, so an Optional
-     * over orderId would break with a NonUniqueResultException as soon as the order has a second
-     * line. {@link #findByOrderIdAndStatus} is the one to use per order.
+     * Keyed by id rather than by order: an order holds one reservation per line, so an Optional per
+     * order would break with a NonUniqueResultException as soon as the order has a second line.
+     * {@link #findByOrderItemOrderIdAndStatus} is the one to use per order. The order line and its
+     * order come along - picking needs the order, and a reservation reaches it only through the line.
      */
-    @EntityGraph(attributePaths = "storehouse")
+    @EntityGraph(attributePaths = {"storehouse", "orderItem", "orderItem.order"})
     Optional<Reservation> findByIdAndStatus(Long id, ReservationStatus status);
 }

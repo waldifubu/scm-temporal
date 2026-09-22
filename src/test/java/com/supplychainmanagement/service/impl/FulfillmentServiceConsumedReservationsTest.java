@@ -47,8 +47,8 @@ class FulfillmentServiceConsumedReservationsTest {
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation consumed = Reservation.active(new OrderItem(), "42", SKU, 1, storehouse);
-        when(reservationRepository.findByOrderIdAndStatus("42", ReservationStatus.CONSUMED))
+        Reservation consumed = Reservation.active(new OrderItem(), SKU, 1, storehouse);
+        when(reservationRepository.findByOrderItemOrderIdAndStatus(42L, ReservationStatus.CONSUMED))
                 .thenReturn(List.of(consumed));
 
         assertThat(service.findConsumedReservations(order)).containsExactly(consumed);

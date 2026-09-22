@@ -74,7 +74,7 @@ class OrderHandlingTransactionServicePickTest {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
 
-        reservation = Reservation.active(line, "42", SKU, 3, storehouse);
+        reservation = Reservation.active(line, SKU, 3, storehouse);
         reservation.setId(25L);
 
         when(orderItemRepository.save(any(OrderItem.class))).thenAnswer(call -> call.getArgument(0));
@@ -82,7 +82,7 @@ class OrderHandlingTransactionServicePickTest {
 
     @Test
     void picksTheLineOnceItsReservationWasConsumed() {
-        when(inventoryService.consumeWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
+        when(inventoryService.consumeWithRetry(any(), anyList())).thenReturn(List.of(reservation));
 
         var picked = service.pick(order, reservation);
 
@@ -100,7 +100,7 @@ class OrderHandlingTransactionServicePickTest {
      */
     @Test
     void leavesWritingTheReservationToConsume() {
-        when(inventoryService.consumeWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
+        when(inventoryService.consumeWithRetry(any(), anyList())).thenReturn(List.of(reservation));
 
         service.pick(order, reservation);
 
@@ -114,7 +114,7 @@ class OrderHandlingTransactionServicePickTest {
      */
     @Test
     void abortsWhenNothingWasConsumed() {
-        when(inventoryService.consumeWithRetry(anyString(), anyList())).thenReturn(List.of());
+        when(inventoryService.consumeWithRetry(any(), anyList())).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.pick(order, reservation))
                 .isInstanceOfSatisfying(APIException.class, e -> {

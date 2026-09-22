@@ -129,8 +129,8 @@ controller per service, named after what it does (`PickingController`, `PackingC
   customer asked for later than that wins. Only from `CREATED` - confirming an order already being
   fulfilled would throw it back.
 - **`InventoryService`** (`InventoryServiceImpl`) is the retry/idempotency wrapper around actual
-  reservation work — `reserveWithRetry`/`releaseWithRetry`/`consumeWithRetry`, all keyed by
-  `String orderId` (matches `Reservation.orderId`, which is a String, not the numeric `Order.id`).
+  reservation work — `reserveWithRetry`/`releaseWithRetry`/`consumeWithRetry`, all keyed by the
+  numeric `Order.id` (`Long orderId`, not the order number).
 - **`InventoryReservationTransactionService`** does the real DB work in its own `REQUIRES_NEW`
   transactions (`reserve`/`release`/`consume`), each iterating `ReserveItem`s and mutating `Stock`
   + `Reservation` together. `reserve` has an idempotency guard keyed by **order line**
@@ -150,9 +150,14 @@ controller per service, named after what it does (`PickingController`, `PackingC
   reports the line as unavailable otherwise. There is deliberately no splitting across storehouses,
   which is why uniqueness sits on `order_item_id` alone.
 - **`Reservation` points at its `OrderItem`** through a unidirectional, LAZY `@OneToOne` on
-  `order_item_id`. `orderId`, `sku` and `quantity` are kept denormalized alongside it on purpose:
-  `Stock` is keyed by `(sku, storehouse)`, so the hot reserve/release path needs no join through
-  the order item. The relation is deliberately *not* bidirectional — a back reference would drag
+  `order_item_id`. It has **no order id of its own** - the order is `orderItem.order`, and the
+  reservations of an order are found through the line (`findByOrderItemOrderIdAndStatus`, a join
+  over two indexed foreign keys). A copied `orderId` (a String next to the numeric `Order.id`) was
+  removed: it could only ever disagree with the line. `sku` and `quantity` do stay denormalized on
+  purpose: `Stock` is keyed by `(sku, storehouse)`, so the hot reserve/release path needs no join
+  through the order item and product. `ReservationDto.of(reservation, orderId)` takes the order id
+  from the caller - out of a closed `REQUIRES_NEW` session the order line is an uninitialized proxy.
+  The relation is deliberately *not* bidirectional — a back reference would drag
   `Order → orderItems → reservation → orderItem` into every response serializing a reservation.
 - **Transaction boundaries for picking sit at the line, not at the call.** The per-line work lives
   on `OrderHandlingTransactionService` (`REQUIRES_NEW`) and not as a private method of

@@ -155,10 +155,13 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new APIException(HttpStatus.BAD_REQUEST, "shippingAddress is required");
         }
 
-        Shipment shipment = findChangeableShipmentForUpdate(shipmentId);
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+        
         shipment.setShippingAddress(request.shippingAddress().trim());
         shipment.setShippingMethod(request.shippingMethod());
         shipment.setRequestedDeliveryDate(request.requestedDeliveryDate());
+        shipment.setComment(blankToNull(request.comment()));
 
         return toResponse(shipment);
     }
@@ -243,8 +246,11 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is not ready for dispatch: not all packages are packed");
         }
 
-        shipment.setStatus(ShipmentStatus.READY);
-        shipmentRepository.save(shipment);
+        if(shipment.getStatus() == ShipmentStatus.CREATED) {
+            shipment.setStatus(ShipmentStatus.READY);
+            shipmentRepository.save(shipment);
+        }
+
         return toResponse(shipment);
     }
 

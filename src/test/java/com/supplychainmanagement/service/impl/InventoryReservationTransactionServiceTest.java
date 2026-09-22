@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
 @MockitoSettings(strictness = Strictness.LENIENT)
 class InventoryReservationTransactionServiceTest {
 
-    private static final String ORDER_ID = "42";
+    private static final Long ORDER_ID = 42L;
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
     private static final Long STOREHOUSE_ID = 7L;
 
@@ -127,7 +127,7 @@ class InventoryReservationTransactionServiceTest {
         OrderItem alreadyHeld = line(11L, 3);
         OrderItem outstanding = line(12L, 2);
 
-        Reservation existing = Reservation.active(alreadyHeld, ORDER_ID, SKU, 3, storehouse);
+        Reservation existing = Reservation.active(alreadyHeld, SKU, 3, storehouse);
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
         when(orderItemRepository.getReferenceById(12L)).thenReturn(outstanding);
         stockAvailable(10);
@@ -146,7 +146,7 @@ class InventoryReservationTransactionServiceTest {
      */
     @Test
     void ignoresReservationsWithoutAnOrderItem() {
-        Reservation legacy = Reservation.active(line(11L, 3), ORDER_ID, SKU, 3, storehouse);
+        Reservation legacy = Reservation.active(line(11L, 3), SKU, 3, storehouse);
         legacy.setOrderItem(null);
 
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(legacy));
@@ -176,7 +176,7 @@ class InventoryReservationTransactionServiceTest {
      */
     @Test
     void consumeReturnsOnlyTheReservationsItConsumed() {
-        Reservation held = Reservation.active(line(11L, 3), ORDER_ID, SKU, 3, storehouse);
+        Reservation held = Reservation.active(line(11L, 3), SKU, 3, storehouse);
         stockAvailable(10).setReserved(3);
 
         when(reservationRepository.findActiveByOrderItem(11L)).thenReturn(Optional.of(held));

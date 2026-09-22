@@ -44,10 +44,13 @@ class FulfillmentServiceExpiredReservationsTest {
     @InjectMocks
     private FulfillmentServiceImpl service;
 
-    private Reservation expiredFor(String orderId) {
+    /** An expired reservation on a line of the given order - the sweep reads the order off the line. */
+    private Reservation expiredFor(Long orderId) {
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        return Reservation.active(new OrderItem(), orderId, SKU, 1, storehouse);
+        OrderItem line = new OrderItem();
+        line.setOrder(order(orderId));
+        return Reservation.active(line, SKU, 1, storehouse);
     }
 
     private Order order(Long id) {
@@ -65,7 +68,7 @@ class FulfillmentServiceExpiredReservationsTest {
     @Test
     @SuppressWarnings("unchecked")
     void asksForEachOrderOnceInOneQuery() {
-        expired(expiredFor("42"), expiredFor("43"), expiredFor("42"));
+        expired(expiredFor(42L), expiredFor(43L), expiredFor(42L));
         List<Order> orders = List.of(order(42L), order(43L));
         when(orderRepository.findWithOrderItemsByIdIn(anyCollection())).thenReturn(orders);
 
@@ -82,7 +85,7 @@ class FulfillmentServiceExpiredReservationsTest {
      */
     @Test
     void neverLoadsTheOrdersOneByOne() {
-        expired(expiredFor("42"));
+        expired(expiredFor(42L));
         when(orderRepository.findWithOrderItemsByIdIn(anyCollection())).thenReturn(List.of(order(42L)));
 
         service.findOrdersWithExpiredReservations();

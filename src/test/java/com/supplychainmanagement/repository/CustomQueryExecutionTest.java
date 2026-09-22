@@ -211,6 +211,20 @@ class CustomQueryExecutionTest {
         assertThat(packageItemRepository.findItemIdsByOrderItemIdIn(List.of(UNKNOWN_ID))).isEmpty();
     }
 
+    // ------------------------------------------------------------------ reservations
+
+    /**
+     * A reservation's order is reached through its order line - the derived path orderItem.order.id
+     * has to resolve, and the entity graphs with the line along with it.
+     */
+    @Test
+    void reservationsResolveTheirOrderThroughTheLine() {
+        assertThat(reservationRepository.findByOrderItemOrderIdAndStatus(UNKNOWN_ID, ReservationStatus.ACTIVE)).isEmpty();
+        assertThat(reservationRepository.findByIdAndStatus(UNKNOWN_ID, ReservationStatus.ACTIVE)).isEmpty();
+        assertThat(reservationRepository.findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE,
+                java.time.LocalDateTime.of(2000, 1, 1, 0, 0))).isEmpty();
+    }
+
     // ------------------------------------------------------------------ shipments
 
     /** The locking reads a shipment change takes: the shipment, then its packages in id order. */

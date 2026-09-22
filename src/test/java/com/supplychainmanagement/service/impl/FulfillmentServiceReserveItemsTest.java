@@ -59,7 +59,7 @@ import static org.mockito.Mockito.when;
 class FulfillmentServiceReserveItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
-    private static final String ORDER_ID = "42";
+    private static final Long ORDER_ID = 42L;
     private static final String USERNAME = "manager";
     private static final Long USER_ID = 99L;
 
@@ -160,7 +160,7 @@ class FulfillmentServiceReserveItemsTest {
      * fixtures name it rather than leaving it null.
      */
     private Reservation reservationFor(OrderItem orderItem, UUID sku, int quantity) {
-        return Reservation.active(orderItem, ORDER_ID, sku, quantity, storehouse());
+        return Reservation.active(orderItem, sku, quantity, storehouse());
     }
 
     /**
@@ -213,14 +213,14 @@ class FulfillmentServiceReserveItemsTest {
 
         checkItemsReturns(order, uncovered(firstItem(order), 1001L));
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(), List.of(existing)));
 
         var summary = service.reserveItems(order, USERNAME);
 
         assertThat(summary.created()).isEmpty();
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.COMPLETE);
-        verify(inventoryService).reserveWithRetry(anyString(), anyList());
+        verify(inventoryService).reserveWithRetry(any(), anyList());
     }
 
     /**
@@ -241,7 +241,7 @@ class FulfillmentServiceReserveItemsTest {
                 uncovered(firstItem(order), 1001L),
                 uncovered(outstandingItem, 1002L));
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(), List.of(existing)));
 
         var summary = service.reserveItems(order, USERNAME);
@@ -269,7 +269,7 @@ class FulfillmentServiceReserveItemsTest {
                 covered(outstandingItem, 1002L));
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
         when(productRepository.findByArticleNo(1002L)).thenReturn(Optional.of(outstanding));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(added), List.of(existing, added)));
 
         var summary = service.reserveItems(order, USERNAME);
@@ -301,14 +301,14 @@ class FulfillmentServiceReserveItemsTest {
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
 
         Reservation created = reservationFor(coveredItem, SKU, 3);
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(order, USERNAME);
 
         // only the covered line is handed over
         ArgumentCaptor<List<ReserveItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
+        verify(inventoryService).reserveWithRetry(any(), captor.capture());
         assertThat(captor.getValue()).extracting(ReserveItem::sku).containsExactly(SKU);
 
         assertThat(coveredItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
@@ -337,13 +337,13 @@ class FulfillmentServiceReserveItemsTest {
                 covered(outstandingItem, 1002L));
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
         when(productRepository.findByArticleNo(1002L)).thenReturn(Optional.of(outstanding));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(added), List.of(existing, added)));
 
         service.reserveItems(order, USERNAME);
 
         ArgumentCaptor<List<ReserveItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
+        verify(inventoryService).reserveWithRetry(any(), captor.capture());
         assertThat(captor.getValue()).extracting(ReserveItem::sku).containsExactly(outstandingSku);
 
         assertThat(reservedItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
@@ -357,14 +357,14 @@ class FulfillmentServiceReserveItemsTest {
 
         checkItemsReturns(order, covered(firstItem(order), 1001L));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         var summary = service.reserveItems(order, USERNAME);
 
         assertThat(summary.created()).extracting(ReservationDto::sku).containsExactly(SKU);
         assertThat(summary.outcome()).isEqualTo(ReservationOutcome.CREATED);
-        verify(inventoryService).reserveWithRetry(anyString(), anyList());
+        verify(inventoryService).reserveWithRetry(any(), anyList());
         verify(orderItemRepository).saveAll(anyList());
     }
 
@@ -377,7 +377,7 @@ class FulfillmentServiceReserveItemsTest {
         checkItemsReturns(order, covered(firstItem(order), 1001L));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
         when(userRepository.findByUsernameOrEmail(USERNAME, USERNAME)).thenReturn(Optional.of(actingUser()));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(order, USERNAME);
@@ -410,7 +410,7 @@ class FulfillmentServiceReserveItemsTest {
         checkItemsReturns(order, covered(firstItem(order), 1001L));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
         when(userRepository.findByUsernameOrEmail(email, email)).thenReturn(Optional.of(actingUser()));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(order, email);
@@ -430,7 +430,7 @@ class FulfillmentServiceReserveItemsTest {
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(existing));
         // Empty on both counts: the reservation neither created anything nor found anything active,
         // so there is no line the order status could be advanced for.
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(), List.of()));
 
         service.reserveItems(order, USERNAME);
@@ -452,13 +452,13 @@ class FulfillmentServiceReserveItemsTest {
 
         checkItemsReturns(order, covered(item, 1001L));
         when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
-        when(inventoryService.reserveWithRetry(anyString(), anyList()))
+        when(inventoryService.reserveWithRetry(any(), anyList()))
                 .thenReturn(new ReservationResult(List.of(created), List.of(created)));
 
         service.reserveItems(order, USERNAME);
 
         ArgumentCaptor<List<ReserveItem>> captor = ArgumentCaptor.forClass(List.class);
-        verify(inventoryService).reserveWithRetry(anyString(), captor.capture());
+        verify(inventoryService).reserveWithRetry(any(), captor.capture());
         assertThat(captor.getValue()).extracting(ReserveItem::orderItemId).containsExactly(11L);
     }
 }

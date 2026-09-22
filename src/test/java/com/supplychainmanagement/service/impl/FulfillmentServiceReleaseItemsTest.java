@@ -50,7 +50,7 @@ import static org.mockito.Mockito.when;
 class FulfillmentServiceReleaseItemsTest {
 
     private static final UUID SKU = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
-    private static final String ORDER_ID = "42";
+    private static final Long ORDER_ID = 42L;
     private static final String USERNAME = "manager";
 
     @Mock
@@ -91,11 +91,11 @@ class FulfillmentServiceReleaseItemsTest {
         order.setOrderNo(1042L);
         order.setOrderItems(Set.of(orderItem));
 
-        Reservation reservation = Reservation.active(orderItem, ORDER_ID, SKU, 3, storehouse);
+        Reservation reservation = Reservation.active(orderItem, SKU, 3, storehouse);
         // Two answers on purpose: releaseItems looks the reservation up, and after the release -
         // which deletes the row in its own committed transaction - the status check sees it gone.
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(reservation), List.of());
-        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
+        when(inventoryService.releaseWithRetry(any(), anyList())).thenReturn(List.of(reservation));
 
         return order;
     }
@@ -118,7 +118,7 @@ class FulfillmentServiceReleaseItemsTest {
         service.releaseItems(order, USERNAME);
 
         InOrder ordered = inOrder(inventoryService, orderItemRepository);
-        ordered.verify(inventoryService).releaseWithRetry(anyString(), anyList());
+        ordered.verify(inventoryService).releaseWithRetry(any(), anyList());
         ordered.verify(orderItemRepository).saveAll(anyList());
     }
 
@@ -130,7 +130,7 @@ class FulfillmentServiceReleaseItemsTest {
     void keepsTheReservedStatusWhenTheReleaseFails() {
         Order order = orderWithActiveReservation();
         doThrow(new IllegalStateException("release exceeds reserved"))
-                .when(inventoryService).releaseWithRetry(anyString(), anyList());
+                .when(inventoryService).releaseWithRetry(any(), anyList());
 
         assertThatThrownBy(() -> service.releaseItems(order, USERNAME))
                 .isInstanceOf(IllegalStateException.class);
@@ -221,13 +221,13 @@ class FulfillmentServiceReleaseItemsTest {
 
         Storehouse storehouse = new Storehouse();
         storehouse.setId(7L);
-        Reservation reportedReleased = Reservation.active(orderItem, ORDER_ID, SKU, 3, storehouse);
-        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reportedReleased));
+        Reservation reportedReleased = Reservation.active(orderItem, SKU, 3, storehouse);
+        when(inventoryService.releaseWithRetry(any(), anyList())).thenReturn(List.of(reportedReleased));
 
         var released = service.releaseItems(order, "system");
 
         assertThat(released).containsExactly(reportedReleased);
-        verify(inventoryService).releaseWithRetry(anyString(), anyList());
+        verify(inventoryService).releaseWithRetry(any(), anyList());
         assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.WAITING);
     }
 
@@ -243,7 +243,7 @@ class FulfillmentServiceReleaseItemsTest {
 
         assertThat(service.releaseItems(order, "system")).isEmpty();
 
-        verify(inventoryService, never()).releaseWithRetry(anyString(), anyList());
+        verify(inventoryService, never()).releaseWithRetry(any(), anyList());
         verify(orderItemRepository, never()).saveAll(any());
         assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.RESERVED);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
@@ -282,9 +282,9 @@ class FulfillmentServiceReleaseItemsTest {
         order.setOrderItems(new LinkedHashSet<>(List.of(released, stillHeld)));
 
         // Only the first line holds a reservation. The second shares its article but not its hold.
-        Reservation reservation = Reservation.active(released, ORDER_ID, SKU, 3, storehouse);
+        Reservation reservation = Reservation.active(released, SKU, 3, storehouse);
         when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of(reservation), List.of());
-        when(inventoryService.releaseWithRetry(anyString(), anyList())).thenReturn(List.of(reservation));
+        when(inventoryService.releaseWithRetry(any(), anyList())).thenReturn(List.of(reservation));
 
         service.releaseItems(order, USERNAME);
 

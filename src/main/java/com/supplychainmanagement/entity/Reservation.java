@@ -54,9 +54,6 @@ public class Reservation {
     private OrderItem orderItem;
 
     @Column(nullable = false, length = 64)
-    private String orderId;
-
-    @Column(nullable = false, length = 64)
     private UUID sku;
 
     @Column(nullable = false)
@@ -78,10 +75,9 @@ public class Reservation {
     )
     private Storehouse storehouse;
 
-    private Reservation(OrderItem orderItem, String orderId, UUID sku, int quantity,
+    private Reservation(OrderItem orderItem, UUID sku, int quantity,
                         Storehouse storehouse, ReservationStatus reservationStatus) {
         this.orderItem = orderItem;
-        this.orderId = orderId;
         this.sku = sku;
         this.quantity = quantity;
         this.storehouse = storehouse;
@@ -90,12 +86,15 @@ public class Reservation {
     }
 
     /**
-     * {@code orderId}, {@code sku} and {@code qty} are passed in rather than read off the order
-     * item on purpose: both {@code OrderItem.order} and {@code OrderItem.product} are LAZY, and the
-     * reserve path holds nothing but a proxy here. Deriving them would cost two extra selects per
-     * line.
+     * {@code sku} and {@code qty} are passed in rather than read off the order item on purpose:
+     * {@code OrderItem.product} is LAZY, and the reserve path holds nothing but a proxy here.
+     * Deriving them would cost extra selects per line - and {@code Stock} is keyed by
+     * (sku, storehouse), so the sku is what the hot path needs.
+     * <p>
+     * There is no order id of its own: the order is the order line's, {@code orderItem.order}. A
+     * copy next to it could only ever disagree with it.
      */
-    public static Reservation active(OrderItem orderItem, String orderId, UUID sku, int quantity,
+    public static Reservation active(OrderItem orderItem, UUID sku, int quantity,
                                      Storehouse storehouse) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be greater than zero");
@@ -109,7 +108,7 @@ public class Reservation {
             throw new IllegalArgumentException("Order item must not be null");
         }
 
-        return new Reservation(orderItem, orderId, sku, quantity, storehouse, ReservationStatus.ACTIVE);
+        return new Reservation(orderItem, sku, quantity, storehouse, ReservationStatus.ACTIVE);
     }
 
     public void release() {

@@ -23,13 +23,13 @@ public class InventoryServiceImpl implements InventoryService {
     private final ReservationRepository reservationRepository;
 
     @Override
-    public ReservationResult reserveWithRetry(String orderId, List<ReserveItem> items) {
+    public ReservationResult reserveWithRetry(Long orderId, List<ReserveItem> items) {
         try {
             return executeWithRetry(() -> transactionService.reserve(orderId, items));
         } catch (DataIntegrityViolationException ex) {
             // Race: a concurrent reserve() call for the same order passed the idempotency guard in
             // InventoryReservationTransactionService.reserve() just ahead of us and already
-            // committed. The DB unique constraint (order_id, sku, storehouse_id) catches that case.
+            // committed. The DB unique constraint on order_item_id catches that case.
             // Re-check instead of swallowing blindly: only if an ACTIVE reservation really exists
             // now was it exactly this race - the call is then already done and the existing
             // reservations are returned. Otherwise it was a different, genuine error -> rethrow.
@@ -44,12 +44,12 @@ public class InventoryServiceImpl implements InventoryService {
     }
 
     @Override
-    public List<Reservation> releaseWithRetry(String orderId, List<ReserveItem> items) {
+    public List<Reservation> releaseWithRetry(Long orderId, List<ReserveItem> items) {
         return executeWithRetry(() -> transactionService.release(orderId, items));
     }
 
     @Override
-    public List<Reservation> consumeWithRetry(String orderId, List<ReserveItem> items) {
+    public List<Reservation> consumeWithRetry(Long orderId, List<ReserveItem> items) {
         return executeWithRetry(() -> transactionService.consume(orderId, items));
     }
 

@@ -12,6 +12,7 @@ public record UpdateShipmentRequest(
         @NotBlank(message = "shippingAddress is required")
         String shippingAddress,
         String shippingMethod,
-        LocalDate requestedDeliveryDate
+        LocalDate requestedDeliveryDate,
+        String comment
 ) {
 }

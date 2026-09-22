@@ -51,7 +51,8 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
     public PickingOrderDto pickingReservationById(Long reservationId) {
         var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.ACTIVE)
                 .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id maybe already converted", reservationId));
-        Order order = findOrder(reservation.getOrderId());
+        // Fetched with the reservation - the order is the order line's.
+        Order order = reservation.getOrderItem().getOrder();
 
         return transactionService.pick(order, reservation);
     }
@@ -69,10 +70,8 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
     public List<PickingOrderDto> pickingReservationByOrderNo(String orderNo) {
         Order order = findOrder(orderNo);
 
-        // Queried with the order's id, not with the orderNo that came in: Reservation.orderId holds
-        // the numeric Order.id as a String, so passing the orderNo through would find nothing for
-        // every order whose two numbers differ.
-        return reservationRepository.findByOrderIdAndStatus(String.valueOf(order.getId()), ReservationStatus.ACTIVE).stream()
+        // By the order's id, not by the orderNo that came in - the two numbers differ.
+        return reservationRepository.findByOrderItemOrderIdAndStatus(order.getId(), ReservationStatus.ACTIVE).stream()
                 .map(reservation -> transactionService.pick(order, reservation))
                 .toList();
     }
@@ -93,7 +92,7 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
         orderItem.setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH);
         orderItemRepository.save(orderItem);
 
-        return PickingOrderDto.of(findOrder(reservation.getOrderId()), reservation);
+        return PickingOrderDto.of(orderItem.getOrder(), reservation);
     }
 
     /**
@@ -107,8 +106,7 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
     }
 
     /**
-     * {@code Reservation.orderId} is a String while {@code Order.id} is numeric - the conversion and
-     * the lookup live in one place instead of at every call site. Falls back to the orderNo so both
+     * The order behind a number from the path - its id, falling back to its orderNo, so both
      * identifiers reach the same order.
      */
     private Order findOrder(String orderId) {

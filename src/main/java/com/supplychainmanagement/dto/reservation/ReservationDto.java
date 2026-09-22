@@ -19,11 +19,13 @@ import java.util.UUID;
  * <p>
  * Related entities therefore appear as ids only. Hibernate answers {@code getId()} on a proxy from
  * the identifier it already holds, without initializing it, so {@link #of} is safe on a detached
- * reservation - which is the point.
+ * reservation - which is the point. The order id is handed in by the caller, who has the order: the
+ * reservation reaches it only through {@code orderItem.order}, and that would need the order line
+ * initialized.
  */
 public record ReservationDto(
         Long id,
-        String orderId,
+        Long orderId,
         Long orderItemId,
         UUID sku,
         int quantity,
@@ -32,13 +34,13 @@ public record ReservationDto(
         LocalDateTime expiresAt
 ) {
 
-    public static ReservationDto of(Reservation reservation) {
+    public static ReservationDto of(Reservation reservation, Long orderId) {
         OrderItem orderItem = reservation.getOrderItem();
         Storehouse storehouse = reservation.getStorehouse();
 
         return new ReservationDto(
                 reservation.getId(),
-                reservation.getOrderId(),
+                orderId,
                 // Null on legacy rows from before order_item_id existed.
                 orderItem != null ? orderItem.getId() : null,
                 reservation.getSku(),

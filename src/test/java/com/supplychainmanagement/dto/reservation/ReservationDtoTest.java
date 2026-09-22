@@ -44,7 +44,6 @@ class ReservationDtoTest {
     void reservationFromAClosedSession() {
         detached = new TransactionTemplate(transactionManager).execute(status -> Reservation.active(
                 entityManager.getReference(OrderItem.class, UNKNOWN_ID),
-                String.valueOf(UNKNOWN_ID),
                 UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8"),
                 3,
                 entityManager.getReference(Storehouse.class, UNKNOWN_ID)));
@@ -61,8 +60,10 @@ class ReservationDtoTest {
 
     @Test
     void theDtoReadsTheIdsWithoutInitializingTheProxies() {
-        ReservationDto dto = ReservationDto.of(detached);
+        ReservationDto dto = ReservationDto.of(detached, 42L);
 
+        // The order id comes from the caller - reading it off the uninitialized order line would fail.
+        assertThat(dto.orderId()).isEqualTo(42L);
         assertThat(dto.orderItemId()).isEqualTo(UNKNOWN_ID);
         assertThat(dto.storehouseId()).isEqualTo(UNKNOWN_ID);
         assertThat(Hibernate.isInitialized(detached.getOrderItem())).isFalse();
@@ -71,9 +72,10 @@ class ReservationDtoTest {
 
     @Test
     void theDtoSerializes() {
-        String json = jsonMapper.writeValueAsString(ReservationDto.of(detached));
+        String json = jsonMapper.writeValueAsString(ReservationDto.of(detached, 42L));
 
         assertThat(json)
+                .contains("\"orderId\":42")
                 .contains("\"orderItemId\":-1")
                 .contains("\"storehouseId\":-1")
                 .contains("\"quantity\":3")
@@ -85,6 +87,6 @@ class ReservationDtoTest {
     void aReservationWithoutAnOrderItemMapsToANullId() {
         detached.setOrderItem(null);
 
-        assertThat(ReservationDto.of(detached).orderItemId()).isNull();
+        assertThat(ReservationDto.of(detached, 42L).orderItemId()).isNull();
     }
 }

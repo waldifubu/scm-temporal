@@ -48,7 +48,7 @@ public class InventoryReservationTransactionService {
      * checking availability up front leaves no half-changed entity behind.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public ReservationResult reserve(String orderId, List<ReserveItem> items) {
+    public ReservationResult reserve(Long orderId, List<ReserveItem> items) {
         List<Reservation> active = new ArrayList<>(reservationRepository.findActive(orderId));
         List<Reservation> created = new ArrayList<>();
 
@@ -82,7 +82,6 @@ public class InventoryReservationTransactionService {
                         // A proxy is enough: writing the foreign key needs the id, not the row.
                         // getReferenceById issues no select, so the reserve path keeps its query count.
                         orderItemRepository.getReferenceById(item.orderItemId()),
-                        orderId,
                         item.sku(),
                         item.quantity(),
                         stock.getStorehouse()
@@ -104,7 +103,7 @@ public class InventoryReservationTransactionService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public List<Reservation> release(String orderId, List<ReserveItem> items) {
+    public List<Reservation> release(Long orderId, List<ReserveItem> items) {
         List<Reservation> released = new ArrayList<>();
 
         Stock stock;
@@ -140,7 +139,7 @@ public class InventoryReservationTransactionService {
      * a caller to tell a consumed line from a skipped one.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public List<Reservation> consume(String orderId, List<ReserveItem> items) {
+    public List<Reservation> consume(Long orderId, List<ReserveItem> items) {
         List<Reservation> consumed = new ArrayList<>();
 
         for (ReserveItem item : items) {
@@ -173,11 +172,11 @@ public class InventoryReservationTransactionService {
     }
 
     /**
-     * By order line, for the same reason the guard above is: (orderId, sku, storehouseId) is not
-     * unique once an order carries the same article on two lines, and the Optional behind it would
-     * have broken with a NonUniqueResultException.
+     * By order line, for the same reason the guard above is: (order, sku, storehouse) is not unique
+     * once an order carries the same article on two lines, and the Optional behind it would have
+     * broken with a NonUniqueResultException.
      */
-    private Reservation findActiveReservation(String orderId, ReserveItem item) {
+    private Reservation findActiveReservation(Long orderId, ReserveItem item) {
         return reservationRepository.findActiveByOrderItem(item.orderItemId())
                 .orElseThrow(() -> new IllegalStateException(
                         "Active reservation missing for order item: " + item.orderItemId()));

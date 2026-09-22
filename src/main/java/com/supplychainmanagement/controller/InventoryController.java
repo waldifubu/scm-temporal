@@ -59,21 +59,6 @@ public class InventoryController {
         var order = orderService.findByOrderNo(orderId);
         var releasedItems = fulfillmentService.releaseItems(order, authUser.getUsername());
 
-        return ResponseEntity.ok(releasedItems.stream().map(ReservationDto::of).toList());
+        return ResponseEntity.ok(releasedItems.stream().map(reservation -> ReservationDto.of(reservation, order.getId())).toList());
     }
-
-
-    //@TODO: Never used atm.
-    /*
-    @PostMapping(path = "/orders/{orderId}/consume", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<List<ReservationDto>> consume(@PathVariable String orderId, @Valid @RequestBody List<ReserveItem> items) {
-
-        // Only what was really consumed: a line without stock or without an active reservation is
-        // skipped, so the list can be shorter than the request. Mapped for the same reason as release.
-        var consumed = inventoryService.consumeWithRetry(orderId, items);
-
-        return ResponseEntity.ok(consumed.stream().map(ReservationDto::of).toList());
-    }
-    */
 }
