@@ -52,6 +52,8 @@ class CustomQueryExecutionTest {
     private PackageItemRepository packageItemRepository;
     @Autowired
     private ShipmentRepository shipmentRepository;
+    @Autowired
+    private OrderRepository orderRepository;
 
     /** The one that broke: two named parameters, and the second was bound under a different name. */
     @Test
@@ -248,6 +250,18 @@ class CustomQueryExecutionTest {
         assertThat(shipmentRepository.findAllWithCustomerBy(pageable).getTotalElements()).isNotNegative();
         assertThat(shipmentRepository.findAllWithCustomerByStatus(ShipmentStatus.CREATED, pageable).getTotalElements())
                 .isNotNegative();
+    }
+
+    /** The order lines a shipment carries - what checkShipmentReady moves on. */
+    @Test
+    void findOrderItemsByShipmentIdRuns() {
+        assertThat(orderItemRepository.findByShipmentId(UNKNOWN_ID)).isEmpty();
+    }
+
+    /** The orders behind a shipment, reached over packages, items and order lines. */
+    @Test
+    void findByShipmentIdRuns() {
+        assertThat(orderRepository.findByShipmentId(UNKNOWN_ID)).isEmpty();
     }
 
     /** The entity graphs with the packages collection only resolve when the query runs. */

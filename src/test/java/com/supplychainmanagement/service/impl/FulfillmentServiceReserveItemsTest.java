@@ -11,7 +11,6 @@ import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.entity.users.User;
-import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.exception.UnsufficientException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
@@ -22,6 +21,7 @@ import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.InventoryService;
 import com.supplychainmanagement.service.ProductionService;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -30,7 +30,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -77,8 +76,9 @@ class FulfillmentServiceReserveItemsTest {
     private OrderItemRepository orderItemRepository;
     @Mock
     private UserRepository userRepository;
+
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private FulfillmentServiceImpl service;
@@ -178,7 +178,7 @@ class FulfillmentServiceReserveItemsTest {
                 .hasMessageContaining("requested 5")
                 .hasMessageNotContaining("Stock not found");
 
-        verifyNoInteractions(inventoryService, orderItemRepository, orderRepository, eventPublisher);
+        verifyNoInteractions(inventoryService, orderItemRepository, orderRepository, orderProgress);
     }
 
     @Test
@@ -368,9 +368,13 @@ class FulfillmentServiceReserveItemsTest {
         verify(orderItemRepository).saveAll(anyList());
     }
 
-    /** The status change is attributed to the caller, resolved from the login identifier. */
+    /**
+     * The status change is attributed to the caller, resolved from the login identifier. Writing it
+     * and publishing the event is OrderProgressService's job - what this asks is that fulfillment
+     * hands the step over, with the right user on it.
+     */
     @Test
-    void publishesTheStatusChangeWithTheActingUser() {
+    void recordsTheStatusChangeWithTheActingUser() {
         Order order = orderRequesting(3);
         Reservation created = reservationFor(firstItem(order), SKU, 3);
 
@@ -382,18 +386,29 @@ class FulfillmentServiceReserveItemsTest {
 
         service.reserveItems(order, USERNAME);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
+        verify(orderProgress).changeStatus(order, OrderStatus.IN_FULFILLMENT, USER_ID);
+    }
 
-        assertThat(captor.getValue())
-                .isInstanceOf(OrderStatusChangedEvent.class)
-                .satisfies(event -> {
-                    OrderStatusChangedEvent statusChange = (OrderStatusChangedEvent) event;
-                    assertThat(statusChange.orderId()).isEqualTo(42L);
-                    assertThat(statusChange.userId()).isEqualTo(USER_ID);
-                    assertThat(statusChange.previousStatus()).isEqualTo(OrderStatus.CREATED);
-                    assertThat(statusChange.newStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
-                });
+    /**
+     * A reservation driven by a scheduled sweep runs under a name that resolves to nobody. The step
+     * is recorded all the same - OrderHistory.user_id is nullable for exactly that case. It used to
+     * be dropped here: the event hung off an ifPresent on the user lookup while the status was
+     * written either way, so the order moved without a history row behind it.
+     */
+    @Test
+    void recordsTheStatusChangeEvenWhenTheUserCannotBeResolved() {
+        Order order = orderRequesting(3);
+        Reservation created = reservationFor(firstItem(order), SKU, 3);
+
+        checkItemsReturns(order, covered(firstItem(order), 1001L));
+        when(productRepository.findByArticleNo(1001L)).thenReturn(Optional.of(product(1001L, SKU)));
+        when(userRepository.findByUsernameOrEmail("system", "system")).thenReturn(Optional.empty());
+        when(inventoryService.reserveWithRetry(any(), anyList()))
+                .thenReturn(new ReservationResult(List.of(created), List.of(created)));
+
+        service.reserveItems(order, "system");
+
+        verify(orderProgress).changeStatus(order, OrderStatus.IN_FULFILLMENT, null);
     }
 
     /**
@@ -415,9 +430,7 @@ class FulfillmentServiceReserveItemsTest {
 
         service.reserveItems(order, email);
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
-        assertThat(((OrderStatusChangedEvent) captor.getValue()).userId()).isEqualTo(USER_ID);
+        verify(orderProgress).changeStatus(order, OrderStatus.IN_FULFILLMENT, USER_ID);
     }
 
     /** Nothing was reserved, so the order status must not move and no history event may be raised. */
@@ -436,7 +449,7 @@ class FulfillmentServiceReserveItemsTest {
         service.reserveItems(order, USERNAME);
 
         assertThat(order.getStatus()).isEqualTo(OrderStatus.CREATED);
-        verifyNoInteractions(eventPublisher, orderRepository);
+        verifyNoInteractions(orderProgress, orderRepository);
     }
 
     /**

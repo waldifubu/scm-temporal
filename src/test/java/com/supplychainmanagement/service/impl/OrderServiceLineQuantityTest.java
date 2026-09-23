@@ -10,6 +10,7 @@ import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.RoleService;
 import org.junit.jupiter.api.BeforeEach;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -48,6 +49,9 @@ class OrderServiceLineQuantityTest {
     private ProductRepository productRepository;
     @Mock
     private RoleService roleService;
+
+    @Mock
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private OrderServiceImpl service;

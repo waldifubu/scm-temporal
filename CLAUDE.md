@@ -83,16 +83,25 @@ responsibilities — read all of them together before changing reservation/fulfi
 
 - **`Order`** has a coarse-grained `OrderStatus` (`CREATED → ACKNOWLEDGED → REVIEW → APPROVED →
   IN_FULFILLMENT → READY_FOR_DISPATCH → IN_TRANSIT → DELIVERED → COMPLETED`, plus
-  `REJECTED`/`CANCELLED`). Only the part up to `IN_FULFILLMENT` is driven by code today.
+  `REJECTED`/`CANCELLED`). Driven by code up to `IN_FULFILLMENT`, and from there on by the shipment
+  the order's packages travel in: `READY_FOR_DISPATCH` when the shipment is reported ready - the
+  warehouse is done with it, which is what that status says - then `IN_TRANSIT` and `DELIVERED` with
+  the carrier's steps. A cancelled shipment takes its orders back to `IN_FULFILLMENT` - the one
+  backwards step besides the fallback to `APPROVED` in `releaseItems`. `COMPLETED` and `CANCELLED`
+  are still unreachable on the order.
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
-  PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item. It is implemented up to `PACKED`;
-  the last step, `OrderHandlingService.readyForDispatch()`, has no endpoint at the moment (its
-  mapping is commented out in `ShipmentController`). Note there is no `RESERVING` — it was removed
+  PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item, and implemented end to end: the
+  last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
+  `OrderHandlingService.readyForDispatch()`, whose endpoint is commented out in `ShipmentController`
+  and which is left over. Note there is no `RESERVING` — it was removed
   because nothing could ever observe it inside the synchronous reserve transaction.
 - **`ShipmentPackage`** has `ShipmentPackageStatus` (`OPEN → PACKED → DISPATCHED`): filled while
-  `OPEN`, closed by `completePackage`. `DISPATCHED` is not reached by code yet. **`Shipment`** has
-  `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT → DELIVERED`, plus
-  `CANCELLED`); only `CREATED` is set by code so far.
+  `OPEN`, closed by `completePackage`, and `DISPATCHED` when its shipment reports `in-transit`.
+  **`Shipment`** has `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT
+  → DELIVERED`, plus `CANCELLED`): `CREATED` on insert, `READY` through
+  `PUT /shipments/{id}/ready`, then the carrier's three steps, and `CANCELLED` through
+  `POST /shipments/{id}/cancel` (see below). `DISPATCH_REQUESTED` is not set by code yet - a
+  shipment goes from `READY` straight to `ACCEPTED`.
 
 The chain is split by responsibility, not by entity. Which service owns which stretch - one
 controller per service, named after what it does (`PickingController`, `PackingController`,
@@ -105,9 +114,11 @@ controller per service, named after what it does (`PickingController`, `PackingC
 | `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
 | `PICKED → PACKED` | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`, the picked lines to pack) |
 | reading packages and package items | `PackageQueryService` | `PackageController` |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | — (endpoint currently commented out) |
-| packages → shipment | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
+| `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
+| packages → shipment, ready, cancel | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
+| accept → in transit → delivered | `DeliveryService` | `ShipmentController` (same paths, DISTRIBUTOR) |
+| every order status change (write + audit event) | `OrderProgressService` | — |
+| tracking, returns | `DeliveryService` | — (not implemented) |
 
 - **`ProductionService`** — `checkItems(order)` reports stock availability per line without
   reserving or writing anything; `produce()` builds finished products from component stock.
@@ -123,6 +134,14 @@ controller per service, named after what it does (`PickingController`, `PackingC
   once nothing is held any more, and that transition wants an audit row. "Nothing held" includes
   the lines: once any line is past `RESERVED` (a picked line holds only a `CONSUMED` reservation,
   which does not count as active) the order stays `IN_FULFILLMENT`.
+- **Never set a status on an entity a service will reload.** `update` compares the status it
+  reloads against the one it is handed, and with `open-in-view` (default `true`) both are the same
+  instance for the whole request - the change looks like none, so the status is written and the audit
+  row is not. `acknowledge` and `OrderController`'s reject did exactly that and lost their history
+  rows; both now go through `OrderProgressService.changeStatus`, and `reject` is a service method of
+  its own (`OrderService.reject`) rather than a status the controller sets. `OrderStatusHistoryTest`
+  guards it - a unit test cannot, because with mocked repositories the two loads are whatever the
+  stub returns.
 - **`OrderService.acknowledge`** accepts an incoming order and confirms a delivery date for it: two
   lead times in working days (`app.order.leadDays.inStock` / `.replenishment`, defaulted inline)
   depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
@@ -221,8 +240,10 @@ controller per service, named after what it does (`PickingController`, `PackingC
   the items of one order only (`requireOneOrder`, 400 on every way in, completing included), so it
   always has exactly one customer. Only `PACKED` packages (409), none from another shipment (409), no
   package number twice (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up
-  front), and only a `CREATED` shipment changes its packages or data (409). Shipment first, then its
-  packages in ascending id order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
+  front). What may still change depends on the status: **packages** only while `CREATED` (409 from
+  `READY` on - `findChangeableShipmentForUpdate`), the shipment's **own data** up to `ACCEPTED`
+  (`DATA_CHANGEABLE_IN`, 409 from `IN_TRANSIT` on). Shipment first, then its packages in ascending id
+  order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
   `@PrePersist`. `shippingAddress` is optional when creating (blank is stored as `null` and left out
   of the JSON) but required for `GET /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
   also requires every package `PACKED`). A distributor is assigned with
@@ -230,6 +251,41 @@ controller per service, named after what it does (`PickingController`, `PackingC
   user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. The list
   (`GET /shipments`, optional `status`) is two queries like the package list. `ShipmentResponse`
   names customer and distributor by id and name only, never the `User` entities.
+- **Reporting a shipment ready** (`PUT /shipments/{id}/ready`, `checkShipmentReady`): read
+  `FOR UPDATE` and only from `CREATED` (409 - on a shipment already on its way the call would take
+  lines packed again in the meantime back to `READY_FOR_DISPATCH`), with a shipping address (409),
+  at least one package (409 - `allMatch` says true for none) and every package `PACKED` (409). It
+  then takes the shipment to `READY`, the **order lines** it carries from `PACKED` to
+  `READY_FOR_DISPATCH` (`OrderItemRepository.findByShipmentId`) and the **orders** behind them with
+  them (`OrderProgressService.advance`). A line still `PACKING` has parts in another package and is
+  left alone; forwards only, like the orders. The order moves here and not at `accept`: the status
+  is the warehouse reporting an order ready for the distributor, not the distributor answering. The
+  `advance` call in `accept` stays as a catch-up for an order that was not moved here.
+- **The carrier's three steps** (ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
+  side lives in `DeliveryService`, not in `ShipmentService`; `RoleEnum.LOGISTICS` is the inside role
+  that plans shipments, which is why it is not called `LogisticsService`). They answer with
+  `DeliveryResponse`: address, package count, weight and package numbers, **no package contents** -
+  the carrier is not shown the customer's SKUs and quantities. The steps are:
+  `POST /shipments/{id}/accept` (`READY`/`DISPATCH_REQUESTED` → `ACCEPTED`),
+  `POST /shipments/{id}/in-transit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
+  packages from `PACKED` to `DISPATCHED`) and `POST /shipments/{id}/delivered` (`IN_TRANSIT` →
+  `DELIVERED`, stamps `deliveredAt`); any other status is a 409, and the shipment is read
+  `FOR UPDATE`. Each step takes **the orders of the shipment** along - `READY_FOR_DISPATCH`,
+  `IN_TRANSIT`, `DELIVERED` - found through the packages (`OrderRepository.findByShipmentId`, a
+  shipment may carry packages of several orders of its customer). Which of them really move is
+  **`OrderProgressService`**, not the shipment: `advance` takes orders forwards only (`ORDER_FLOW`
+  decides, so an order already further along or one in `REJECTED`/`CANCELLED` is left alone) and
+  `takeBackFromDispatch` is the way back for a cancelled dispatch. It publishes the
+  `OrderStatusChangedEvent` and runs `Propagation.MANDATORY` - without the caller's transaction an
+  `AFTER_COMMIT` listener would drop the event, so it refuses to run outside one.
+- **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN and LOGISTICS): only up to
+  `ACCEPTED` (409 afterwards - once it rolls it is a return, which the process does not model), and
+  only with a reason (400), which is kept in `comment`. It undoes what the shipment had set in
+  motion: the packages are loose again and stay `PACKED`, lines go from `READY_FOR_DISPATCH` back to
+  `PACKED`, and orders from `READY_FOR_DISPATCH` back to `IN_FULFILLMENT`
+  (`OrderProgressService.takeBackFromDispatch` - unless a line of theirs travels in another
+  shipment). Lines and orders are read **before** the packages are detached: both are found over the
+  packages.
 - **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
   contents (0 without items) and has no setter; no request carries a weight. The package keeps it
   itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's
@@ -240,6 +296,14 @@ controller per service, named after what it does (`PickingController`, `PackingC
 - **`Reservation.release()`** marks status `RELEASED`, but the row is then *deleted* (not kept)
   because the unique constraint would otherwise permanently block re-reserving the same
   order/sku/storehouse combination.
+- **An order status is written in one place**: `OrderProgressService.changeStatus` sets it, saves
+  and publishes the event - `advance`/`takeBackFromDispatch` are the variants with a direction rule,
+  and `recordCreated` is the first row of a new order. `OrderServiceImpl` (create, update, and with
+  it `acknowledge` and `reject`) and `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to `APPROVED`)
+  all go through it. Do not write `order.setStatus(...)` and publish by hand - every caller that did had
+  its own idea of what to do when the user could not be resolved, and one of them dropped the audit
+  row. `changeStatus` ignores a `null` target and one the order already has, so a CRUD update
+  without a status leaves the order where it is.
 - Order-status transitions publish `OrderStatusChangedEvent` via `ApplicationEventPublisher`;
   `OrderStatusChangedListener` (`@TransactionalEventListener(phase = AFTER_COMMIT)`) writes an
   `OrderHistory` audit row. Follow this event pattern for any new status-changing code path instead

@@ -19,11 +19,11 @@ import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.*;
 import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.InventoryService;
+import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.ProductionService;
 import lombok.AllArgsConstructor;
 import lombok.RequiredArgsConstructor;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -42,13 +42,13 @@ public class FulfillmentServiceImpl implements FulfillmentService {
 
 
     private final ProductRepository productRepository;
-    private final ApplicationEventPublisher eventPublisher;
     private final OrderRepository orderRepository;
     private final InventoryService inventoryService;
     private final ReservationRepository reservationRepository;
     private final OrderItemRepository orderItemRepository;
     private final UserRepository userRepository;
     private final ProductionService productionService;
+    private final OrderProgressService orderProgress;
 
     /**
      * Transactional so the order status, the line item statuses and the published
@@ -144,12 +144,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // pre-fulfillment status) so that a second, idempotent call never sets a further-along order
         // back. A partial reservation counts: fulfillment has started for at least one line.
         if (!reservedOrderItemIds.isEmpty() && PRE_FULFILLMENT_STATUSES.contains(order.getStatus())) {
-            OrderStatus previousStatus = order.getStatus();
-            order.setStatus(OrderStatus.IN_FULFILLMENT);
-            orderRepository.save(order);
-            userRepository.findByUsernameOrEmail(username, username).ifPresent(user -> {
-                eventPublisher.publishEvent(new OrderStatusChangedEvent(order.getId(), user.getId(), previousStatus, OrderStatus.IN_FULFILLMENT));
-            });
+            orderProgress.changeStatus(order, OrderStatus.IN_FULFILLMENT, userIdOf(username));
         }
 
         // Only the lines actually covered by a reservation move to RESERVED. The others keep the
@@ -320,18 +315,21 @@ public class FulfillmentServiceImpl implements FulfillmentService {
             return;
         }
 
-        OrderStatus previousStatus = order.getStatus();
-        order.setStatus(OrderStatus.APPROVED);
-        orderRepository.save(order);
+        orderProgress.changeStatus(order, OrderStatus.APPROVED, userIdOf(username));
+    }
 
-        // Published even when the name resolves to nobody - OrderHistory.user_id is nullable for
-        // exactly this case, and a release by a scheduled sweep ("system") still belongs in the
-        // audit trail.
-        Long userId = userRepository.findByUsernameOrEmail(username, username)
+    /**
+     * The acting user, or null when the name resolves to nobody - OrderHistory.user_id is nullable
+     * for exactly that case, and a release by a scheduled sweep ("system") still belongs in the
+     * audit trail.
+     * <p>
+     * CustomUserDetailsService puts whatever was typed at login into the principal, so the
+     * identifier reaching us can be a username or an email address.
+     */
+    private Long userIdOf(String username) {
+        return userRepository.findByUsernameOrEmail(username, username)
                 .map(User::getId)
                 .orElse(null);
-        eventPublisher.publishEvent(
-                new OrderStatusChangedEvent(order.getId(), userId, previousStatus, OrderStatus.APPROVED));
     }
 
     /** Whether any line has got further than holding a reservation - picking started or later. */

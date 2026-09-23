@@ -6,6 +6,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.RoleService;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -38,6 +39,9 @@ class OrderServiceAccessTest {
     private UserRepository userRepository;
     @Mock
     private RoleService roleService;
+
+    @Mock
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private OrderServiceImpl service;

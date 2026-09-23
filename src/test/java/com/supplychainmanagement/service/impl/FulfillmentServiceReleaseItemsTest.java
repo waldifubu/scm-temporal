@@ -5,7 +5,6 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Storehouse;
-import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
@@ -15,16 +14,15 @@ import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.service.InventoryService;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 
 import java.time.LocalDateTime;
 import java.util.LinkedHashSet;
@@ -63,8 +61,9 @@ class FulfillmentServiceReleaseItemsTest {
     private OrderRepository orderRepository;
     @Mock
     private UserRepository userRepository;
+
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private FulfillmentServiceImpl service;
@@ -142,7 +141,8 @@ class FulfillmentServiceReleaseItemsTest {
     /**
      * The mirror image of the IN_FULFILLMENT transition in reserveItems: with the last reservation
      * gone, fulfillment has not started any more and the order drops back to APPROVED - recorded in
-     * the audit trail under the caller who released it.
+     * the audit trail under the caller who released it. The write and the event are
+     * OrderProgressService's, so what is checked here is the step being handed over.
      */
     @Test
     void takesTheOrderBackToApprovedWhenNothingIsHeldAnyMore() {
@@ -155,18 +155,7 @@ class FulfillmentServiceReleaseItemsTest {
 
         service.releaseItems(order, USERNAME);
 
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.APPROVED);
-
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
-        assertThat(captor.getValue())
-                .isInstanceOf(OrderStatusChangedEvent.class)
-                .satisfies(event -> {
-                    OrderStatusChangedEvent statusChange = (OrderStatusChangedEvent) event;
-                    assertThat(statusChange.userId()).isEqualTo(99L);
-                    assertThat(statusChange.previousStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
-                    assertThat(statusChange.newStatus()).isEqualTo(OrderStatus.APPROVED);
-                });
+        verify(orderProgress).changeStatus(order, OrderStatus.APPROVED, 99L);
     }
 
     /**
@@ -191,7 +180,7 @@ class FulfillmentServiceReleaseItemsTest {
         assertThat(picked.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PICKED);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
         verify(orderRepository, never()).save(any());
-        verify(eventPublisher, never()).publishEvent(any());
+        verify(orderProgress, never()).changeStatus(any(), any(), any());
     }
 
     /**
@@ -206,9 +195,7 @@ class FulfillmentServiceReleaseItemsTest {
 
         service.releaseItems(order, "system");
 
-        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(eventPublisher).publishEvent(captor.capture());
-        assertThat(((OrderStatusChangedEvent) captor.getValue()).userId()).isNull();
+        verify(orderProgress).changeStatus(order, OrderStatus.APPROVED, null);
     }
 
     /**

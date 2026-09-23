@@ -85,13 +85,10 @@ public class OrderController {
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public OrderSummaryDto rejectOrder(@PathVariable Long orderNo,
                                        @AuthenticationPrincipal User authUser) {
+        // The status is set in the service, not here: an order changed before update() reloads it
+        // looks unchanged to update() and its history row is lost (see OrderService.reject).
         Order order = orderService.findByOrderNo(orderNo);
-        if (order.getStatus() == OrderStatus.REJECTED) {
-            throw new IllegalArgumentException("Order is already rejected");
-        }
-
-        order.setStatus(OrderStatus.REJECTED);
-        return toSummaryDto(orderService.update(order.getId(), order, userService.getAuthenticatedUserId(authUser)));
+        return toSummaryDto(orderService.reject(order, userService.getAuthenticatedUserId(authUser)));
     }
 
     @GetMapping(path = "/{orderNo}", version = "1.0")

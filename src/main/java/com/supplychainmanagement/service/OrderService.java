@@ -43,6 +43,19 @@ public interface OrderService {
      */
     Order acknowledge(Order order, Long userId);
 
+    /**
+     * Turns an incoming order down - possible right up to fulfillment, unlike acknowledging, which
+     * only makes sense from CREATED.
+     * <p>
+     * A method of its own rather than the caller setting REJECTED and going through
+     * {@link #update(Long, Order, Long)}: with {@code open-in-view} the controller's order and the
+     * one update reloads are the same instance, so the status looked unchanged and the change went
+     * into the database without an audit row.
+     *
+     * @param userId the acting user for the audit trail, may be null
+     */
+    Order reject(Order order, Long userId);
+
     Order update(Long id, Order order);
 
     Order update(Long id, Order order, Long userId);

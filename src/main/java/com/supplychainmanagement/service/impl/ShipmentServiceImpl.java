@@ -1,10 +1,13 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.dto.shipping.UpdateShipmentRequest;
+import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Customer;
@@ -12,11 +15,16 @@ import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
+import com.supplychainmanagement.repository.OrderItemRepository;
+import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.ShipmentService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
@@ -26,6 +34,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -35,9 +44,28 @@ import java.util.stream.Stream;
 @RequiredArgsConstructor
 public class ShipmentServiceImpl implements ShipmentService {
 
+    /**
+     * While the shipment's own data - address, method, date, comment - may still be corrected. From
+     * IN_TRANSIT on the papers are out of the house, and a cancelled shipment is not edited either.
+     */
+    private static final Set<ShipmentStatus> DATA_CHANGEABLE_IN = EnumSet.of(
+            ShipmentStatus.CREATED, ShipmentStatus.READY,
+            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+
+    /**
+     * While a shipment can still be called off: up to the handover, the goods are in the house. From
+     * IN_TRANSIT on it is not a cancellation any more but a return, which the process does not model.
+     */
+    private static final Set<ShipmentStatus> CANCELLABLE_IN = EnumSet.of(
+            ShipmentStatus.CREATED, ShipmentStatus.READY,
+            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+
     private final ShipmentRepository shipmentRepository;
     private final ShipmentPackageRepository shipmentPackageRepository;
+    private final OrderRepository orderRepository;
+    private final OrderItemRepository orderItemRepository;
     private final UserRepository userRepository;
+    private final OrderProgressService orderProgress;
 
     /**
      * A shipment is created together with its packages, never empty: the customer and at least one
@@ -157,7 +185,12 @@ public class ShipmentServiceImpl implements ShipmentService {
 
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
-        
+
+        if (!DATA_CHANGEABLE_IN.contains(shipment.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
+                    + shipment.getStatus() + ", its data can only be changed up to " + ShipmentStatus.ACCEPTED);
+        }
+
         shipment.setShippingAddress(request.shippingAddress().trim());
         shipment.setShippingMethod(request.shippingMethod());
         shipment.setRequestedDeliveryDate(request.requestedDeliveryDate());
@@ -230,13 +263,81 @@ public class ShipmentServiceImpl implements ShipmentService {
         return toResponse(shipment);
     }
 
+    /** The orders this shipment carries - which of them actually move is OrderProgressService's call. */
+    private List<Long> orderIdsOf(Long shipmentId) {
+        return orderRepository.findByShipmentId(shipmentId).stream().map(Order::getId).toList();
+    }
+
+    /**
+     * Calls the shipment off and undoes what it had already set in motion:
+     * <ul>
+     *     <li>its packages are free again - still PACKED, ready for another shipment;</li>
+     *     <li>lines that checkShipmentReady had taken to READY_FOR_DISPATCH go back to PACKED;</li>
+     *     <li>orders that accept had taken to READY_FOR_DISPATCH go back to IN_FULFILLMENT, unless a
+     *     line of theirs travels in another shipment that is already further along.</li>
+     * </ul>
+     * Read before anything is detached: the lines and orders are found over the packages, and a
+     * package taken out of the shipment is no longer part of that query.
+     */
     @Override
     @Transactional
-    public ShipmentResponse checkShipmentReady(Long shipmentId) {
-        var shipment = loadShipment(shipmentId);
+    public ShipmentResponse cancelShipment(Long shipmentId, CancelShipmentRequest request, Long userId) {
+        if (request == null || request.reason() == null || request.reason().isBlank()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "reason is required");
+        }
+
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+
+        if (!CANCELLABLE_IN.contains(shipment.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
+                    + shipment.getStatus() + ", it can only be cancelled up to " + ShipmentStatus.ACCEPTED);
+        }
+
+        List<OrderItem> lines = orderItemRepository.findByShipmentId(shipmentId);
+        List<Long> orderIds = orderIdsOf(shipmentId);
+
+        // The packages go back to being loose - a cancelled shipment keeps nothing.
+        List.copyOf(shipment.getPackages()).forEach(shipment::removePackage);
+
+        List<OrderItem> backToPacked = lines.stream()
+                .filter(line -> line.getFulfillmentStatus() == FulfillmentStatus.READY_FOR_DISPATCH)
+                .toList();
+        backToPacked.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.PACKED));
+        orderItemRepository.saveAll(backToPacked);
+
+        orderProgress.takeBackFromDispatch(orderIds, userId);
+
+        shipment.setStatus(ShipmentStatus.CANCELLED);
+        shipment.setComment(request.reason().trim());
+        shipmentRepository.save(shipment);
+
+        return toResponse(shipment);
+    }
+
+    @Override
+    @Transactional
+    public ShipmentResponse checkShipmentReady(Long shipmentId, Long userId) {
+        // Locked like every other change of a shipment: the check reads the packages and then writes,
+        // and a package taken out in between would leave a shipment reported ready over a picture
+        // that no longer holds.
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+
+        // Only from CREATED: on a shipment already on its way this call would take lines that were
+        // packed again in the meantime back to READY_FOR_DISPATCH.
+        if (shipment.getStatus() != ShipmentStatus.CREATED) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
+                    + shipment.getStatus() + ", only a CREATED shipment can be reported ready");
+        }
 
         if (shipment.getShippingAddress() == null || shipment.getShippingAddress().isBlank()) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " has no shipping address");
+        }
+
+        // allMatch answers true for an empty list - a shipment without packages would be "ready".
+        if (shipment.getPackages().isEmpty()) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " holds no packages");
         }
 
         boolean allPackagesPacked = shipment.getPackages().stream()
@@ -246,10 +347,24 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is not ready for dispatch: not all packages are packed");
         }
 
-        if(shipment.getStatus() == ShipmentStatus.CREATED) {
-            shipment.setStatus(ShipmentStatus.READY);
-            shipmentRepository.save(shipment);
-        }
+        // Only now, with every package closed, are the lines really on their way out: each
+        // PackageItem names the line it was packed from, and PACKED means its ordered quantity is
+        // fully packed. A line still PACKING belongs to a package that is not in this shipment, and a
+        // line already further along travels in another shipment - forwards only, like the orders.
+        List<OrderItem> lines = orderItemRepository.findByShipmentId(shipmentId).stream()
+                .filter(line -> line.getFulfillmentStatus() == FulfillmentStatus.PACKED)
+                .toList();
+        lines.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH));
+        orderItemRepository.saveAll(lines);
+
+        // The orders follow their lines: READY_FOR_DISPATCH is the warehouse reporting them ready
+        // for the distributor, which is this step and not the one where the distributor answers.
+        // Which of them really move is OrderProgressService's rule - an order whose other lines
+        // travel in a shipment that is already further along is left where it is.
+        orderProgress.advance(orderIdsOf(shipmentId), OrderStatus.READY_FOR_DISPATCH, userId);
+
+        shipment.setStatus(ShipmentStatus.READY);
+        shipmentRepository.save(shipment);
 
         return toResponse(shipment);
     }
@@ -412,6 +527,7 @@ public class ShipmentServiceImpl implements ShipmentService {
                 .sorted(Comparator.comparing(ShipmentPackage::getId))
                 .map(shipmentPackage -> withContents.getOrDefault(shipmentPackage.getId(), shipmentPackage))
                 .toList();
-        return ShipmentResponse.from(shipment, packages);
+        String message = shipment.getDistributor() == null ? "No distributor assigned" : null;
+        return ShipmentResponse.from(shipment, packages, message);
     }
 }

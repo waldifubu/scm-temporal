@@ -7,6 +7,7 @@ import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -40,6 +41,9 @@ class FulfillmentServiceExpiredReservationsTest {
     private ReservationRepository reservationRepository;
     @Mock
     private OrderRepository orderRepository;
+
+    @Mock
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private FulfillmentServiceImpl service;

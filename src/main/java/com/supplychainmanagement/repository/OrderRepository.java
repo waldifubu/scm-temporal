@@ -7,12 +7,29 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.repository.query.Param;
+import org.springframework.data.jpa.repository.Query;
 
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
+
+    /**
+     * The orders a shipment carries, each once: a package holds the items of one order, and a
+     * shipment may hold packages of several orders of the same customer. Reached over the packages
+     * because an order has no reference to a shipment.
+     */
+    @Query("""
+            select distinct o
+            from ShipmentPackage sp
+              join sp.items pi
+              join pi.orderItem oi
+              join oi.order o
+            where sp.shipment.id = :shipmentId
+            """)
+    List<Order> findByShipmentId(@Param("shipmentId") Long shipmentId);
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Optional<Order> findWithDetailsById(Long id);
 

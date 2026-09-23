@@ -14,6 +14,7 @@ import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ProductionService;
 import com.supplychainmanagement.service.RoleService;
 import org.junit.jupiter.api.BeforeEach;
+import com.supplychainmanagement.service.OrderProgressService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -21,7 +22,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
@@ -35,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -53,9 +54,10 @@ class OrderServiceAcknowledgeTest {
     @Mock
     private RoleService roleService;
     @Mock
-    private ApplicationEventPublisher applicationEventPublisher;
-    @Mock
     private ProductionService productionService;
+
+    @Mock
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private OrderServiceImpl service;
@@ -123,7 +125,9 @@ class OrderServiceAcknowledgeTest {
 
         var acknowledged = service.acknowledge(order, 99L);
 
-        assertThat(acknowledged.getStatus()).isEqualTo(OrderStatus.ACKNOWLEDGED);
+        // The status is written by OrderProgressService, so what is checked here is that it is asked
+        // - OrderStatusHistoryTest covers that the change then really reaches the audit trail.
+        verify(orderProgress).changeStatus(order, OrderStatus.ACKNOWLEDGED, 99L);
         assertThat(workingDaysBetween(LocalDate.now(), acknowledged.getDeliveryDate().toLocalDate()))
                 .isEqualTo(IN_STOCK_LEAD_DAYS);
     }
@@ -192,7 +196,7 @@ class OrderServiceAcknowledgeTest {
                 .hasMessageContaining("IN_FULFILLMENT");
 
         assertThat(order.getDeliveryDate()).isNull();
-        verifyNoInteractions(productionService, applicationEventPublisher);
+        verifyNoInteractions(productionService, orderProgress);
     }
 
     /**

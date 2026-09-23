@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
@@ -15,21 +16,31 @@ import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.event.OrderStatusChangedEvent;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
+import com.supplychainmanagement.repository.OrderItemRepository;
+import com.supplychainmanagement.repository.OrderRepository;
+import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -64,6 +75,12 @@ class ShipmentServiceImplTest {
     private ShipmentPackageRepository shipmentPackageRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private OrderRepository orderRepository;
+    @Mock
+    private OrderItemRepository orderItemRepository;
+    @Mock
+    private OrderProgressService orderProgress;
 
     @InjectMocks
     private ShipmentServiceImpl service;
@@ -488,7 +505,7 @@ class ShipmentServiceImplTest {
     void updatesTheShipmentData() {
         Shipment shipment = existingShipment(ShipmentStatus.CREATED, packed(5L));
 
-        service.updateShipmentData(SHIPMENT_ID, new UpdateShipmentRequest("Neue Str. 2", "UPS", LocalDate.of(2026, 11, 2)));
+        service.updateShipmentData(SHIPMENT_ID, new UpdateShipmentRequest("Neue Str. 2", "UPS", LocalDate.of(2026, 11, 2), null));
 
         assertThat(shipment.getShippingAddress()).isEqualTo("Neue Str. 2");
         assertThat(shipment.getShippingMethod()).isEqualTo("UPS");
@@ -580,6 +597,268 @@ class ShipmentServiceImplTest {
     @Test
     void answersAnUnknownShipmentWith404() {
         assertThatThrownBy(() -> service.findShipment(99L)).isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    // ------------------------------------------------------------------ ready for dispatch
+
+    /** An order line of the shipment, in the given fulfillment status. */
+    private OrderItem lineInShipment(Long id, FulfillmentStatus status) {
+        OrderItem line = new OrderItem();
+        line.setId(id);
+        line.setFulfillmentStatus(status);
+        return line;
+    }
+
+    /**
+     * With every package closed the shipment is READY, and the lines it carries - PACKED, so fully
+     * packed - go to READY_FOR_DISPATCH.
+     */
+    @Test
+    void readyTakesThePackedLinesToReadyForDispatch() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, shipmentPackage);
+        shipment.setShippingAddress("Musterstr. 1");
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+        OrderItem packedLine = lineInShipment(11L, FulfillmentStatus.PACKED);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(packedLine));
+
+        service.checkShipmentReady(SHIPMENT_ID, 99L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.READY);
+        assertThat(packedLine.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.READY_FOR_DISPATCH);
+        verify(orderItemRepository).saveAll(List.of(packedLine));
+    }
+
+    /**
+     * The orders follow their lines. READY_FOR_DISPATCH is the warehouse reporting them ready for
+     * the distributor, so it belongs to this step - which of them really move is OrderProgressService's
+     * rule, checked in its own test.
+     */
+    @Test
+    void readyTakesTheOrdersToReadyForDispatch() {
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, packed(5L));
+        shipment.setShippingAddress("Musterstr. 1");
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+        orderInShipment(OrderStatus.IN_FULFILLMENT);
+
+        service.checkShipmentReady(SHIPMENT_ID, 99L);
+
+        verify(orderProgress).advance(List.of(1042L), OrderStatus.READY_FOR_DISPATCH, 99L);
+    }
+
+    /** An open package stops the whole step - the orders stay where they are as well. */
+    @Test
+    void readyLeavesTheOrdersAloneWhenAPackageIsStillOpen() {
+        ShipmentPackage open = shipmentPackage(5L, ShipmentPackageStatus.OPEN, CUSTOMER_ID);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, open);
+        shipment.setShippingAddress("Musterstr. 1");
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.checkShipmentReady(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
+
+        verify(orderProgress, never()).advance(any(), any(), any());
+    }
+
+    /** A line that is only PACKING has parts in another package - it is not on its way yet. */
+    @Test
+    void readyLeavesALineThatIsNotFullyPacked() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, shipmentPackage);
+        shipment.setShippingAddress("Musterstr. 1");
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+        OrderItem halfPacked = lineInShipment(11L, FulfillmentStatus.PACKING);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(halfPacked));
+
+        service.checkShipmentReady(SHIPMENT_ID, 99L);
+
+        assertThat(halfPacked.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKING);
+        verify(orderItemRepository).saveAll(List.of());
+    }
+
+    /** An open package stops the whole thing - and no line is touched. */
+    @Test
+    void readyRefusesAnOpenPackageAndTouchesNoLine() {
+        ShipmentPackage open = shipmentPackage(5L, ShipmentPackageStatus.OPEN, CUSTOMER_ID);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, open);
+        shipment.setShippingAddress("Musterstr. 1");
+        when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
+
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.checkShipmentReady(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CREATED);
+        verify(orderItemRepository, never()).saveAll(any());
+    }
+
+    /** Reported ready once, and only from CREATED - a shipment on its way is not re-reported. */
+    @Test
+    void reportsACreatedShipmentReadyOnly() {
+        Shipment shipment = existingShipment(ShipmentStatus.READY, packed(5L));
+        shipment.setShippingAddress("Musterstr. 1");
+        OrderItem packedLine = lineInShipment(11L, FulfillmentStatus.PACKED);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(packedLine));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.checkShipmentReady(SHIPMENT_ID, 99L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("only a CREATED shipment can be reported ready");
+        assertThat(packedLine.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+        verify(orderItemRepository, never()).saveAll(any());
+    }
+
+    /** allMatch says true for nothing at all - a shipment without packages is never ready. */
+    @Test
+    void refusesToReportAnEmptyShipmentReady() {
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED);
+        shipment.setShippingAddress("Musterstr. 1");
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.checkShipmentReady(SHIPMENT_ID, 99L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("holds no packages");
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CREATED);
+    }
+
+    /** Without an address there is nowhere to deliver - and no line is moved. */
+    @Test
+    void refusesToReportAShipmentWithoutAnAddressReady() {
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, packed(5L));
+        shipment.setShippingAddress(null);
+
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.checkShipmentReady(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
+        verify(orderItemRepository, never()).saveAll(any());
+    }
+
+    /**
+     * Its packages are fixed from READY on: nothing goes in and nothing comes out, whatever the
+     * carrier has already reported. Only the shipment's own data still changes - updateShipmentData
+     * asks for no status.
+     */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"READY", "DISPATCH_REQUESTED", "ACCEPTED", "IN_TRANSIT", "DELIVERED"})
+    void keepsItsPackagesOnceItIsOnItsWay(ShipmentStatus status) {
+        Shipment shipment = existingShipment(status, packed(5L), packed(6L));
+        packed(7L);
+
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.addShipmentPackages(SHIPMENT_ID, ids(7L))), HttpStatus.CONFLICT);
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.replaceShipmentPackages(SHIPMENT_ID, ids(5L))), HttpStatus.CONFLICT);
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.removeShipmentPackage(SHIPMENT_ID, 5L)), HttpStatus.CONFLICT);
+
+        assertThat(shipment.getPackages()).hasSize(2);
+    }
+
+    /** Address and the rest stay correctable while the shipment is still in hand. */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DISPATCH_REQUESTED", "ACCEPTED"})
+    void changesTheShipmentDataUpToAccepted(ShipmentStatus status) {
+        Shipment shipment = existingShipment(status, packed(5L));
+
+        service.updateShipmentData(SHIPMENT_ID, new UpdateShipmentRequest("Neue Str. 2", "UPS", null, null));
+
+        assertThat(shipment.getShippingAddress()).isEqualTo("Neue Str. 2");
+        assertThat(shipment.getShippingMethod()).isEqualTo("UPS");
+    }
+
+    /** Once it is on the road the papers are out of the house - and a cancelled one is not edited. */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void keepsTheShipmentDataOnceItIsOnTheRoad(ShipmentStatus status) {
+        Shipment shipment = existingShipment(status, packed(5L));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.updateShipmentData(SHIPMENT_ID, new UpdateShipmentRequest("Neue Str. 2", null, null, null)));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("its data can only be changed up to ACCEPTED");
+        assertThat(shipment.getShippingAddress()).isEqualTo("Musterstr. 1");
+    }
+
+    // ------------------------------------------------------------------ cancel
+
+    /**
+     * Calling a shipment off undoes what it had set in motion: the packages are loose again and still
+     * PACKED, the lines are back to PACKED and the order to IN_FULFILLMENT - with an audit row.
+     */
+    @Test
+    void cancelHandsBackThePackagesAndTakesTheLinesAndOrderBack() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.READY, shipmentPackage);
+        OrderItem line = lineInShipment(11L, FulfillmentStatus.READY_FOR_DISPATCH);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(line));
+        orderInShipment(OrderStatus.READY_FOR_DISPATCH);
+
+        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest(" no truck today "), 99L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CANCELLED);
+        assertThat(shipment.getComment()).isEqualTo("no truck today");
+        assertThat(shipment.getPackages()).isEmpty();
+        assertThat(shipmentPackage.getShipment()).isNull();
+        assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
+        assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+        // Whether the order really goes back is decided on its lines - OrderProgressServiceImplTest.
+        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+    }
+
+    /** Up to the handover only - once it rolls, a cancellation would be a return. */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void cancelsAShipmentUpToAcceptedOnly(ShipmentStatus status) {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(status, shipmentPackage);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("too late"), 99L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("it can only be cancelled up to ACCEPTED");
+        verify(orderProgress, never()).takeBackFromDispatch(any(), any());
+        assertThat(shipment.getPackages()).containsExactly(shipmentPackage);
+        assertThat(shipmentPackage.getShipment()).isSameAs(shipment);
+    }
+
+    /** Every cancellation says why - it is the only record of it. */
+    @Test
+    void cancelNeedsAReason() {
+        Shipment shipment = existingShipment(ShipmentStatus.READY, packed(5L));
+
+        assertStatus(org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("  "), 99L)), HttpStatus.BAD_REQUEST);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.READY);
+    }
+
+    /** A shipment called off before it was ever reported ready touches no line and no order. */
+    @Test
+    void cancelOfACreatedShipmentMovesNothingBack() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, shipmentPackage);
+        OrderItem line = lineInShipment(11L, FulfillmentStatus.PACKED);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(line));
+        Order order = orderInShipment(OrderStatus.IN_FULFILLMENT);
+
+        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("repacking"), 99L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CANCELLED);
+        assertThat(shipmentPackage.getShipment()).isNull();
+        assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
+        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+    }
+
+    /** An order the shipment carries, in the given status. */
+    private Order orderInShipment(OrderStatus status) {
+        Order order = new Order();
+        order.setId(1042L);
+        order.setStatus(status);
+        when(orderRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(order));
+        return order;
     }
 
     /** Without a status the list covers every shipment. */

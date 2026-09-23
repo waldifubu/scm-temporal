@@ -3,7 +3,9 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.*;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
+import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.ShipmentService;
+import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -11,6 +13,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -23,6 +27,8 @@ import org.springframework.web.bind.annotation.*;
 public class ShipmentController {
 
     private final ShipmentService shipmentService;
+    private final DeliveryService deliveryService;
+    private final UserService userService;
 
     private static Pageable pageRequest(int page, int size, String sort, String order) {
         Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
@@ -109,8 +115,9 @@ public class ShipmentController {
      */
     @PutMapping(path = "/shipments/{shipmentId}/ready", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
-    public ShipmentResponse checkShipmentIsReady(@PathVariable Long shipmentId) {
-        return shipmentService.checkShipmentReady(shipmentId);
+    public ShipmentResponse checkShipmentIsReady(@PathVariable Long shipmentId,
+                                                 @AuthenticationPrincipal User authUser) {
+        return shipmentService.checkShipmentReady(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
 
     /**
@@ -120,6 +127,46 @@ public class ShipmentController {
     @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
     public ShipmentResponse assignDistributor(@PathVariable Long shipmentId, @PathVariable Long distributorId) {
         return shipmentService.assignDistributor(shipmentId, distributorId);
+    }
+
+    /**
+     * Calls the shipment off while it is still in the house - up to ACCEPTED, later is a 409. Its
+     * packages are free again, the order lines and orders it had moved on go back a step, and the
+     * reason is kept on the shipment.
+     */
+    @PostMapping(path = "/shipments/{shipmentId}/cancel", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
+    public ShipmentResponse cancelShipment(@PathVariable Long shipmentId,
+                                           @Valid @RequestBody CancelShipmentRequest request,
+                                           @AuthenticationPrincipal User authUser) {
+        return shipmentService.cancelShipment(shipmentId, request, userService.getAuthenticatedUserId(authUser));
+    }
+
+    /**
+     * The distributor takes the shipment on: READY or DISPATCH_REQUESTED to ACCEPTED, every order it
+     * carries to READY_FOR_DISPATCH. Any other status is a 409.
+     */
+    @PostMapping(path = "/shipments/{shipmentId}/accept", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
+    public DeliveryResponse acceptShipment(@PathVariable Long shipmentId,
+                                           @AuthenticationPrincipal User authUser) {
+        return deliveryService.acceptShipment(shipmentId, userService.getAuthenticatedUserId(authUser));
+    }
+
+    /** The shipment is on its way: ACCEPTED to IN_TRANSIT, its orders to IN_TRANSIT. */
+    @PostMapping(path = "/shipments/{shipmentId}/in-transit", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
+    public DeliveryResponse shipmentInTransit(@PathVariable Long shipmentId,
+                                              @AuthenticationPrincipal User authUser) {
+        return deliveryService.shipmentInTransit(shipmentId, userService.getAuthenticatedUserId(authUser));
+    }
+
+    /** The shipment has arrived: IN_TRANSIT to DELIVERED, its orders to DELIVERED. */
+    @PostMapping(path = "/shipments/{shipmentId}/delivered", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
+    public DeliveryResponse shipmentDelivered(@PathVariable Long shipmentId,
+                                              @AuthenticationPrincipal User authUser) {
+        return deliveryService.shipmentDelivered(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
 
 /*

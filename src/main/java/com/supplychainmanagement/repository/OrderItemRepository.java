@@ -16,6 +16,20 @@ import java.util.List;
 import java.util.Optional;
 
 public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
+
+    /**
+     * The order lines a shipment carries, each once - reached over its packages and their items,
+     * since a line has no reference to a package. What {@code checkShipmentReady} takes to
+     * READY_FOR_DISPATCH.
+     */
+    @Query("""
+            select distinct oi
+            from ShipmentPackage sp
+              join sp.items pi
+              join pi.orderItem oi
+            where sp.shipment.id = :shipmentId
+            """)
+    List<OrderItem> findByShipmentId(@Param("shipmentId") Long shipmentId);
     @EntityGraph(attributePaths = {"order", "product"})
     Optional<OrderItem> findWithDetailsById(Long id);
 

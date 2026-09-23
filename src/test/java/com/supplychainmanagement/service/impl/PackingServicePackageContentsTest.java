@@ -16,6 +16,8 @@ import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.PackageItemRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -258,6 +260,34 @@ class PackingServicePackageContentsTest {
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT))
                 .hasMessageContaining("ShipmentPackage 5 is PACKED, only an OPEN package can be changed");
+    }
+
+    /**
+     * Once closed, a package is fixed: no item goes in, none comes out, its data stays and it is not
+     * completed twice. The same guard for every way in - findOpenPackageForUpdate.
+     */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentPackageStatus.class, names = {"PACKED", "DISPATCHED"})
+    void keepsItsItemsOnceItIsClosed(ShipmentPackageStatus status) {
+        ShipmentPackage closed = shipmentPackage(PACKAGE_ID, status);
+        PackageItem held = in(closed, item(101L, 11L, ORDER_ID));
+        storedItems(held, item(102L, 12L, ORDER_ID));
+
+        assertThatThrownBy(() -> service.addPackageItems(PACKAGE_ID, ids(102L)))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.updateCustomShipment(PACKAGE_ID, ids(102L)))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.removePackageItem(PACKAGE_ID, 101L))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.updatePackageData(PACKAGE_ID,
+                new UpdatePackageRequest(ShipmentPackageType.CARTON, null, null, null, "PKG-9")))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThatThrownBy(() -> service.completePackage(PACKAGE_ID))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+
+        assertThat(idsIn(closed)).containsExactly(101L);
+        assertThat(held.getShipmentPackage()).isSameAs(closed);
+        verify(shipmentPackageRepository, never()).save(any());
     }
 
     @Test

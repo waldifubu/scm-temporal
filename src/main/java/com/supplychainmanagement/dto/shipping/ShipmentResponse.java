@@ -44,6 +44,8 @@ public record ShipmentResponse(
         Long distributorId,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         String distributorName,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String message,
         List<ShipmentPackageListDto> packages
 ) {
 
@@ -51,7 +53,7 @@ public record ShipmentResponse(
      * @param packages the shipment's packages with their contents loaded - taken as an argument so
      *                 the caller can fetch them for all packages in one query
      */
-    public static ShipmentResponse from(Shipment shipment, List<ShipmentPackage> packages) {
+    public static ShipmentResponse from(Shipment shipment, List<ShipmentPackage> packages, String message) {
         return new ShipmentResponse(
                 shipment.getId(),
                 shipment.getCustomer() != null ? shipment.getCustomer().getId() : null,
@@ -69,6 +71,7 @@ public record ShipmentResponse(
                 packages.stream().map(ShipmentPackage::getPackageWeight).reduce(BigDecimal.ZERO, BigDecimal::add),
                 shipment.getDistributor() != null ? shipment.getDistributor().getId() : null,
                 nameOf(shipment.getDistributor()),
+                message,
                 packages.stream().map(ShipmentPackageListDto::from).toList()
         );
     }

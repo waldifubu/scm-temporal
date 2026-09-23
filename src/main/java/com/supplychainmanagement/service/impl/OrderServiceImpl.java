@@ -6,7 +6,6 @@ import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.users.User;
-import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
@@ -15,12 +14,12 @@ import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.ProductionService;
 import com.supplychainmanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -50,8 +49,8 @@ public class OrderServiceImpl implements OrderService {
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
     private final RoleService roleService;
-    private final ApplicationEventPublisher applicationEventPublisher;
     private final ProductionService productionService;
+    private final OrderProgressService orderProgress;
     /**
      * Working days from acknowledgement to delivery when every line is covered by stock today.
      */
@@ -158,9 +157,9 @@ public class OrderServiceImpl implements OrderService {
         recalculateOrder(order);
 
         Order savedOrder = orderRepository.save(order);
-        if (savedOrder.getStatus() != null) {
-            applicationEventPublisher.publishEvent(new OrderStatusChangedEvent(savedOrder.getId(), savedOrder.getCustomer() != null ? savedOrder.getCustomer().getId() : null, null, savedOrder.getStatus()));
-        }
+        // The first history row of the order, attributed to the customer it belongs to.
+        orderProgress.recordCreated(savedOrder,
+                savedOrder.getCustomer() != null ? savedOrder.getCustomer().getId() : null);
         Long createdId = savedOrder.getId();
         return orderRepository.findWithDetailsById(createdId)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", createdId));
@@ -193,10 +192,13 @@ public class OrderServiceImpl implements OrderService {
                     "Only an order in CREATED can be acknowledged, this one is " + order.getStatus());
         }
 
-        order.setStatus(OrderStatus.ACKNOWLEDGED);
         // Order.deliveryDate is a timestamp while the promise is a day: pinned to the end of the
         // working day, so "delivered on the 15th" does not read as midnight of the 15th.
         order.setDeliveryDate(confirmDeliveryDate(order).atTime(END_OF_WORKING_DAY));
+        // Not order.setStatus(...): update() below compares the status it reloads against the one it
+        // is handed, and with open-in-view that is the same instance - the change would look like
+        // none and no audit row would be written.
+        orderProgress.changeStatus(order, OrderStatus.ACKNOWLEDGED, userId);
 
         return update(order.getId(), order, userId);
     }
@@ -248,12 +250,14 @@ public class OrderServiceImpl implements OrderService {
         Order existingOrder = orderRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", id));
 
-        OrderStatus previousStatus = existingOrder.getStatus();
         Long nextOrderNo = order.getOrderNo() != null ? order.getOrderNo() : existingOrder.getOrderNo();
         validateOrderNo(nextOrderNo, existingOrder);
         existingOrder.setOrderNo(nextOrderNo);
         existingOrder.setDueDate(order.getDueDate());
-        existingOrder.setStatus(order.getStatus());
+        // The one field not written here: OrderProgressService records the change and publishes the
+        // event the history row is built from. A request without a status leaves the order where it
+        // is - it used to be written as null.
+        orderProgress.changeStatus(existingOrder, order.getStatus(), userId);
         existingOrder.setDeliveryDate(order.getDeliveryDate());
         //existingOrder.setCustomer(order.getCustomer());
         bindCustomer(existingOrder);
@@ -262,11 +266,23 @@ public class OrderServiceImpl implements OrderService {
         recalculateOrder(existingOrder);
 
         Order savedOrder = orderRepository.save(existingOrder);
-        if (previousStatus != null && order.getStatus() != null && !Objects.equals(previousStatus, order.getStatus())) {
-            applicationEventPublisher.publishEvent(new OrderStatusChangedEvent(savedOrder.getId(), userId, previousStatus, order.getStatus()));
-        }
         return orderRepository.findWithDetailsById(savedOrder.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", savedOrder.getId()));
+    }
+
+    /**
+     * Only the status changes, so this does not go through {@link #update} at all - nothing about the
+     * lines, the totals or the order number is touched by turning an order down.
+     */
+    @Override
+    @Transactional
+    public Order reject(Order order, Long userId) {
+        if (order.getStatus() == OrderStatus.REJECTED) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Order is already rejected");
+        }
+
+        orderProgress.changeStatus(order, OrderStatus.REJECTED, userId);
+        return findById(order.getId());
     }
 
     @Override

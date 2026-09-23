@@ -1,17 +1,22 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
+import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
+import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.ShipmentService;
+import com.supplychainmanagement.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
@@ -24,6 +29,7 @@ import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -39,24 +45,36 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ShipmentControllerTest {
 
     private final ShipmentService shipmentService = mock(ShipmentService.class);
+    private final DeliveryService deliveryService = mock(DeliveryService.class);
+    private final UserService userService = mock(UserService.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shipmentService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shipmentService, deliveryService, userService))
                 .setControllerAdvice(new GlobalExceptionHandler())
+                // @AuthenticationPrincipal has no resolver in a standalone setup - without it the
+                // three carrier endpoints fail before they reach the controller method.
+                .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
 
         ShipmentResponse response = new ShipmentResponse(50L, 3L, "Ada Lovelace", ShipmentStatus.CREATED,
-                "Musterstr. 1", "DHL", null, LocalDate.of(2026, 10, 1), null, null, null, 0, BigDecimal.ZERO,
-                null, null, List.of());
+                "Musterstr. 1", "DHL", null, null, LocalDate.of(2026, 10, 1), null, null, null, 0, BigDecimal.ZERO,
+                null, null, null, List.of());
         when(shipmentService.createShipment(any())).thenReturn(response);
         when(shipmentService.addShipmentPackages(any(), any())).thenReturn(response);
         when(shipmentService.replaceShipmentPackages(any(), any())).thenReturn(response);
         when(shipmentService.removeShipmentPackage(any(), any())).thenReturn(response);
         when(shipmentService.updateShipmentData(any(), any())).thenReturn(response);
+        when(userService.getAuthenticatedUserId(any())).thenReturn(99L);
+        DeliveryResponse delivery = new DeliveryResponse(50L, ShipmentStatus.ACCEPTED, "Ada Lovelace",
+                "Musterstr. 1", "DHL", null, null, null, null, 1, BigDecimal.ONE, List.of("PKG-5"));
+        when(deliveryService.acceptShipment(any(), any())).thenReturn(delivery);
+        when(deliveryService.shipmentInTransit(any(), any())).thenReturn(delivery);
+        when(deliveryService.shipmentDelivered(any(), any())).thenReturn(delivery);
+        when(shipmentService.cancelShipment(any(), any(), any())).thenReturn(response);
         when(shipmentService.findShipments(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(1), 0));
     }
@@ -144,6 +162,41 @@ class ShipmentControllerTest {
                 .andExpect(status().isOk());
 
         verify(shipmentService).findShipments(isNull(), any(Pageable.class));
+    }
+
+    /** The three steps of the carrier, each with the id from the path and the acting user. */
+    @Test
+    void acceptInTransitAndDeliveredPassTheShipmentAndTheUserOn() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/accept")).andExpect(status().isOk());
+        mockMvc.perform(post("/api/1.0/shipments/50/in-transit")).andExpect(status().isOk());
+        mockMvc.perform(post("/api/1.0/shipments/50/delivered")).andExpect(status().isOk());
+
+        verify(deliveryService).acceptShipment(50L, 99L);
+        verify(deliveryService).shipmentInTransit(50L, 99L);
+        verify(deliveryService).shipmentDelivered(50L, 99L);
+    }
+
+    @Test
+    void cancelPassesTheReasonAndTheUserOn() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
+                        .content("""
+                                { "reason": "no truck today" }
+                                """))
+                .andExpect(status().isOk());
+
+        verify(shipmentService).cancelShipment(eq(50L),
+                argThat((CancelShipmentRequest request) -> "no truck today".equals(request.reason())), eq(99L));
+    }
+
+    /** Without a reason the cancellation never reaches the service. */
+    @Test
+    void cancelWithoutAReasonIsRefused() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
+                        .content("{ }"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.reason").value("reason is required"));
+
+        verify(shipmentService, never()).cancelShipment(any(), any(), any());
     }
 
     /** A rule broken in the service reaches the client at its own status, through the global handler. */

@@ -46,9 +46,10 @@ stateDiagram-v2
     pre --> IN_FULFILLMENT : POST /orders/{orderId}/reserve
     IN_FULFILLMENT --> APPROVED : POST /orders/{orderId}/release - nothing held, no line picked
 
-    IN_FULFILLMENT --> READY_FOR_DISPATCH
-    READY_FOR_DISPATCH --> IN_TRANSIT
-    IN_TRANSIT --> DELIVERED
+    IN_FULFILLMENT --> READY_FOR_DISPATCH : PUT /shipments/{id}/ready
+    READY_FOR_DISPATCH --> IN_FULFILLMENT : POST /shipments/{id}/cancel
+    READY_FOR_DISPATCH --> IN_TRANSIT : POST /shipments/{id}/in-transit
+    IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
     DELIVERED --> COMPLETED
 
     pre --> CANCELLED
@@ -75,7 +76,11 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   order.
 - **`REVIEW`** and **`APPROVED`** are modeled in the enum but not yet driven by any endpoint.
 - **`REJECTED`** can be set from any pre-fulfillment status via `POST /orders/{orderNo}/reject`
-  (the only check is that the order isn't already rejected).
+  (the only check is that the order isn't already rejected — a repeat is a **400**). It is
+  `OrderService.reject()`, not a status the controller sets: an entity changed before a service
+  reloads it looks unchanged to that service, which cost this transition its audit row until
+  2026-09-23. See [Timestamps and audit](#order-status-flow) — the rule is that no caller writes
+  `order.setStatus(...)` itself.
 - **`IN_FULFILLMENT`** is set by `FulfillmentServiceImpl.reserveItems()` — but **only** when the
   order is currently in one of `CREATED`, `ACKNOWLEDGED`, `REVIEW`, or `APPROVED`
   (`PRE_FULFILLMENT_STATUSES`) **and** at least one line is covered by an active reservation. This
@@ -89,14 +94,23 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   shelf. A partial release leaves the status alone. Like every other transition it publishes an
   event, and it does so even when the acting user cannot be resolved (a scheduled sweep runs as
   `"system"`), writing the audit row with a null `user_id`.
-- **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED` → `COMPLETED`** and **`CANCELLED`** are
-  defined in `OrderStatus` but not yet wired up at the *order* level — see below and
+- **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED`** come from the shipment the order's packages
+  travel in, see [Packages and shipments](#packages-and-shipments). A cancelled shipment takes its
+  orders back to `IN_FULFILLMENT` — the second backwards step besides the fallback to `APPROVED`, and
+  only while no line of that order travels in another shipment. **`COMPLETED`** and **`CANCELLED`**
+  are defined in `OrderStatus` but nothing sets them — see
   [Known gaps](#known-gaps--work-in-progress).
-- Every status change goes through `OrderServiceImpl.update()` or `FulfillmentServiceImpl`, both of
-  which publish an `OrderStatusChangedEvent`. `OrderStatusChangedListener` picks this up
-  `AFTER_COMMIT` and writes an immutable `OrderHistory` audit row (previous status, new status,
-  acting user). Any new status-changing code path should follow this same event pattern instead of
-  writing history rows inline.
+- **Every status change goes through `OrderProgressService.changeStatus()`** — it writes the status,
+  saves and publishes the `OrderStatusChangedEvent` in one place. `OrderServiceImpl` (create, update,
+  and with them acknowledge and reject), `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to
+  `APPROVED`) and the shipment side all call it; `advance()` and `takeBackFromDispatch()` are the
+  variants with a direction rule, `recordCreated()` the first row of a new order.
+  `OrderStatusChangedListener` picks the event up `AFTER_COMMIT` and writes an immutable
+  `OrderHistory` row (previous status, new status, acting user). Do not write `order.setStatus(...)`
+  and publish by hand: every caller that did had its own idea of what to do when the acting user
+  could not be resolved, and one of them then wrote the status without an audit row at all. A `null`
+  target and one the order already has are ignored, so a CRUD update that sends no status leaves the
+  order where it is instead of nulling it.
 - Two things are load-bearing for that audit trail and easy to break again:
   - The publishing method **must** be `@Transactional`. `@TransactionalEventListener(AFTER_COMMIT)`
     silently discards events published without a transaction — no error, no log line.
@@ -108,7 +122,7 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
 ## Fulfillment workflow
 
 Independently of the order-level status, each **`OrderItem`** tracks its own, finer-grained
-`FulfillmentStatus`. It is implemented up to `PACKED`:
+`FulfillmentStatus`. It is implemented end to end:
 
 ```mermaid
 stateDiagram-v2
@@ -121,7 +135,8 @@ stateDiagram-v2
     PICKED --> PACKING : POST /packing/... - partial quantity
     PICKED --> PACKED : POST /packing/... - full quantity
     PACKING --> PACKED : a later package or run fills the rest
-    PACKED --> READY_FOR_DISPATCH : readyForDispatch() - no endpoint at the moment
+    PACKED --> READY_FOR_DISPATCH : PUT /shipments/{id}/ready
+    READY_FOR_DISPATCH --> PACKED : POST /shipments/{id}/cancel
 ```
 
 Which service owns which stretch — one controller per service, named after what it does:
@@ -133,9 +148,11 @@ Which service owns which stretch — one controller per service, named after wha
 | `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
 | `PICKED → PACKED`, package contents, completing a package | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`) |
 | reading packages and package items | `PackageQueryService` | `PackageController` |
-| packages → shipment, distributor | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| `PACKED → READY_FOR_DISPATCH` | `OrderHandlingService.readyForDispatch()` | — (endpoint currently commented out) |
-| dispatch/tracking | `LogisticsService` | — (declared, not implemented) |
+| packages → shipment, ready, cancel | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
+| accept → in transit → delivered | `DeliveryService` | `ShipmentController` (same paths, DISTRIBUTOR) |
+| every order status change (write + audit event) | `OrderProgressService` | — |
+| `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
+| tracking, returns | `DeliveryService` | — (not implemented) |
 
 - **Reservation is partial.** Lines that a single storehouse can cover become `RESERVED`; the rest
   stay `WAITING` and are attempted again on the next reserve call, which skips whatever is already
@@ -309,12 +326,16 @@ stateDiagram-v2
         [*] --> OPEN : POST /packing/{orderNo}, POST /packing/shipment
         OPEN --> OPEN : add / replace / remove items, PUT package data
         OPEN --> PACKED : PUT /packing/shipment/{id}/complete
-        PACKED --> DISPATCHED : not implemented yet
+        PACKED --> DISPATCHED : POST /shipments/{id}/in-transit
     }
     state "Shipment" as sh {
         [*] --> CREATED : POST /shipments
-        CREATED --> CREATED : add / replace / remove packages, PUT shipment data
-        CREATED --> READY : not implemented yet
+        CREATED --> CREATED : add / replace / remove packages
+        CREATED --> READY : PUT /shipments/{id}/ready
+        READY --> ACCEPTED : POST /shipments/{id}/accept
+        ACCEPTED --> IN_TRANSIT : POST /shipments/{id}/in-transit
+        IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
+        ACCEPTED --> CANCELLED : POST /shipments/{id}/cancel - up to ACCEPTED
     }
 ```
 
@@ -384,7 +405,50 @@ bare array) and `DELETE /shipments/{id}/packages/{packageId}`; `PUT /shipments/{
 method and requested date. The customer is fixed — the packages are bound to it.
 
 A distributor is assigned with `PUT /shipments/{id}/distributor/{distributorId}` while the shipment is
-`CREATED`, `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor` (**400** otherwise).
+`READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor` (**400** otherwise).
+
+### From ready to delivered
+
+```
+PUT  /shipments/{id}/ready        CREATED → READY          lines + orders → READY_FOR_DISPATCH
+POST /shipments/{id}/accept       READY → ACCEPTED         (orders already there)
+POST /shipments/{id}/in-transit   ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
+POST /shipments/{id}/delivered    IN_TRANSIT → DELIVERED   orders → DELIVERED
+POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
+```
+
+**Ready** is checked, not claimed: the shipment is read `FOR UPDATE`, has to be `CREATED`, carry a
+shipping address and at least one package, and every package has to be `PACKED` — each of them a
+**409**. Only then do the order lines it carries go from `PACKED` to `READY_FOR_DISPATCH`, and the
+orders behind them with them; a line still `PACKING` has parts in another package and is left alone.
+The order moves here rather than at `accept`, because `READY_FOR_DISPATCH` is the warehouse reporting
+it ready *for* the distributor, not the distributor answering. `accept` still asks for the same step,
+which then catches up an order that was not moved here and does nothing for the rest.
+
+**The three carrier steps** (ADMIN and DISTRIBUTOR) live in `DeliveryService`, not in
+`ShipmentService`: planning a shipment is the inside job of `RoleEnum.LOGISTICS`, reporting it is the
+carrier's. They answer with `DeliveryResponse` — address, package count, weight and package numbers,
+but **no package contents**, so a distributor never sees the customer's SKUs and quantities. They
+take the orders of the shipment along —
+`IN_TRANSIT`, `DELIVERED`, and `READY_FOR_DISPATCH` as a catch-up — found over the packages, since a shipment may carry
+packages of several orders of its customer. Orders move **forwards only**: one that is already
+further along, because another shipment reported earlier, and one in `REJECTED`/`CANCELLED` are left
+as they are. Every change publishes an `OrderStatusChangedEvent`, so the `OrderHistory` row is
+written like for any other transition.
+
+**Cancelling** (ADMIN and LOGISTICS) works up to `ACCEPTED` — once the goods roll it would be a
+return, which the process does not model — and needs a reason, which is kept in `comment`. It undoes
+what the shipment had set in motion: the packages are loose again and stay `PACKED`, lines go back
+from `READY_FOR_DISPATCH` to `PACKED`, and orders back to `IN_FULFILLMENT` unless a line of theirs
+travels in another shipment.
+
+**What may still change, by status:**
+
+| | `CREATED` | `READY` … `ACCEPTED` | from `IN_TRANSIT` |
+|---|---|---|---|
+| packages in/out | yes | **409** | **409** |
+| address, method, date, comment | yes | yes | **409** |
+| cancel | yes | yes (up to `ACCEPTED`) | **409** |
 
 `ShipmentResponse` carries the shipment's data, customer and distributor as id and name, the gross
 `weight` of all packages and the packages with their contents. The list (`GET /shipments`, optional
@@ -621,7 +685,12 @@ The fulfillment chain is split by responsibility rather than by entity, one cont
   changing what a package holds, completing it.
 - **`PackageQueryService`** — reading packages and package items.
 - **`ShipmentService`** — creating and changing shipments, assigning a distributor, reading them.
-- **`LogisticsService`** — declared, not implemented.
+- **`DeliveryService`** — the carrier's side: accept, in transit, delivered. Answers with
+  `DeliveryResponse`, without the package contents.
+- **`OrderProgressService`** — the one place an order status is written: `changeStatus()` for a
+  single step, `advance()` forwards only on behalf of a shipment, `takeBackFromDispatch()` for the
+  way back from a cancelled dispatch, `recordCreated()` for a new order. Publishes the status event
+  and runs `Propagation.MANDATORY`, so it cannot be called outside the caller's transaction.
 
 ### Timestamps
 
@@ -726,7 +795,8 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, LOGISTICS |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE, LOGISTICS |
-| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
+| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
+| | `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
@@ -802,7 +872,7 @@ for every request, Vaadin UIDL and static resources included, and throttle the w
 mvn test
 ```
 
-272 tests. Controller tests use standalone MockMvc with the project's own API version resolver
+334 tests. Controller tests use standalone MockMvc with the project's own API version resolver
 (`ApiVersioningTestSupport`), so they call `/api/1.0/...` like a client; security filters are not
 part of them.
 
@@ -829,7 +899,11 @@ part of them.
 | `PackageQueryServiceImplTest`, `PackageControllerTest` | package and item lists, the `packageNumber` filter, single entries and 404 |
 | `PackageItemResponseAssemblerTest`, `ShipmentPackageListDtoTest` | computed `siblings` in one query, package rows without a cycle |
 | `ShipmentPackageMappingTest`, `ShipmentPackageWeightTest`, `ShipmentPackageCompleteTest` | no delete cascade on items, computed weight, `OPEN → PACKED` only with items |
-| `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the DTO answers, binding and status codes |
+| `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the ready check, cancelling and what it takes back, binding and status codes |
+| `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService` |
+| `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
+| `OrderProgressServiceImplTest` | orders move forwards only, `REJECTED`/`CANCELLED` left alone, the way back from a cancelled dispatch, and `changeStatus`/`recordCreated`: written, saved and published once, a `null` or unchanged target ignored |
+| `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
 | `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |
 | `UserMapperTest`, `ProductMapperTest` | that no password hash or internal field reaches the response; field suppression for non-privileged callers |
@@ -852,11 +926,16 @@ Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse select
 
 - **Order-level statuses stop at `IN_FULFILLMENT`.** `READY_FOR_DISPATCH`, `IN_TRANSIT`,
   `DELIVERED`, `COMPLETED` and `CANCELLED` are defined but nothing advances an *order* into them.
-- **Order lines stop at `PACKED`.** `OrderHandlingService.readyForDispatch()` exists, but its
-  endpoint (`POST /dispatch/{reservationId}`) is commented out.
-- **Shipments stop at `CREATED`.** Packages can be completed and grouped into shipments and a
-  distributor can be assigned, but nothing moves a shipment on or a package to `DISPATCHED`;
-  `LogisticsService` is an empty interface.
+- **`OrderHandlingService.readyForDispatch()`** (per reservation) is left over: its endpoint
+  (`POST /dispatch/{reservationId}`) is commented out, and the lines now reach `READY_FOR_DISPATCH`
+  through `PUT /shipments/{id}/ready`.
+- **`DISPATCH_REQUESTED` is never set** — a shipment goes from `READY` straight to `ACCEPTED`. Either
+  a "transport requested" step is missing or the status should go.
+- **No way back from `IN_TRANSIT`**: a return or a failed delivery cannot be recorded (`ShipmentStatus`
+  has neither `RETURNED` nor `DELIVERY_FAILED`), and cancelling is only possible up to `ACCEPTED`.
+- **No history for shipments** the way `OrderHistory` records orders: who cancelled a shipment and
+  why is only the free text in `comment`.
+- **Tracking is not implemented**: `trackingNumber` is never set. It belongs to `DeliveryService`.
 - **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
   roles from the request as they are — a manager can grant themselves or others `ADMIN`. An update
   without `isActive` also re-activates a disabled user.
