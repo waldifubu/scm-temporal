@@ -3,7 +3,6 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.*;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
-import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.ShipmentService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
@@ -18,8 +17,13 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * Shipments - everything under /shipments: creating them from PACKED packages of one customer,
- * changing which packages they hold, and reading them.
+ * Shipments as LOGISTICS plans them: creating them from PACKED packages of one customer, changing
+ * which packages they hold, reporting them ready, assigning a distributor, calling them off, and
+ * reading them.
+ * <p>
+ * What the carrier then does with a shipment - accept, in transit, delivered, and their own work
+ * list - is {@link DeliveryController}. Assigning a distributor stays here: that is the house
+ * choosing a carrier, not the carrier answering.
  */
 @RestController
 @RequiredArgsConstructor
@@ -27,7 +31,6 @@ import org.springframework.web.bind.annotation.*;
 public class ShipmentController {
 
     private final ShipmentService shipmentService;
-    private final DeliveryService deliveryService;
     private final UserService userService;
 
     private static Pageable pageRequest(int page, int size, String sort, String order) {
@@ -141,150 +144,4 @@ public class ShipmentController {
                                            @AuthenticationPrincipal User authUser) {
         return shipmentService.cancelShipment(shipmentId, request, userService.getAuthenticatedUserId(authUser));
     }
-
-    /**
-     * The distributor takes the shipment on: READY or DISPATCH_REQUESTED to ACCEPTED, every order it
-     * carries to READY_FOR_DISPATCH. Any other status is a 409.
-     */
-    @PostMapping(path = "/shipments/{shipmentId}/accept", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse acceptShipment(@PathVariable Long shipmentId,
-                                           @AuthenticationPrincipal User authUser) {
-        return deliveryService.acceptShipment(shipmentId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /** The shipment is on its way: ACCEPTED to IN_TRANSIT, its orders to IN_TRANSIT. */
-    @PostMapping(path = "/shipments/{shipmentId}/in-transit", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse shipmentInTransit(@PathVariable Long shipmentId,
-                                              @AuthenticationPrincipal User authUser) {
-        return deliveryService.shipmentInTransit(shipmentId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /** The shipment has arrived: IN_TRANSIT to DELIVERED, its orders to DELIVERED. */
-    @PostMapping(path = "/shipments/{shipmentId}/delivered", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse shipmentDelivered(@PathVariable Long shipmentId,
-                                              @AuthenticationPrincipal User authUser) {
-        return deliveryService.shipmentDelivered(shipmentId, userService.getAuthenticatedUserId(authUser));
-    }
-
-/*
-POST /api/v1/shipments/{shipmentId}/accept
-POST /api/v1/shipments/{shipmentId}/in-transit
-POST /api/v1/shipments/{shipmentId}/delivered
- */
-
-/*
-
-alle Packages PACKED
-        ↓
-Shipment READY
-        ↓
-Distributor übernimmt
-        ↓
-IN_TRANSIT
-
-
-
-     !!! Auch wenn ein Shipment mehrere Orders enthalten darf, würde ich ein Package niemals mit unterschiedlichen Orders mischen. !!!
-     Ein Package sollte weiterhin nur eine Order enthalten
-
-### Warehouse
-
-Order
-  ↓
-Picking
-  ↓
-PackageItem
-  ↓
-ShipmentPackage
-  ↓
-PACKED
-
-
-### Logistics
-
-PACKED ShipmentPackages
-  ↓
-Shipment
-  ↓
-Distributor
-  ↓
-Dispatch
-
-
-
-ORDER
-  │
-  ▼
-RESERVATION
-  │
-  ▼
-PICKING
-  │
-  ▼
-PACKAGE ITEMS
-  │
-  ▼
-SHIPMENT PACKAGE
-  │
-  │  Warehouse
-  │
-  ▼
-PACKED
-  │
-  │  Logistics
-  ▼
-SHIPMENT
-  │
-  ▼
-DISTRIBUTOR
-  │
-  ▼
-IN_TRANSIT
-  │
-  ▼
-DELIVERED
-     */
-
-    /*
-    /receipts
-    /picklists
-    /shipments
-    /stock
-    /locations
-     */
-
-//    Filter: Order = CONVEYABLE
-
-//    GET /api/v1/shipments?status=READY
-/*
-    {
-        "content": [
-        {
-            "shipmentId": "SHIP-20001",
-                "orderId": 8,
-                "status": "READY",
-                "storehouseId": 1,
-                "destination": {
-            "name": "Muster GmbH",
-                    "street": "Hauptstraße 10",
-                    "postalCode": "50667",
-                    "city": "Köln",
-                    "country": "DE"
-        },
-            "packageCount": 2,
-                "weight": 12.5
-        }
-  ],
-        "page": 0,
-            "size": 20,
-            "totalElements": 1,
-            "totalPages": 1
-    }
-    */
-
-
-//    POST /api/v1/shipments/SHIP-20001/dispatch
 }

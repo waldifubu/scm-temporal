@@ -34,6 +34,15 @@ public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
     @EntityGraph(attributePaths = "customer")
     Page<Shipment> findAllWithCustomerByStatus(ShipmentStatus status, Pageable pageable);
 
+    /** One page of the shipments assigned to one distributor, with their customer. */
+    @EntityGraph(attributePaths = "customer")
+    Page<Shipment> findAllWithCustomerByDistributorId(Long distributorId, Pageable pageable);
+
+    /** The same, narrowed to one status. */
+    @EntityGraph(attributePaths = "customer")
+    Page<Shipment> findAllWithCustomerByDistributorIdAndStatus(Long distributorId, ShipmentStatus status,
+                                                               Pageable pageable);
+
     /**
      * The shipments of one page with their packages. Separate from the page query, because a
      * collection fetch in a paged query is paged in memory - the same split as PackageQueryServiceImpl.

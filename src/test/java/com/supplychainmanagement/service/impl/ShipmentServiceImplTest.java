@@ -806,6 +806,27 @@ class ShipmentServiceImplTest {
         verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
     }
 
+    /**
+     * The case the carrier hits: it had already taken the shipment on. Everything accepting had set
+     * in motion goes back, and the packages stay PACKED and free for the next shipment.
+     */
+    @Test
+    void cancelAfterAcceptTakesTheLinesAndOrderBackToo() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.ACCEPTED, shipmentPackage);
+        OrderItem line = lineInShipment(11L, FulfillmentStatus.READY_FOR_DISPATCH);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(line));
+        orderInShipment(OrderStatus.READY_FOR_DISPATCH);
+
+        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("truck broke down"), 99L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CANCELLED);
+        assertThat(shipmentPackage.getShipment()).isNull();
+        assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
+        assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+    }
+
     /** Up to the handover only - once it rolls, a cancellation would be a return. */
     @ParameterizedTest
     @EnumSource(value = ShipmentStatus.class, names = {"IN_TRANSIT", "DELIVERED", "CANCELLED"})

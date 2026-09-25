@@ -102,7 +102,7 @@ public class OrderController {
 
 
 
-    @PostMapping(path = "", version = "1.0")
+    @PostMapping(path = "/", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
     public ResponseEntity<OrderDetailsDto> createOrder(@RequestBody(required = true) Order order,
                                                        @AuthenticationPrincipal User authUser) {

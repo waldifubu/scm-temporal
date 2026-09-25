@@ -149,7 +149,7 @@ Which service owns which stretch — one controller per service, named after wha
 | `PICKED → PACKED`, package contents, completing a package | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`) |
 | reading packages and package items | `PackageQueryService` | `PackageController` |
 | packages → shipment, ready, cancel | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| accept → in transit → delivered | `DeliveryService` | `ShipmentController` (same paths, DISTRIBUTOR) |
+| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `DeliveryController` (`/shipments/**`, DISTRIBUTOR) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
 | tracking, returns | `DeliveryService` | — (not implemented) |
@@ -453,6 +453,14 @@ travels in another shipment.
 `ShipmentResponse` carries the shipment's data, customer and distributor as id and name, the gross
 `weight` of all packages and the packages with their contents. The list (`GET /shipments`, optional
 `status`) answers `ShipmentListDto` rows with the package ids only.
+
+**The carrier's endpoints live in `DeliveryController`**, the planning ones in `ShipmentController`.
+Both map under `/shipments`, because that is the resource — what separates them is the role and the
+direction. A distributor's own work list is `GET /shipments/distributor` (optional `status`, paged):
+no id in the path, the distributor is read from the authenticated user, and the rows are
+`DeliveryResponse` — where it goes and how many packages weighing how much, never their contents.
+Assigning a distributor stays with LOGISTICS: that is the house choosing a carrier, not the carrier
+answering.
 
 ## Tech stack
 
@@ -796,7 +804,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, LOGISTICS |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE, LOGISTICS |
 | Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
-| | `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
+| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
@@ -900,7 +908,8 @@ part of them.
 | `PackageItemResponseAssemblerTest`, `ShipmentPackageListDtoTest` | computed `siblings` in one query, package rows without a cycle |
 | `ShipmentPackageMappingTest`, `ShipmentPackageWeightTest`, `ShipmentPackageCompleteTest` | no delete cascade on items, computed weight, `OPEN → PACKED` only with items |
 | `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the ready check, cancelling and what it takes back, binding and status codes |
-| `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService` |
+| `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, and the distributor's work list in two queries |
+| `DeliveryControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
 | `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
 | `OrderProgressServiceImplTest` | orders move forwards only, `REJECTED`/`CANCELLED` left alone, the way back from a cancelled dispatch, and `changeStatus`/`recordCreated`: written, saved and published once, a `null` or unchanged target ignored |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |

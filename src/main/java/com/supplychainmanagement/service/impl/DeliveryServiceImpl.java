@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Shipment;
@@ -14,6 +15,9 @@ import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.OrderProgressService;
+import com.supplychainmanagement.service.ShipmentService;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -22,7 +26,10 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -32,6 +39,26 @@ public class DeliveryServiceImpl implements DeliveryService {
     private final ShipmentPackageRepository shipmentPackageRepository;
     private final OrderRepository orderRepository;
     private final OrderProgressService orderProgress;
+    private final ShipmentService shipmentService;
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<DeliveryResponse> findShipmentsForDistributor(Long distributorId, ShipmentStatus status,
+                                                              Pageable pageable) {
+        Page<Shipment> page = status == null
+                ? shipmentRepository.findAllWithCustomerByDistributorId(distributorId, pageable)
+                : shipmentRepository.findAllWithCustomerByDistributorIdAndStatus(distributorId, status, pageable);
+        if (page.isEmpty()) {
+            return page.map(DeliveryResponse::from);
+        }
+
+        List<Long> ids = page.getContent().stream().map(Shipment::getId).toList();
+        Map<Long, Shipment> withPackages = shipmentRepository.findWithPackagesByIdIn(ids).stream()
+                .collect(Collectors.toMap(Shipment::getId, Function.identity(), (first, same) -> first));
+
+        // The page decides order and totals; the second query only supplies the packages.
+        return page.map(shipment -> DeliveryResponse.from(withPackages.getOrDefault(shipment.getId(), shipment)));
+    }
 
     @Override
     @Transactional
@@ -52,6 +79,42 @@ public class DeliveryServiceImpl implements DeliveryService {
     public DeliveryResponse shipmentDelivered(Long shipmentId, Long userId) {
         return advance(shipmentId, EnumSet.of(ShipmentStatus.IN_TRANSIT),
                 ShipmentStatus.DELIVERED, OrderStatus.DELIVERED, userId);
+    }
+
+    @Override
+    @Transactional
+    public DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber) {
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+        if(trackingNumber == null || trackingNumber.isBlank()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number cannot be null or blank");
+        }
+        if(trackingNumber.length() > 70) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number cannot exceed 70 characters");
+        }
+        if(shipment.getStatus() == ShipmentStatus.IN_TRANSIT || shipment.getStatus() == ShipmentStatus.DELIVERED) {
+            throw new APIException(HttpStatus.CONFLICT, "Cannot assign tracking number to shipment in status " + shipment.getStatus());
+        }
+        shipment.setTrackingNumber(trackingNumber);
+
+        shipmentRepository.save(shipment);
+        return DeliveryResponse.from(shipment);
+    }
+
+    @Override
+    @Transactional
+    public DeliveryResponse cancelShipment(Long shipmentId, CancelShipmentRequest request, Long userId) {
+        // Not reimplemented here: which statuses may still be called off, and what has to be wound
+        // back with it - packages loose again, order lines and orders a step back - is the shipment's
+        // own business and already lives on the planning side. A second copy would drift from it.
+        shipmentService.cancelShipment(shipmentId, request, userId);
+
+        // Read back rather than mapped from the planning answer: the carrier gets its own view. The
+        // shipment is in this transaction's persistence context by now, so findById costs no query,
+        // and its packages were detached above - the answer reports none, like the planning one.
+        Shipment shipment = shipmentRepository.findById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+        return DeliveryResponse.from(shipment);
     }
 
     /**

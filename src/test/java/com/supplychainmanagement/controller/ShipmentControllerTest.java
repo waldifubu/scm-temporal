@@ -2,13 +2,11 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
-import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
-import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.ShipmentService;
 import com.supplychainmanagement.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,21 +39,23 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** The shipment endpoints as a client calls them: binding, validation and status codes. */
+/**
+ * The planning endpoints as a client calls them: binding, validation and status codes. The carrier's
+ * three steps moved to {@link DeliveryControllerTest} with the endpoints themselves.
+ */
 class ShipmentControllerTest {
 
     private final ShipmentService shipmentService = mock(ShipmentService.class);
-    private final DeliveryService deliveryService = mock(DeliveryService.class);
     private final UserService userService = mock(UserService.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shipmentService, deliveryService, userService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ShipmentController(shipmentService, userService))
                 .setControllerAdvice(new GlobalExceptionHandler())
-                // @AuthenticationPrincipal has no resolver in a standalone setup - without it the
-                // three carrier endpoints fail before they reach the controller method.
+                // @AuthenticationPrincipal has no resolver in a standalone setup - without it ready
+                // and cancel fail before they reach the controller method.
                 .setCustomArgumentResolvers(new AuthenticationPrincipalArgumentResolver())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
@@ -69,11 +69,6 @@ class ShipmentControllerTest {
         when(shipmentService.removeShipmentPackage(any(), any())).thenReturn(response);
         when(shipmentService.updateShipmentData(any(), any())).thenReturn(response);
         when(userService.getAuthenticatedUserId(any())).thenReturn(99L);
-        DeliveryResponse delivery = new DeliveryResponse(50L, ShipmentStatus.ACCEPTED, "Ada Lovelace",
-                "Musterstr. 1", "DHL", null, null, null, null, 1, BigDecimal.ONE, List.of("PKG-5"));
-        when(deliveryService.acceptShipment(any(), any())).thenReturn(delivery);
-        when(deliveryService.shipmentInTransit(any(), any())).thenReturn(delivery);
-        when(deliveryService.shipmentDelivered(any(), any())).thenReturn(delivery);
         when(shipmentService.cancelShipment(any(), any(), any())).thenReturn(response);
         when(shipmentService.findShipments(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(1), 0));
@@ -162,18 +157,6 @@ class ShipmentControllerTest {
                 .andExpect(status().isOk());
 
         verify(shipmentService).findShipments(isNull(), any(Pageable.class));
-    }
-
-    /** The three steps of the carrier, each with the id from the path and the acting user. */
-    @Test
-    void acceptInTransitAndDeliveredPassTheShipmentAndTheUserOn() throws Exception {
-        mockMvc.perform(post("/api/1.0/shipments/50/accept")).andExpect(status().isOk());
-        mockMvc.perform(post("/api/1.0/shipments/50/in-transit")).andExpect(status().isOk());
-        mockMvc.perform(post("/api/1.0/shipments/50/delivered")).andExpect(status().isOk());
-
-        verify(deliveryService).acceptShipment(50L, 99L);
-        verify(deliveryService).shipmentInTransit(50L, 99L);
-        verify(deliveryService).shipmentDelivered(50L, 99L);
     }
 
     @Test

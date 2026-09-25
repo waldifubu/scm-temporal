@@ -105,7 +105,7 @@ responsibilities — read all of them together before changing reservation/fulfi
 
 The chain is split by responsibility, not by entity. Which service owns which stretch - one
 controller per service, named after what it does (`PickingController`, `PackingController`,
-`PackageController`, `ShipmentController`):
+`PackageController`, `ShipmentController`, `DeliveryController`):
 
 | Stretch | Service | Controller |
 |---------|---------|------------|
@@ -116,7 +116,7 @@ controller per service, named after what it does (`PickingController`, `PackingC
 | reading packages and package items | `PackageQueryService` | `PackageController` |
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
 | packages → shipment, ready, cancel | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| accept → in transit → delivered | `DeliveryService` | `ShipmentController` (same paths, DISTRIBUTOR) |
+| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `DeliveryController` (`/shipments/**`, DISTRIBUTOR) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | tracking, returns | `DeliveryService` | — (not implemented) |
 
@@ -261,6 +261,15 @@ controller per service, named after what it does (`PickingController`, `PackingC
   left alone; forwards only, like the orders. The order moves here and not at `accept`: the status
   is the warehouse reporting an order ready for the distributor, not the distributor answering. The
   `advance` call in `accept` stays as a catch-up for an order that was not moved here.
+- **The carrier's side lives in `DeliveryController`**, not in `ShipmentController`. Both map under
+  `/shipments` - that is the resource - and what separates them is the role and the direction:
+  LOGISTICS plans a shipment, the DISTRIBUTOR reports on it. Assigning a distributor
+  (`PUT /shipments/{id}/distributor/{id}`) is planning and stays with LOGISTICS - the house choosing a
+  carrier, not the carrier answering. `GET /shipments/distributor` is the distributor's work list:
+  their own shipments, optional `status`, paged, read from the authenticated user rather than from a
+  path variable, and two queries like every other shipment list. The literal segment wins over
+  `GET /shipments/{shipmentId}` in the other controller - `DeliveryControllerTest` registers both
+  controllers to hold that.
 - **The carrier's three steps** (ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
   side lives in `DeliveryService`, not in `ShipmentService`; `RoleEnum.LOGISTICS` is the inside role
   that plans shipments, which is why it is not called `LogisticsService`). They answer with

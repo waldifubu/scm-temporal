@@ -248,6 +248,11 @@ class CustomQueryExecutionTest {
         var pageable = PageRequest.of(0, 5, Sort.by(Sort.Direction.DESC, "createdAt"));
 
         assertThat(shipmentRepository.findAllWithCustomerBy(pageable).getTotalElements()).isNotNegative();
+        assertThat(shipmentRepository.findAllWithCustomerByDistributorId(UNKNOWN_ID, pageable).getTotalElements())
+                .isZero();
+        assertThat(shipmentRepository
+                .findAllWithCustomerByDistributorIdAndStatus(UNKNOWN_ID, ShipmentStatus.CREATED, pageable)
+                .getTotalElements()).isZero();
         assertThat(shipmentRepository.findAllWithCustomerByStatus(ShipmentStatus.CREATED, pageable).getTotalElements())
                 .isNotNegative();
     }
