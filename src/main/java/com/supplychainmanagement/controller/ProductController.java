@@ -21,7 +21,7 @@ public class ProductController {
     private final RoleService roleService;
     private final ProductMapper productMapper;
 
-    @GetMapping
+    @GetMapping(version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'CUSTOMER', 'MANAGER', 'WAREHOUSE')")
     public List<ProductDto> getProducts(@AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         boolean isPrivilegedUser = roleService.isPrivilegedUser(authUser);
@@ -46,19 +46,19 @@ public class ProductController {
         return productMapper.mapToDto(productService.findByArticleNo(articleNo), isPrivilegedUser);
     }
 
-    @PostMapping("")
+    @PostMapping(value = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ProductDto createProduct(@RequestBody Product product) {
         return productMapper.mapToDto(productService.create(product));
     }
 
-    @PutMapping("/{id}")
+    @PutMapping(value = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ProductDto updateProduct(@PathVariable Long id, @RequestBody Product product) {
         return productMapper.mapToDto(productService.update(id, product));
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping(value = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public void deleteProduct(@PathVariable Long id) {
         productService.deleteById(id);

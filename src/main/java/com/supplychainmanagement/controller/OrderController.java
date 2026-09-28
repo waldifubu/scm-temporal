@@ -91,6 +91,20 @@ public class OrderController {
         return toSummaryDto(orderService.reject(order, userService.getAuthenticatedUserId(authUser)));
     }
 
+    /**
+     * Closes the order. Every line has to have arrived in full - the check is on the packed
+     * quantities in shipments that report DELIVERED, not on the order status, which the first
+     * arriving shipment already sets. A line that is still short, an order that is already closed,
+     * one that ended in REJECTED or CANCELLED, and one without lines are each a 409.
+     */
+    @PostMapping(path = "/{orderNo}/complete", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public OrderSummaryDto completeOrder(@PathVariable Long orderNo,
+                                         @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
+        return toSummaryDto(orderService.complete(order, userService.getAuthenticatedUserId(authUser)));
+    }
+
     @GetMapping(path = "/{orderNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER')")
     public OrderDetailsDto getOrderByOrderNo(@PathVariable Long orderNo,

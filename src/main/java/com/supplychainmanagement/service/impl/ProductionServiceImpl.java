@@ -115,14 +115,29 @@ public class ProductionServiceImpl implements ProductionService {
         );
     }
 
+    /**
+     * The recipe: how much of each component SKU one unit of the product needs.
+     * <p>
+     * {@code Component.qty} is the bill-of-materials quantity, and it used to be ignored - every line
+     * counted as one. A product needing four screws consumed one, so it was produced out of stock
+     * that was never there, and the shortfall showed up as missing components somewhere else.
+     * <p>
+     * Summed per SKU rather than assigned: {@code components.sku} is unique, so the same SKU cannot
+     * appear twice under one product today - summing says what is meant instead of relying on that.
+     * <p>
+     * A line without a SKU or without a usable quantity yields an empty map, which the caller reports
+     * as "no valid component requirements". Refusing beats producing against a guessed recipe, all
+     * the more since {@code AutomaticProductionService.assemble()} runs this unattended every 150 s.
+     */
     private Map<UUID, Integer> getRequiredComponents(List<Component> components) {
         Map<UUID, Integer> requiredBySku = new LinkedHashMap<>();
         for (Component component : components) {
             UUID sku = component.getSku();
-            if (sku == null) {
+            Integer qty = component.getQty();
+            if (sku == null || qty == null || qty < 1) {
                 return Collections.emptyMap();
             }
-            requiredBySku.merge(sku, 1, Integer::sum);
+            requiredBySku.merge(sku, qty, Integer::sum);
         }
         return requiredBySku;
     }

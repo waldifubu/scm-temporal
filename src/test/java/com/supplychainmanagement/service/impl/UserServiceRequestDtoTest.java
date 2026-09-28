@@ -54,6 +54,45 @@ class UserServiceRequestDtoTest {
         return new UserRequestDto("Ada", "Lovelace", "ada", "ada@example.com", "secret1", null, null, roles);
     }
 
+    /** An existing, disabled user for the update tests. */
+    private User disabledUser() {
+        User existing = new Manager();
+        existing.setId(7L);
+        existing.setUsername("ada");
+        existing.setEmail("ada@example.com");
+        existing.setIsActive(false);
+        when(userRepository.findById(7L)).thenReturn(Optional.of(existing));
+        return existing;
+    }
+
+    /**
+     * A request that does not mention isActive leaves the flag alone. It used to default to true, so
+     * any update that simply did not send the field - a new password, a colour - quietly re-activated
+     * a disabled user.
+     */
+    @Test
+    void leavesADisabledUserDisabledWhenTheRequestSaysNothingAboutIt() {
+        User existing = disabledUser();
+        savesWhatItIsGiven();
+
+        service.update(7L, new UserRequestDto("Ada", "Lovelace", "ada", "ada@example.com",
+                null, null, null, null));
+
+        assertThat(existing.getIsActive()).isFalse();
+    }
+
+    /** Sent explicitly, it is written - that is what the field is for. */
+    @Test
+    void activatesAUserWhenTheRequestAsksForIt() {
+        User existing = disabledUser();
+        savesWhatItIsGiven();
+
+        service.update(7L, new UserRequestDto("Ada", "Lovelace", "ada", "ada@example.com",
+                null, null, true, null));
+
+        assertThat(existing.getIsActive()).isTrue();
+    }
+
     private void savesWhatItIsGiven() {
         when(passwordEncoder.encode(anyString())).thenAnswer(call -> "hashed:" + call.getArgument(0));
         when(userRepository.save(any(User.class))).thenAnswer(call -> call.getArgument(0));

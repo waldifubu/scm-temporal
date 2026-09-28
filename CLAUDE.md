@@ -87,8 +87,29 @@ responsibilities — read all of them together before changing reservation/fulfi
   the order's packages travel in: `READY_FOR_DISPATCH` when the shipment is reported ready - the
   warehouse is done with it, which is what that status says - then `IN_TRANSIT` and `DELIVERED` with
   the carrier's steps. A cancelled shipment takes its orders back to `IN_FULFILLMENT` - the one
-  backwards step besides the fallback to `APPROVED` in `releaseItems`. `COMPLETED` and `CANCELLED`
-  are still unreachable on the order.
+  backwards step besides the fallback to `APPROVED` in `releaseItems`. `PARTIALLY_DELIVERED` is for
+  an order of which something has arrived while the rest is still out, and `COMPLETED` comes from
+  `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `acknowledge` parks an order whose stock
+  is not there (see below); `CANCELLED` is still unreachable on the order.
+- **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
+  (`OrderProgressService.recompute`). The shipment side says only *which orders were touched*; where
+  each of them stands follows from the **quantities of its lines that sit in shipments**
+  (`OrderItemRepository.findShippedQuantities`, one row per line and shipment status, one query per
+  batch). Everything delivered → `DELIVERED`; something delivered and something not →
+  `PARTIALLY_DELIVERED`; everything at least on the road → `IN_TRANSIT`; everything at least in a
+  `READY` shipment → `READY_FOR_DISPATCH`; otherwise `IN_FULFILLMENT`. Arriving is asked first, so a
+  line half delivered and half on the road reads as partly there, not as in transit.
+  `PARTIALLY_DELIVERED` is reserved for the delivery: a shipment that has merely left while the rest
+  is still being picked keeps the order where the slowest line is.
+  <br>Why: pushing a fixed target let the first shipment to report call a whole order ready, in
+  transit or delivered, however many other shipments it was still spread over. It also goes
+  **backwards** - a cancelled shipment hands its packages back, the coverage drops, the order falls
+  by itself. There is no separate way back any more.
+  <br>`recompute` only ever writes within `IN_FULFILLMENT … DELIVERED` and only for an order already
+  in that range (`RECOMPUTED_FROM`). Everything before belongs to the order side - `WAIT_SUPPLY` is
+  about stock, not about shipments - and `REJECTED`/`CANCELLED`/`COMPLETED` are ends, not steps. An
+  order outside the range is skipped deliberately, not as the side effect of a list lookup, which is
+  what the old `ORDER_FLOW` did: a status missing from that list was silently never moved.
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
   PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item, and implemented end to end: the
   last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
@@ -147,6 +168,14 @@ controller per service, named after what it does (`PickingController`, `PackingC
   depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
   customer asked for later than that wins. Only from `CREATED` - confirming an order already being
   fulfilled would throw it back.
+  <br>The same answer also picks the status: `ACKNOWLEDGED` when every line is covered, `WAIT_SUPPLY`
+  when it is not. The order is confirmed either way - the customer has a date - and the status says
+  why that date is so far out. `checkItems` is asked **once** in `acknowledge` and handed to
+  `confirmDeliveryDate`; it costs a query per line.
+  <br>The way out of `WAIT_SUPPLY` is a reservation: it is in `PRE_FULFILLMENT_STATUSES`, so
+  `reserveItems` lifts such an order to `IN_FULFILLMENT` as soon as stock can be held, and
+  `tryToReserve` looks at `WAIT_SUPPLY` next to `IN_FULFILLMENT` for exactly that reason. Without
+  both halves the status is a dead end.
 - **`InventoryService`** (`InventoryServiceImpl`) is the retry/idempotency wrapper around actual
   reservation work — `reserveWithRetry`/`releaseWithRetry`/`consumeWithRetry`, all keyed by the
   numeric `Order.id` (`Long orderId`, not the order number).
@@ -248,7 +277,9 @@ controller per service, named after what it does (`PickingController`, `PackingC
   of the JSON) but required for `GET /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
   also requires every package `PACKED`). A distributor is assigned with
   `PUT /shipments/{id}/distributor/{distributorId}` only while `READY` or `DISPATCH_REQUESTED`; the
-  user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. The list
+  user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. Read
+  `FOR UPDATE` like every other shipment change: it checks a status and writes one
+  (`DISPATCH_REQUESTED`, the only code path that sets it). The list
   (`GET /shipments`, optional `status`) is two queries like the package list. `ShipmentResponse`
   names customer and distributor by id and name only, never the `User` entities.
 - **Reporting a shipment ready** (`PUT /shipments/{id}/ready`, `checkShipmentReady`): read
@@ -257,10 +288,10 @@ controller per service, named after what it does (`PickingController`, `PackingC
   at least one package (409 - `allMatch` says true for none) and every package `PACKED` (409). It
   then takes the shipment to `READY`, the **order lines** it carries from `PACKED` to
   `READY_FOR_DISPATCH` (`OrderItemRepository.findByShipmentId`) and the **orders** behind them with
-  them (`OrderProgressService.advance`). A line still `PACKING` has parts in another package and is
-  left alone; forwards only, like the orders. The order moves here and not at `accept`: the status
-  is the warehouse reporting an order ready for the distributor, not the distributor answering. The
-  `advance` call in `accept` stays as a catch-up for an order that was not moved here.
+  them - by asking `OrderProgressService.recompute`, which names no target. A line still `PACKING`
+  has parts in another package and is left alone. The order only reaches `READY_FOR_DISPATCH` once
+  **every** line of it is in a shipment that has been handed over, so reporting one of three
+  shipments ready moves the lines but not the order.
 - **The carrier's side lives in `DeliveryController`**, not in `ShipmentController`. Both map under
   `/shipments` - that is the resource - and what separates them is the role and the direction:
   LOGISTICS plans a shipment, the DISTRIBUTOR reports on it. Assigning a distributor
@@ -279,22 +310,35 @@ controller per service, named after what it does (`PickingController`, `PackingC
   `POST /shipments/{id}/in-transit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
   packages from `PACKED` to `DISPATCHED`) and `POST /shipments/{id}/delivered` (`IN_TRANSIT` →
   `DELIVERED`, stamps `deliveredAt`); any other status is a 409, and the shipment is read
-  `FOR UPDATE`. Each step takes **the orders of the shipment** along - `READY_FOR_DISPATCH`,
+  `FOR UPDATE`. None of the three names an order status: each one ends in
+  `OrderProgressService.recompute` with the orders of the shipment, and where those really stand is
+  worked out there. Each step takes **the orders of the shipment** along - `READY_FOR_DISPATCH`,
   `IN_TRANSIT`, `DELIVERED` - found through the packages (`OrderRepository.findByShipmentId`, a
-  shipment may carry packages of several orders of its customer). Which of them really move is
-  **`OrderProgressService`**, not the shipment: `advance` takes orders forwards only (`ORDER_FLOW`
-  decides, so an order already further along or one in `REJECTED`/`CANCELLED` is left alone) and
-  `takeBackFromDispatch` is the way back for a cancelled dispatch. It publishes the
-  `OrderStatusChangedEvent` and runs `Propagation.MANDATORY` - without the caller's transaction an
-  `AFTER_COMMIT` listener would drop the event, so it refuses to run outside one.
+  shipment may carry packages of several orders of its customer). Where they end up is
+  **`OrderProgressService.recompute`**, not the shipment. It publishes the `OrderStatusChangedEvent`
+  and runs `Propagation.MANDATORY` - without the caller's transaction an `AFTER_COMMIT` listener
+  would drop the event, so it refuses to run outside one.
+- **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN and MANAGER,
+  `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. Checked on
+  **quantities**, not on statuses: every line has to be covered by `PackageItem`s that travelled in
+  shipments reporting `DELIVERED` (`OrderItemRepository.findDeliveredQuantities`,
+  `OrderProgressService.undeliveredLines`). Counting lines would not do - a line may be packed in
+  several runs and travel in several shipments, so 5 of 10 delivered is not a delivered line. Every
+  join of that query is an inner one, so a line nothing has arrived for is **missing from the
+  result**: coverage is counted from the order's own lines, never from the query alone. Four 409s:
+  already `COMPLETED`, ended in `REJECTED`/`CANCELLED` (which `recompute` leaves alone, so without
+  the guard the endpoint would answer 200 for nothing), no lines at all (nothing could be missing, so it would close on the
+  spot), and something still short - that last message names every line with ordered against
+  delivered. `OrderStatus.DELIVERED` is deliberately **not** a precondition: it is set by whichever
+  shipment arrives first and says less than the quantities do.
 - **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN and LOGISTICS): only up to
   `ACCEPTED` (409 afterwards - once it rolls it is a return, which the process does not model), and
   only with a reason (400), which is kept in `comment`. It undoes what the shipment had set in
   motion: the packages are loose again and stay `PACKED`, lines go from `READY_FOR_DISPATCH` back to
-  `PACKED`, and orders from `READY_FOR_DISPATCH` back to `IN_FULFILLMENT`
-  (`OrderProgressService.takeBackFromDispatch` - unless a line of theirs travels in another
-  shipment). Lines and orders are read **before** the packages are detached: both are found over the
-  packages.
+  `PACKED`, and the orders fall back on their own - `recompute` runs **after** the packages are
+  detached, sees the coverage gone and writes what is left, unless a line of theirs travels in
+  another shipment. The order *ids* are read **before** the packages are detached: they are found
+  over the packages, which the shipment no longer holds afterwards.
 - **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
   contents (0 without items) and has no setter; no request carries a weight. The package keeps it
   itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's
@@ -306,8 +350,8 @@ controller per service, named after what it does (`PickingController`, `PackingC
   because the unique constraint would otherwise permanently block re-reserving the same
   order/sku/storehouse combination.
 - **An order status is written in one place**: `OrderProgressService.changeStatus` sets it, saves
-  and publishes the event - `advance`/`takeBackFromDispatch` are the variants with a direction rule,
-  and `recordCreated` is the first row of a new order. `OrderServiceImpl` (create, update, and with
+  and publishes the event - `recompute` is the variant that works the target out for itself, and
+  `recordCreated` is the first row of a new order. `OrderServiceImpl` (create, update, and with
   it `acknowledge` and `reject`) and `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to `APPROVED`)
   all go through it. Do not write `order.setStatus(...)` and publish by hand - every caller that did had
   its own idea of what to do when the user could not be resolved, and one of them dropped the audit
@@ -316,7 +360,9 @@ controller per service, named after what it does (`PickingController`, `PackingC
 - Order-status transitions publish `OrderStatusChangedEvent` via `ApplicationEventPublisher`;
   `OrderStatusChangedListener` (`@TransactionalEventListener(phase = AFTER_COMMIT)`) writes an
   `OrderHistory` audit row. Follow this event pattern for any new status-changing code path instead
-  of writing history rows inline. Two things are load-bearing here: the publishing method must be
+  of writing history rows inline. `OrderHistory.user_id` is **nullable** - a sweep running as
+  `"system"` resolves to nobody and its audit row still has to be written
+  (`OrderHistoryUserIdMigration` widened the column, `OrderHistoryUserIdTest` holds it). Two things are load-bearing here: the publishing method must be
   `@Transactional` (an `AFTER_COMMIT` listener silently discards events published without one), and
   the listener must be `@Transactional(REQUIRES_NEW)` (with the default propagation the repository
   call joins the already-committed transaction and the row is dropped without a flush).
@@ -430,8 +476,8 @@ requires items declares `@Validated({Default.class, CreatePackageRequest.WithIte
 `@Valid` lets `items` be missing. `WithItems` alone would skip the per-item rules - always pair it
 with `Default`.
 
-`CreatePackageItemsRequest`, `PackageItemIdsRequest` and `ShipmentPackageIdsRequest` also accept the
-bare JSON array (`[...]`) next to the wrapped form, through a static factory with `@JsonCreator(mode = DELEGATING)`; the
+`CreatePackageItemsRequest`, `PackageItemIdsRequest`, `ShipmentPackageIdsRequest` and
+`RequestComponentsRequest` also accept the bare JSON array (`[...]`) next to the wrapped form, through a static factory with `@JsonCreator(mode = DELEGATING)`; the
 record's canonical constructor still reads the object form. Both end in the same record, so the
 validation applies to either.
 
@@ -473,12 +519,53 @@ actually in the column (`SELECT ... GROUP BY`) before assuming the rows are `NUL
 
 The reverse needs a manual step too: `package_item.shipment_package_id` became optional for loose
 items, but `update` leaves an existing `NOT NULL` in place - `ALTER TABLE package_item MODIFY
-shipment_package_id BIGINT NULL`. Data migrations that cannot wait for a real migration tool run as
+shipment_package_id BIGINT NULL`.
+
+**A new enum value needs the `CHECK` constraint widened.** Hibernate writes
+`order_status in ('CREATED', ...)` on first creation and `update` never touches it again, so a value
+added later is rejected at insert - and twice over, because `order_history` carries the same check on
+`previous_status` and `new_status`, and that insert happens inside the `AFTER_COMMIT` listener, where
+the error turns an operation that already succeeded into a 500. `OrderStatusCheckConstraintMigration`
+rewrites all three from `OrderStatus.values()`, so the next added value is covered without touching
+it. Note **how** it drops the old check: Hibernate writes it into the *column* definition, and a
+column constraint is not reachable through `DROP CONSTRAINT` (MariaDB answers "Can't DROP CONSTRAINT;
+check that it exists") - the column has to be rewritten with `MODIFY COLUMN`, keeping its type and
+nullability. A constraint the migration added itself is a *table* constraint and does come off with
+`DROP CONSTRAINT`, which is why that is tried first. `OrderStatusCheckConstraintTest` writes every
+enum value to all three columns; a unit test cannot see any of this.
+
+Data migrations that cannot wait for a real migration tool run as
 an `ApplicationReadyEvent` listener in `config` (`OrderDateToCreatedMigration`), guarded so they do
 nothing once done. Note that `@SpringBootTest` runs them as well, against the same database.
 
 ### Business/aspect utilities
 
+- **Ordering components from a supplier** (`POST /components/request/{supplierId}`, ADMIN, MANAGER
+  and WAREHOUSE - a method-level `@PreAuthorize` widening the controller's ADMIN/MANAGER, because the
+  warehouse owns the stock and already consumes components through `POST /produce`;
+  `ComponentServiceImpl.requestComponents`): every entry of the body becomes its own
+  `request_components` row, in `RequestStatus.OPEN` (the entity's `@PrePersist`). The lines name
+  their component by **SKU** - the JSON key is `componentId`, the `UUID` type is what says which of
+  the two it is. A repeated SKU stays two rows: two requests for the same part, each with its own
+  quantity and reason, unlike an order line, where `mergeDuplicateProducts` adds a repeat up. The
+  supplier is a 404 when there is no such user and a 400 when they are not a `Supplier`, checked
+  after `Hibernate.unproxy` like the distributor of a shipment. All or nothing: one unknown SKU
+  refuses the whole request with a 404 naming every one of them, so a caller never has to work out
+  which half went through. One `findBySkuIn` for the whole body, not one query per line; an empty
+  comment is stored as `null`. There is **no internal release step**: `RequestStatus` is the
+  supplier's side throughout (`OPEN` = placed, `APPROVED` = the supplier accepted, then `IN_TRANSIT`,
+  `STORAGE`, `ASSEMBLED`), so whoever may call this orders straight away. `RoleEnum.SUPPLIER` appears
+  in no controller at all - the supplier's half of that chain is not implemented.
+- **A product's recipe is `Component.qty`.** A `Component` row belongs to exactly one product
+  (`product_id` is `NOT NULL`), so it is a bill-of-materials line and not a shared catalogue part -
+  which is why the quantity sits on it and not on a join table. `NOT NULL`, `@ColumnDefault("1")`,
+  and `@PrePersist` lifts a missing or non-positive value to 1, because a line that is part of the
+  recipe is needed at least once. `ProductionServiceImpl.getRequiredComponents` sums it per SKU;
+  it used to count every line as one, so a product needing four screws consumed one and was built
+  out of stock that was never there. A line without a SKU or without a usable quantity makes the
+  whole recipe invalid (empty map, "no valid component requirements") rather than being guessed at -
+  `assemble()` runs this unattended every 150 s and a wrong recipe consumes real stock.
+  `ComponentQtyMigration` gives existing rows a 1; it is idempotent and stays in place.
 - `service/business/AutomaticProductionService` — `assemble()` builds products from component
   stock every 150 s (`ProductionServiceImpl.produce`/`produceSingleProduct` picks the storehouse
   with enough components and decrements them, then adds the produced unit as stock). `POST /produce`

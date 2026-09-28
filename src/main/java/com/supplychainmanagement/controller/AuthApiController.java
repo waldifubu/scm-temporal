@@ -84,7 +84,7 @@ public class AuthApiController {
         }
     }
 
-    @GetMapping("/logout")
+    @GetMapping(value = "/logout", version = "1.0")
     public ResponseEntity<?> logout() {
         try {
             var logoutResult = authService.logout();

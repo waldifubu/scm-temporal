@@ -16,7 +16,6 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
-import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
@@ -241,7 +240,12 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Override
     @Transactional
     public ShipmentResponse assignDistributor(Long shipmentId, Long distributorId) {
-        var shipment = loadShipment(shipmentId);
+        // Locked like every other change of a shipment: the status is read, checked and then written,
+        // and this writes one itself (DISPATCH_REQUESTED). Two assignments at once - or one next to a
+        // carrier step - would otherwise both pass the check against the same stale status. This was
+        // the last shipment change reading without a lock.
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
         var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED);
 
@@ -306,7 +310,9 @@ public class ShipmentServiceImpl implements ShipmentService {
         backToPacked.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.PACKED));
         orderItemRepository.saveAll(backToPacked);
 
-        orderProgress.takeBackFromDispatch(orderIds, userId);
+        // After the packages are gone, so the recomputed coverage sees the shipment is empty: the
+        // orders fall back by themselves, which is what used to be takeBackFromDispatch.
+        orderProgress.recompute(orderIds, userId);
 
         shipment.setStatus(ShipmentStatus.CANCELLED);
         shipment.setComment(request.reason().trim());
@@ -357,11 +363,10 @@ public class ShipmentServiceImpl implements ShipmentService {
         lines.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH));
         orderItemRepository.saveAll(lines);
 
-        // The orders follow their lines: READY_FOR_DISPATCH is the warehouse reporting them ready
-        // for the distributor, which is this step and not the one where the distributor answers.
-        // Which of them really move is OrderProgressService's rule - an order whose other lines
-        // travel in a shipment that is already further along is left where it is.
-        orderProgress.advance(orderIdsOf(shipmentId), OrderStatus.READY_FOR_DISPATCH, userId);
+        // The orders follow, but no target is named here: an order is spread over as many shipments
+        // as its packages need, so this one being ready says nothing about the order as a whole.
+        // OrderProgressService works out where each of them really stands.
+        orderProgress.recompute(orderIdsOf(shipmentId), userId);
 
         shipment.setStatus(ShipmentStatus.READY);
         shipmentRepository.save(shipment);

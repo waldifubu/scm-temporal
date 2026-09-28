@@ -144,6 +144,32 @@ class OrderServiceAcknowledgeTest {
                 .isEqualTo(REPLENISHMENT_LEAD_DAYS);
     }
 
+    /**
+     * The order is confirmed either way - the customer has a date. What the status adds is why that
+     * date is so far out: the stock is not there, and WAIT_SUPPLY is the counterpart to APPROVED.
+     * A reservation takes the order out of it again, see PRE_FULFILLMENT_STATUSES.
+     */
+    @Test
+    void parksAnOrderWithoutStockInWaitSupply() {
+        Order order = orderInStatus(OrderStatus.CREATED);
+        availability(false);
+
+        service.acknowledge(order, 99L);
+
+        verify(orderProgress).changeStatus(order, OrderStatus.WAIT_SUPPLY, 99L);
+    }
+
+    /** The availability check costs a query per line - it is asked once, not once per use. */
+    @Test
+    void asksAboutAvailabilityOnlyOnce() {
+        Order order = orderInStatus(OrderStatus.CREATED);
+        availability(true);
+
+        service.acknowledge(order, 99L);
+
+        verify(productionService).checkItems(order);
+    }
+
     /** The promised date is a shipping day, never a weekend. */
     @Test
     void neverPromisesAWeekend() {

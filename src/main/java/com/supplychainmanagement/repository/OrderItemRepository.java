@@ -1,6 +1,7 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.dto.order.OrderItemListDto;
+import com.supplychainmanagement.dto.order.ShippedQuantity;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import jakarta.persistence.LockModeType;
@@ -12,6 +13,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -30,6 +32,35 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
             where sp.shipment.id = :shipmentId
             """)
     List<OrderItem> findByShipmentId(@Param("shipmentId") Long shipmentId);
+
+    /**
+     * How much of each line of these orders sits in shipments, split by the status those shipments
+     * are in - the raw material {@code OrderProgressService.recompute} works the order status out
+     * from, and what {@code undeliveredLines} reads the delivered part off.
+     * <p>
+     * One row per line <em>and</em> shipment status, for the whole batch of orders in one query: a
+     * line is packed per run and may travel in more than one shipment, so 5 of a line of ten can be
+     * delivered while the other 5 are still on the road.
+     * <p>
+     * Filtered by the orders, not by a shipment: a shipment carries packages of several orders of its
+     * customer, and the question here is about an order across all of its shipments.
+     * <p>
+     * Every join is an inner one, so a line nothing has shipped for - never packed, packed but still
+     * loose, or taken out of a cancelled shipment - is simply missing from the result. The caller
+     * therefore has to count coverage from the orders own lines and must never read this result as
+     * the complete set.
+     */
+    @Query("""
+            select new com.supplychainmanagement.dto.order.ShippedQuantity(
+                       oi.order.id, oi.id, s.status, sum(pi.quantity))
+            from PackageItem pi
+              join pi.orderItem oi
+              join pi.shipmentPackage sp
+              join sp.shipment s
+            where oi.order.id in :orderIds
+            group by oi.order.id, oi.id, s.status
+            """)
+    List<ShippedQuantity> findShippedQuantities(@Param("orderIds") Collection<Long> orderIds);
     @EntityGraph(attributePaths = {"order", "product"})
     Optional<OrderItem> findWithDetailsById(Long id);
 

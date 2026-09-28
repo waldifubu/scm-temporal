@@ -97,7 +97,13 @@ public class UserServiceImpl implements UserService {
         existing.setEmail(user.getEmail());
         existing.setUsername(user.getUsername());
         existing.setColor(user.getColor());
-        existing.setIsActive(user.getIsActive() != null ? user.getIsActive() : true);
+
+        // A request that does not mention isActive leaves the flag where it is. Defaulting to true
+        // here re-activated a disabled user through any update that simply did not send the field -
+        // password, e-mail, colour, whatever - which is the opposite of what a lock is for.
+        if (user.getIsActive() != null) {
+            existing.setIsActive(user.getIsActive());
+        }
 
         if (user.getRoles() != null && !user.getRoles().isEmpty()) {
             existing.setRoles(user.getRoles());

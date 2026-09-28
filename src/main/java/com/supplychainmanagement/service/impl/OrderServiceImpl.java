@@ -14,6 +14,7 @@ import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.dto.order.UndeliveredLine;
 import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.ProductionService;
@@ -31,6 +32,7 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -192,13 +194,22 @@ public class OrderServiceImpl implements OrderService {
                     "Only an order in CREATED can be acknowledged, this one is " + order.getStatus());
         }
 
+        // Asked once and used twice: the same answer decides the promised date and the status, and
+        // checkItems costs a query per line.
+        boolean everyLineCovered = productionService.checkItems(order).stream()
+                .allMatch(AvailableOrderItemDto::available);
+
         // Order.deliveryDate is a timestamp while the promise is a day: pinned to the end of the
         // working day, so "delivered on the 15th" does not read as midnight of the 15th.
-        order.setDeliveryDate(confirmDeliveryDate(order).atTime(END_OF_WORKING_DAY));
+        order.setDeliveryDate(confirmDeliveryDate(order, everyLineCovered).atTime(END_OF_WORKING_DAY));
+        // Confirmed either way - the customer has a date. The status says why it is the date it is:
+        // WAIT_SUPPLY is the counterpart to "all needed products are in stock", and the long lead
+        // time above is the same fact stated as a day.
         // Not order.setStatus(...): update() below compares the status it reloads against the one it
         // is handed, and with open-in-view that is the same instance - the change would look like
         // none and no audit row would be written.
-        orderProgress.changeStatus(order, OrderStatus.ACKNOWLEDGED, userId);
+        orderProgress.changeStatus(order,
+                everyLineCovered ? OrderStatus.ACKNOWLEDGED : OrderStatus.WAIT_SUPPLY, userId);
 
         return update(order.getId(), order, userId);
     }
@@ -212,10 +223,7 @@ public class OrderServiceImpl implements OrderService {
      * requested is not a favour. Asking for it earlier does not, because the promise has to be one
      * that can be kept.
      */
-    private LocalDate confirmDeliveryDate(Order order) {
-        boolean everyLineCovered = productionService.checkItems(order).stream()
-                .allMatch(AvailableOrderItemDto::available);
-
+    private LocalDate confirmDeliveryDate(Order order, boolean everyLineCovered) {
         LocalDate earliest = addWorkingDays(LocalDate.now(), everyLineCovered ? inStockLeadDays : replenishmentLeadDays);
 
         LocalDate requested = order.getDueDate();
@@ -282,6 +290,42 @@ public class OrderServiceImpl implements OrderService {
         }
 
         orderProgress.changeStatus(order, OrderStatus.REJECTED, userId);
+        return findById(order.getId());
+    }
+
+    /**
+     * Only the status changes, so this does not go through {@link #update} either - what an order is
+     * made of does not change by closing it.
+     */
+    @Override
+    @Transactional
+    public Order complete(Order order, Long userId) {
+        if (order.getStatus() == OrderStatus.COMPLETED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is already completed");
+        }
+
+        // advance() would silently skip these two, and the caller would read the 200 as a success.
+        if (order.getStatus() == OrderStatus.REJECTED || order.getStatus() == OrderStatus.CANCELLED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be completed");
+        }
+
+        // An order with no lines has nothing that could arrive - undeliveredLines would find nothing
+        // missing and the order would close on the spot.
+        if (order.getOrderItems() == null || order.getOrderItems().isEmpty()) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Order " + order.getOrderNo() + " has no lines, there is nothing to deliver");
+        }
+
+        List<UndeliveredLine> missing = orderProgress.undeliveredLines(order);
+        if (!missing.isEmpty()) {
+            // Named one by one: a bare "not complete" leaves the caller with nowhere to look.
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo()
+                    + " is not fully delivered: "
+                    + missing.stream().map(UndeliveredLine::describe).collect(Collectors.joining("; ")));
+        }
+
+        orderProgress.changeStatus(order, OrderStatus.COMPLETED, userId);
         return findById(order.getId());
     }
 

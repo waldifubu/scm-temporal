@@ -1,10 +1,14 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
+import com.supplychainmanagement.dto.component.RequestComponentResponse;
+import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.service.ComponentService;
+import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -22,7 +26,7 @@ public class ComponentController {
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;
 
-    @GetMapping
+    @GetMapping(version = "1.0")
     public List<ComponentResponseDto> getComponents() {
         return componentService.findAll().stream().map(componentMapper::mapToDto).toList();
     }
@@ -35,27 +39,53 @@ public class ComponentController {
     }
      */
 
-    @GetMapping("/sku/{sku}")
+    @GetMapping(path = "/sku/{sku}", version = "1.0")
     public ComponentResponseDto getComponentBySku(@PathVariable UUID sku) {
         return componentMapper.mapToDto(componentService.findBySku(sku));
     }
 
-    @GetMapping("/article/{articleNo}")
+    @GetMapping(path = "/article/{articleNo}", version = "1.0")
     public ComponentResponseDto getComponentByArticleNo(@PathVariable String articleNo) {
         return componentMapper.mapToDto(componentService.findByArticleNo(articleNo));
     }
 
-    @PostMapping("/")
+    /**
+     * Orders components from one supplier. Every entry of the body becomes its own row in
+     * {@code request_components}, in status OPEN - the same component may appear twice, and then it
+     * is two requests rather than one of double the quantity.
+     * <p>
+     * {@code componentId} carries the component's <strong>SKU</strong>, not its numeric id. The body
+     * is the bare array or the wrapped {@code {"items": [...]}}, see
+     * {@link RequestComponentsRequest}. An unknown SKU refuses the whole request with 404, a
+     * supplierId that is no supplier with 400.
+     */
+    @PostMapping(path = "/request/{supplierId}", version = "1.0")
+    // WAREHOUSE on top of the class-level ADMIN/MANAGER, and a method annotation because it widens
+    // them: the warehouse owns the stock (StockController is ADMIN/WAREHOUSE) and already consumes
+    // components through POST /produce, so it is the role that sees a shelf run empty. Note there is
+    // no internal release step - RequestStatus.APPROVED is the supplier answering, not a manager
+    // signing off - so whoever may call this orders straight away.
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    @ResponseStatus(HttpStatus.CREATED)
+    public List<RequestComponentResponse> requestComponents(@PathVariable Long supplierId,
+                                                            @Valid @RequestBody RequestComponentsRequest request) {
+        return componentService.requestComponents(supplierId, request);
+    }
+
+    @PostMapping(path = "/", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ComponentResponseDto createComponent(@RequestBody Component component) {
         return componentMapper.mapToDto(componentService.create(component));
     }
 
-    @PutMapping("/{id}")
+    @PutMapping(path = "/{id}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ComponentResponseDto updateComponent(@PathVariable Long id, @RequestBody Component component) {
         return componentMapper.mapToDto(componentService.update(id, component));
     }
 
-    @DeleteMapping("/{id}")
+    @DeleteMapping(path = "/{id}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public void deleteComponent(@PathVariable Long id) {
         componentService.deleteById(id);
     }

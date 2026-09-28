@@ -2,9 +2,11 @@ package com.supplychainmanagement.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.supplychainmanagement.entity.users.Supplier;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Positive;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -25,25 +27,22 @@ import java.util.UUID;
 public class RequestComponent {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    @UuidGenerator
-    private UUID id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     @JsonIgnore
     @ManyToOne
     private Component component;
 
-    @Transient
-    private String sku;
-
-    private int qty;
+    @Positive(message = "Quantity must be a minimum of 1")
+    private Long qty;
 
     @CreationTimestamp
     private LocalDateTime requestDate;
 
     @JsonIgnore
     @ManyToOne
-    private User supplier;
+    private Supplier supplier;
 
     @Enumerated(EnumType.STRING)
     private RequestStatus requestStatus = RequestStatus.OPEN;
@@ -54,4 +53,11 @@ public class RequestComponent {
     @UpdateTimestamp
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private LocalDateTime updated;
+
+    @PrePersist
+    public void prePersist() {
+        if (requestStatus == null) {
+            requestStatus = RequestStatus.OPEN;
+        }
+    }
 }

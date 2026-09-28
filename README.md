@@ -50,7 +50,9 @@ stateDiagram-v2
     READY_FOR_DISPATCH --> IN_FULFILLMENT : POST /shipments/{id}/cancel
     READY_FOR_DISPATCH --> IN_TRANSIT : POST /shipments/{id}/in-transit
     IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
-    DELIVERED --> COMPLETED
+    IN_TRANSIT --> PARTIALLY_DELIVERED : POST /shipments/{id}/delivered - part of the order still out
+    PARTIALLY_DELIVERED --> DELIVERED : POST /shipments/{id}/delivered - the rest arrives
+    DELIVERED --> COMPLETED : POST /orders/{orderNo}/complete
 
     pre --> CANCELLED
 
@@ -94,6 +96,10 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   shelf. A partial release leaves the status alone. Like every other transition it publishes an
   event, and it does so even when the acting user cannot be resolved (a scheduled sweep runs as
   `"system"`), writing the audit row with a null `user_id`.
+- **`WAIT_SUPPLY`** is set by `acknowledge` when `checkItems` does not cover every line — the order is
+  confirmed all the same, with the replenishment lead time, and the status says why the date is so
+  far out. A successful reservation takes it out again (`PRE_FULFILLMENT_STATUSES`), and
+  `tryToReserve` retries those orders next to the `IN_FULFILLMENT` ones.
 - **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED`** come from the shipment the order's packages
   travel in, see [Packages and shipments](#packages-and-shipments). A cancelled shipment takes its
   orders back to `IN_FULFILLMENT` — the second backwards step besides the fallback to `APPROVED`, and
@@ -103,8 +109,8 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
 - **Every status change goes through `OrderProgressService.changeStatus()`** — it writes the status,
   saves and publishes the `OrderStatusChangedEvent` in one place. `OrderServiceImpl` (create, update,
   and with them acknowledge and reject), `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to
-  `APPROVED`) and the shipment side all call it; `advance()` and `takeBackFromDispatch()` are the
-  variants with a direction rule, `recordCreated()` the first row of a new order.
+  `APPROVED`) and the shipment side all call it; `recompute()` is the variant that works the target
+  out from the shipped quantities itself, `recordCreated()` the first row of a new order.
   `OrderStatusChangedListener` picks the event up `AFTER_COMMIT` and writes an immutable
   `OrderHistory` row (previous status, new status, acting user). Do not write `order.setStatus(...)`
   and publish by hand: every caller that did had its own idea of what to do when the acting user
@@ -696,9 +702,11 @@ The fulfillment chain is split by responsibility rather than by entity, one cont
 - **`DeliveryService`** — the carrier's side: accept, in transit, delivered. Answers with
   `DeliveryResponse`, without the package contents.
 - **`OrderProgressService`** — the one place an order status is written: `changeStatus()` for a
-  single step, `advance()` forwards only on behalf of a shipment, `takeBackFromDispatch()` for the
-  way back from a cancelled dispatch, `recordCreated()` for a new order. Publishes the status event
-  and runs `Propagation.MANDATORY`, so it cannot be called outside the caller's transaction.
+  single step, `recordCreated()` for a new order, and `recompute()`, which from `IN_FULFILLMENT` on
+  works the status out from the quantities of the order's lines that sit in shipments instead of
+  taking a target. That covers the way forward and the way back from a cancelled dispatch in one.
+  Publishes the status event and runs `Propagation.MANDATORY`, so it cannot be called outside the
+  caller's transaction.
 
 ### Timestamps
 
@@ -794,7 +802,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge` and `/reject` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge`, `/reject` and `/complete` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
@@ -808,6 +816,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
+| | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU** | ADMIN, MANAGER, WAREHOUSE |
 | Stock | `POST /stock/add`, `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
 
@@ -911,7 +920,9 @@ part of them.
 | `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, and the distributor's work list in two queries |
 | `DeliveryControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
 | `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
-| `OrderProgressServiceImplTest` | orders move forwards only, `REJECTED`/`CANCELLED` left alone, the way back from a cancelled dispatch, and `changeStatus`/`recordCreated`: written, saved and published once, a `null` or unchanged target ignored |
+| `OrderProgressServiceImplTest` | the computed order status: every step from `IN_FULFILLMENT` to `DELIVERED` out of the shipped quantities, `PARTIALLY_DELIVERED` reserved for the delivery, the fallback when a cancellation takes the coverage away, statuses outside the shipment range left alone (`WAIT_SUPPLY` among them), and `changeStatus`/`recordCreated` |
+| `OrderServiceCompleteTest` | closing an order: the quantity check, and the four refusals (already closed, ended, no lines, still short — with the short lines named) |
+| `OrderStatusCheckConstraintTest` | that the database takes every `OrderStatus`, on the order and in both columns of its history (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
 | `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |

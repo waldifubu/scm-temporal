@@ -37,8 +37,14 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class FulfillmentServiceImpl implements FulfillmentService {
 
+    /**
+     * The statuses a successful reservation lifts an order out of. WAIT_SUPPLY belongs in here: it
+     * says the stock was missing when the order was confirmed, and a reservation is the proof that it
+     * is not missing any more - without it the order would sit there for good.
+     */
     private static final Set<OrderStatus> PRE_FULFILLMENT_STATUSES = EnumSet.of(
-            OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, OrderStatus.APPROVED);
+            OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, OrderStatus.APPROVED,
+            OrderStatus.WAIT_SUPPLY);
 
 
     private final ProductRepository productRepository;

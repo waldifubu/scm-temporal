@@ -521,6 +521,24 @@ class ShipmentServiceImplTest {
         return shipment;
     }
 
+    /**
+     * Read FOR UPDATE like every other change of a shipment: the status is checked and then written
+     * (DISPATCH_REQUESTED), so two assignments at once would otherwise pass against the same stale
+     * status. This was the last shipment change that read without a lock.
+     */
+    @Test
+    void assignsADistributorUnderALock() {
+        loadedShipment(ShipmentStatus.READY);
+        Distributor distributor = new Distributor();
+        distributor.setId(20L);
+        when(userRepository.findById(20L)).thenReturn(Optional.of(distributor));
+
+        service.assignDistributor(SHIPMENT_ID, 20L);
+
+        verify(shipmentRepository).findForUpdateById(SHIPMENT_ID);
+        verify(shipmentRepository, never()).findWithPackagesById(any());
+    }
+
     /** Assigned, and answered with id and name - never the Distributor entity with its password hash. */
     @Test
     void assignsADistributor() {
@@ -643,7 +661,9 @@ class ShipmentServiceImplTest {
 
         service.checkShipmentReady(SHIPMENT_ID, 99L);
 
-        verify(orderProgress).advance(List.of(1042L), OrderStatus.READY_FOR_DISPATCH, 99L);
+        // No target named: how far the order really is comes out of its shipped quantities, which
+        // OrderProgressServiceImplTest covers.
+        verify(orderProgress).recompute(List.of(1042L), 99L);
     }
 
     /** An open package stops the whole step - the orders stay where they are as well. */
@@ -657,7 +677,7 @@ class ShipmentServiceImplTest {
         assertStatus(org.assertj.core.api.Assertions.catchThrowable(
                 () -> service.checkShipmentReady(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
 
-        verify(orderProgress, never()).advance(any(), any(), any());
+        verify(orderProgress, never()).recompute(any(), any());
     }
 
     /** A line that is only PACKING has parts in another package - it is not on its way yet. */
@@ -803,7 +823,7 @@ class ShipmentServiceImplTest {
         assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
         // Whether the order really goes back is decided on its lines - OrderProgressServiceImplTest.
-        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+        verify(orderProgress).recompute(List.of(1042L), 99L);
     }
 
     /**
@@ -824,7 +844,7 @@ class ShipmentServiceImplTest {
         assertThat(shipmentPackage.getShipment()).isNull();
         assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
-        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+        verify(orderProgress).recompute(List.of(1042L), 99L);
     }
 
     /** Up to the handover only - once it rolls, a cancellation would be a return. */
@@ -839,7 +859,7 @@ class ShipmentServiceImplTest {
 
         assertStatus(thrown, HttpStatus.CONFLICT);
         assertThat(thrown).hasMessageContaining("it can only be cancelled up to ACCEPTED");
-        verify(orderProgress, never()).takeBackFromDispatch(any(), any());
+        verify(orderProgress, never()).recompute(any(), any());
         assertThat(shipment.getPackages()).containsExactly(shipmentPackage);
         assertThat(shipmentPackage.getShipment()).isSameAs(shipment);
     }
@@ -870,7 +890,7 @@ class ShipmentServiceImplTest {
         assertThat(shipmentPackage.getShipment()).isNull();
         assertThat(line.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
         assertThat(order.getStatus()).isEqualTo(OrderStatus.IN_FULFILLMENT);
-        verify(orderProgress).takeBackFromDispatch(List.of(1042L), 99L);
+        verify(orderProgress).recompute(List.of(1042L), 99L);
     }
 
     /** An order the shipment carries, in the given status. */

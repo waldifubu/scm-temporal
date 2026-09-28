@@ -7,7 +7,6 @@ import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
-import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderRepository;
@@ -64,21 +63,21 @@ public class DeliveryServiceImpl implements DeliveryService {
     @Transactional
     public DeliveryResponse acceptShipment(Long shipmentId, Long userId) {
         return advance(shipmentId, EnumSet.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED),
-                ShipmentStatus.ACCEPTED, OrderStatus.READY_FOR_DISPATCH, userId);
+                ShipmentStatus.ACCEPTED, userId);
     }
 
     @Override
     @Transactional
     public DeliveryResponse shipmentInTransit(Long shipmentId, Long userId) {
         return advance(shipmentId, EnumSet.of(ShipmentStatus.ACCEPTED),
-                ShipmentStatus.IN_TRANSIT, OrderStatus.IN_TRANSIT, userId);
+                ShipmentStatus.IN_TRANSIT, userId);
     }
 
     @Override
     @Transactional
     public DeliveryResponse shipmentDelivered(Long shipmentId, Long userId) {
         return advance(shipmentId, EnumSet.of(ShipmentStatus.IN_TRANSIT),
-                ShipmentStatus.DELIVERED, OrderStatus.DELIVERED, userId);
+                ShipmentStatus.DELIVERED, userId);
     }
 
     @Override
@@ -123,10 +122,9 @@ public class DeliveryServiceImpl implements DeliveryService {
      * shipment would otherwise both pass the status check.
      *
      * @param allowedFrom the statuses the step may start from; anything else is a 409
-     * @param orderStatus what the orders of this shipment reach with it
      */
     private DeliveryResponse advance(Long shipmentId, Set<ShipmentStatus> allowedFrom,
-                                     ShipmentStatus target, OrderStatus orderStatus, Long userId) {
+                                     ShipmentStatus target, Long userId) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
@@ -145,8 +143,10 @@ public class DeliveryServiceImpl implements DeliveryService {
         }
         shipmentRepository.save(shipment);
 
-        // Which of the orders really move is OrderProgressService's rule, not the carrier's.
-        orderProgress.advance(orderIdsOf(shipmentId), orderStatus, userId);
+        // No order status is named here on purpose. This shipment is one of possibly several an
+        // order travels in, so what it reports says nothing about the order as a whole - the carrier
+        // only says which orders were touched, OrderProgressService works out where they stand.
+        orderProgress.recompute(orderIdsOf(shipmentId), userId);
 
         // The carrier's own view - no package contents, see DeliveryResponse.
         return DeliveryResponse.from(shipment);

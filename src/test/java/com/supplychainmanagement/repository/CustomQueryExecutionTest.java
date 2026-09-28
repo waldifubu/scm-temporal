@@ -257,6 +257,13 @@ class CustomQueryExecutionTest {
                 .isNotNegative();
     }
 
+    /** How much of each line sits in shipments, per status - what the order status is worked out from. */
+    @Test
+    void runsTheShippedQuantityQuery() {
+        assertThatCode(() -> orderItemRepository.findShippedQuantities(List.of(UNKNOWN_ID)))
+                .doesNotThrowAnyException();
+    }
+
     /** The order lines a shipment carries - what checkShipmentReady moves on. */
     @Test
     void findOrderItemsByShipmentIdRuns() {

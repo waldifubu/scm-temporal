@@ -56,6 +56,23 @@ public interface OrderService {
      */
     Order reject(Order order, Long userId);
 
+    /**
+     * Closes the order - the commercial end, after the goods are in.
+     * <p>
+     * Checked, not claimed: every line has to have arrived in full, measured as packed quantity in
+     * shipments that report DELIVERED. Counting lines would not do, because a line may be packed in
+     * several runs and travel in several shipments - 5 of 10 delivered is not a delivered line.
+     * An order that is already COMPLETED, one that ended in REJECTED or CANCELLED, and one without
+     * lines are each a 409; so is one still missing something, and the message names every line that
+     * is short.
+     * <p>
+     * Deliberately not asking for {@code OrderStatus.DELIVERED} as a precondition: that status is set
+     * by whichever shipment arrives first and therefore says less than the quantities do.
+     *
+     * @param userId the acting user for the audit trail, may be null
+     */
+    Order complete(Order order, Long userId);
+
     Order update(Long id, Order order);
 
     Order update(Long id, Order order, Long userId);

@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.stream.Stream;
 import java.util.stream.Collectors;
 
 /**
@@ -92,7 +93,14 @@ public class AutomaticReservationService {
     //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToReserve() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
-        var orders = orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable);
+
+        // WAIT_SUPPLY as well as IN_FULFILLMENT: an order parked for missing stock is exactly the one
+        // worth retrying, and a successful reservation is what takes it out of that status again
+        // (PRE_FULFILLMENT_STATUSES). Without this half the sweep would never look at it.
+        var orders = Stream.concat(
+                        orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable).stream(),
+                        orderService.findAllByStatus(OrderStatus.WAIT_SUPPLY, pageable).stream())
+                .toList();
         orders.forEach(order -> {
                     try {
                         ReservationSummary reservationSummary = fulfillmentService.reserveItems(order, SYSTEM_USER);
