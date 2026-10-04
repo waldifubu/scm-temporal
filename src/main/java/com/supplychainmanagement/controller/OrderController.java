@@ -97,6 +97,20 @@ public class OrderController {
      * arriving shipment already sets. A line that is still short, an order that is already closed,
      * one that ended in REJECTED or CANCELLED, and one without lines are each a 409.
      */
+    /**
+     * Cancels the order and hands its stock back. Only while nothing has physically moved - a line
+     * past RESERVED, an order whose packages are already in a shipment, and one that ended are each
+     * a 409. Not open to the customer: cancelling frees stock and ends the order.
+     */
+    @PostMapping(path = "/{orderNo}/cancel", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public OrderSummaryDto cancelOrder(@PathVariable Long orderNo,
+                                       @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
+        return toSummaryDto(orderService.cancel(order, authUser.getUsername(),
+                userService.getAuthenticatedUserId(authUser)));
+    }
+
     @PostMapping(path = "/{orderNo}/complete", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public OrderSummaryDto completeOrder(@PathVariable Long orderNo,
@@ -105,8 +119,11 @@ public class OrderController {
         return toSummaryDto(orderService.complete(order, userService.getAuthenticatedUserId(authUser)));
     }
 
+    // LOGISTICS reads too: a ShipmentResponse names the customer, the address and the package
+    // contents, but not dueDate or deliveryDate - without those a planner cannot tell how urgent a
+    // package is. Read-only; nothing in OrderController lets LOGISTICS change an order.
     @GetMapping(path = "/{orderNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER','LOGISTICS')")
     public OrderDetailsDto getOrderByOrderNo(@PathVariable Long orderNo,
                                              @AuthenticationPrincipal User authUser) {
         // A customer may only see an order they are the customer of - checked in the service,

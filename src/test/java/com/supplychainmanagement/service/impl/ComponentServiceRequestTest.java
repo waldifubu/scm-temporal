@@ -14,6 +14,7 @@ import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.service.RoleService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -58,6 +59,8 @@ class ComponentServiceRequestTest {
     private RequestComponentRepository requestComponentRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private RoleService roleService;
 
     @InjectMocks
     private ComponentServiceImpl service;
@@ -124,7 +127,6 @@ class ComponentServiceRequestTest {
             assertThat(response.componentId()).isEqualTo(SCREW);
             assertThat(response.componentName()).isEqualTo("screw");
             assertThat(response.supplierId()).isEqualTo(SUPPLIER_ID);
-            assertThat(response.supplierName()).isEqualTo("Ada Lovelace");
         });
     }
 

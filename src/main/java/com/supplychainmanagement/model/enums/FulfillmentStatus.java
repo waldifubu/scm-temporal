@@ -42,4 +42,13 @@ public enum FulfillmentStatus {
      * The order is ready to be handed over to the carrier.
      */
     READY_FOR_DISPATCH,
+
+    /**
+     * Fulfillment process has been cancelled.
+     * No further processing will be done for this order.
+     * <p>
+     * An end, not a step: the line holds nothing and nothing moved for it, which is why
+     * {@code FulfillmentServiceImpl.isPastReservation} does not count it as past RESERVED.
+     */
+    CANCELLED
 }

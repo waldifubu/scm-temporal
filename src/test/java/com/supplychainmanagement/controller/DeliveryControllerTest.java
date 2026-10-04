@@ -1,6 +1,5 @@
 package com.supplychainmanagement.controller;
 
-import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
@@ -63,7 +62,6 @@ class DeliveryControllerTest {
         when(deliveryService.shipmentDelivered(any(), any())).thenReturn(delivery(ShipmentStatus.DELIVERED));
         when(deliveryService.findShipmentsForDistributor(any(), any(), any()))
                 .thenReturn(new PageImpl<>(List.of(delivery(ShipmentStatus.ACCEPTED))));
-        when(deliveryService.cancelShipment(any(), any(), any())).thenReturn(delivery(ShipmentStatus.CANCELLED));
         when(shipmentService.cancelShipment(any(), any(), any())).thenReturn(null);
     }
 
@@ -127,38 +125,12 @@ class DeliveryControllerTest {
         verifyNoInteractions(shipmentService);
     }
 
-    /** Handing the shipment back: the reason from the body, the id from the path, the acting user. */
-    @Test
-    void cancelPassesTheReasonAndTheUserOn() throws Exception {
-        mockMvc.perform(put("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
-                        .content("""
-                                { "reason": "truck broke down" }
-                                """))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("CANCELLED"));
-
-        verify(deliveryService).cancelShipment(50L, new CancelShipmentRequest("truck broke down"), 99L);
-        verifyNoInteractions(shipmentService);
-    }
-
-    /** No reason, no cancellation - the comment is the only record of why it was called off. */
-    @Test
-    void refusesToCancelWithoutAReason() throws Exception {
-        mockMvc.perform(put("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
-                        .content("""
-                                { "reason": "  " }
-                                """))
-                .andExpect(status().isBadRequest());
-
-        verifyNoInteractions(deliveryService);
-    }
-
     /**
-     * The planning side calls the same thing off with POST on the same path. Both mappings have to
-     * exist side by side - the PUT belongs to the carrier, the POST to LOGISTICS.
+     * There is only one cancel left, and it lives on the planning side with all three roles. The
+     * carrier used to have a PUT on the same path, which meant guessing the verb for a 403.
      */
     @Test
-    void leavesThePostCancelOfThePlanningSideAlone() throws Exception {
+    void leavesTheOnlyCancelToThePlanningSide() throws Exception {
         mockMvc.perform(post("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
                         .content("""
                                 { "reason": "repacking" }
@@ -166,6 +138,17 @@ class DeliveryControllerTest {
                 .andExpect(status().isOk());
 
         verify(shipmentService).cancelShipment(eq(50L), any(), eq(99L));
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void hasNoCarrierCancelOfItsOwn() throws Exception {
+        mockMvc.perform(put("/api/1.0/shipments/50/cancel").contentType(APPLICATION_JSON)
+                        .content("""
+                                { "reason": "truck broke down" }
+                                """))
+                .andExpect(status().isMethodNotAllowed());
+
         verifyNoInteractions(deliveryService);
     }
 

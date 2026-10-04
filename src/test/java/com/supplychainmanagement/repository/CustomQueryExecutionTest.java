@@ -53,6 +53,8 @@ class CustomQueryExecutionTest {
     @Autowired
     private ShipmentRepository shipmentRepository;
     @Autowired
+    private RequestComponentRepository requestComponentRepository;
+    @Autowired
     private OrderRepository orderRepository;
 
     /** The one that broke: two named parameters, and the second was bound under a different name. */
@@ -255,6 +257,13 @@ class CustomQueryExecutionTest {
                 .getTotalElements()).isZero();
         assertThat(shipmentRepository.findAllWithCustomerByStatus(ShipmentStatus.CREATED, pageable).getTotalElements())
                 .isNotNegative();
+    }
+
+    /** The locking read of a component request - what the supplier steps work on. */
+    @Test
+    void runsTheRequestComponentLockQuery() {
+        assertThatCode(() -> requestComponentRepository.findForUpdateById(UNKNOWN_ID))
+                .doesNotThrowAnyException();
     }
 
     /** How much of each line sits in shipments, per status - what the order status is worked out from. */

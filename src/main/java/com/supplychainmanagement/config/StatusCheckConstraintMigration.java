@@ -1,6 +1,8 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.model.enums.RequestStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
@@ -12,9 +14,13 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
- * Keeps the {@code CHECK} constraints over {@link OrderStatus} columns in step with the enum.
+ * Keeps the {@code CHECK} constraints over the status columns in step with their enums -
+ * {@link OrderStatus} on the order and its history, {@link FulfillmentStatus} on the order line,
+ * {@link RequestStatus} on a component request.
+
  * <p>
  * Hibernate writes one on first creation - {@code order_status in ('CREATED', ...)} - and
  * {@code ddl-auto=update} never touches it again. A value added to the enum afterwards is therefore
@@ -33,17 +39,24 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class OrderStatusCheckConstraintMigration {
+public class StatusCheckConstraintMigration {
 
-    /** Every column holding an OrderStatus, with the check Hibernate named after that column. */
+    /** Every column holding a status enum, with the check Hibernate named after that column. */
     private static final List<StatusColumn> STATUS_COLUMNS = List.of(
-            new StatusColumn("orders", "order_status"),
-            new StatusColumn("order_history", "previous_status"),
-            new StatusColumn("order_history", "new_status"));
+            new StatusColumn("orders", "order_status", OrderStatus.class),
+            new StatusColumn("order_history", "previous_status", OrderStatus.class),
+            new StatusColumn("order_history", "new_status", OrderStatus.class),
+            new StatusColumn("order_items", "fulfillment_status", FulfillmentStatus.class),
+            new StatusColumn("request_components", "request_status", RequestStatus.class));
 
     private final JdbcTemplate jdbcTemplate;
 
-    private record StatusColumn(String table, String column) {
+    private record StatusColumn(String table, String column, Class<? extends Enum<?>> values) {
+
+        /** The names the column has to accept, straight from the enum - they cannot drift apart. */
+        Stream<String> names() {
+            return Arrays.stream(values.getEnumConstants()).map(Enum::name);
+        }
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -53,13 +66,13 @@ public class OrderStatusCheckConstraintMigration {
 
     private void align(StatusColumn statusColumn) {
         String clause = currentCheckClause(statusColumn);
-        if (clause == null || listsEveryStatus(clause)) {
+        if (clause == null || listsEveryStatus(statusColumn, clause)) {
             // No check at all, or one that already knows every value - nothing to do either way.
             return;
         }
 
-        String wanted = Arrays.stream(OrderStatus.values())
-                .map(status -> "'" + status.name() + "'")
+        String wanted = statusColumn.names()
+                .map(name -> "'" + name + "'")
                 .collect(Collectors.joining(","));
         String add = "ALTER TABLE " + statusColumn.table() + " ADD CONSTRAINT " + statusColumn.column()
                 + " CHECK (" + statusColumn.column() + " in (" + wanted + "))";
@@ -69,10 +82,11 @@ public class OrderStatusCheckConstraintMigration {
             // implicitly before each ALTER anyway, so a shared transaction would buy nothing.
             dropCheck(statusColumn);
             jdbcTemplate.execute(add);
-            log.info("Aligned CHECK constraint {}.{} with OrderStatus", statusColumn.table(), statusColumn.column());
+            log.info("Aligned CHECK constraint {}.{} with {}", statusColumn.table(), statusColumn.column(),
+                    statusColumn.values().getSimpleName());
         } catch (RuntimeException e) {
-            log.error("Could not align CHECK constraint {}.{} with OrderStatus - run by hand: {}",
-                    statusColumn.table(), statusColumn.column(), add, e);
+            log.error("Could not align CHECK constraint {}.{} with {} - run by hand: {}",
+                    statusColumn.table(), statusColumn.column(), statusColumn.values().getSimpleName(), add, e);
         }
     }
 
@@ -124,8 +138,7 @@ public class OrderStatusCheckConstraintMigration {
         return clauses.isEmpty() ? null : clauses.getFirst();
     }
 
-    private static boolean listsEveryStatus(String clause) {
-        return Arrays.stream(OrderStatus.values())
-                .allMatch(status -> clause.contains("'" + status.name() + "'"));
+    private static boolean listsEveryStatus(StatusColumn statusColumn, String clause) {
+        return statusColumn.names().allMatch(name -> clause.contains("'" + name + "'"));
     }
 }

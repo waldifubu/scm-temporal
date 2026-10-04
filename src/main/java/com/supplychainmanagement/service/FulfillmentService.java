@@ -2,6 +2,7 @@ package com.supplychainmanagement.service;
 
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Reservation;
 
 import java.util.List;
@@ -24,6 +25,19 @@ public interface FulfillmentService {
      * order.
      */
     List<Order> findOrdersWithExpiredReservations();
+
+    /**
+     * The lines of the order whose goods have already left the shelf - anything past RESERVED, so
+     * PICKING through READY_FOR_DISPATCH. Empty means nothing has physically moved and every
+     * reservation the order holds can simply be handed back.
+     * <p>
+     * A picked line cannot be handed back: its reservation is CONSUMED, the stock is gone, and
+     * booking it in again is an operation this application does not have. That is what makes this
+     * the boundary for cancelling an order. CANCELLED does not count - nothing is held there either.
+     * <p>
+     * The order has to arrive with its {@code orderItems} fetched.
+     */
+    List<OrderItem> linesPastReservation(Order order);
 
     /**
      * The reservations that are still active for the given order, i.e. {@code expiresAt} is in the

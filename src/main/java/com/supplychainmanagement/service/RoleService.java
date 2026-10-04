@@ -7,6 +7,16 @@ public interface RoleService {
 
     boolean isAdmin(org.springframework.security.core.userdetails.User authUser);
 
+    /**
+     * Whether the user with this id holds ADMIN, read from the stored roles rather than from anything
+     * a request carried.
+     * <p>
+     * For a rule a service enforces on an acting user it only knows by id - "only the assigned
+     * distributor reports on a shipment, unless an admin corrects it" and its counterpart on the
+     * supplier side - where the principal is not at hand.
+     */
+    boolean isAdmin(Long userId);
+
     boolean isPrivilegedUser(org.springframework.security.core.userdetails.User authUser);
 
     /**

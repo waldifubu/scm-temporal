@@ -24,9 +24,7 @@ public record RequestComponentResponse(
         String comment,
         RequestStatus requestStatus,
         LocalDateTime requestDate,
-        Long supplierId,
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        String supplierName
+        Long supplierId
 ) {
 
     /** Mapped inside the transaction, like every other answer - the references are LAZY. */
@@ -43,17 +41,7 @@ public record RequestComponentResponse(
                 request.getComment(),
                 request.getRequestStatus(),
                 request.getRequestDate(),
-                supplier != null ? supplier.getId() : null,
-                nameOf(supplier));
-    }
-
-    private static String nameOf(com.supplychainmanagement.entity.users.User user) {
-        if (user == null) {
-            return null;
-        }
-
-        String name = ((user.getFirstName() == null ? "" : user.getFirstName()) + " "
-                + (user.getLastName() == null ? "" : user.getLastName())).trim();
-        return name.isEmpty() ? user.getUsername() : name;
+                supplier != null ? supplier.getId() : null
+        );
     }
 }

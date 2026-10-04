@@ -31,6 +31,18 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    public boolean isAdmin(Long userId) {
+        if (userId == null) {
+            return false;
+        }
+
+        return userRepository.findById(userId)
+                .map(com.supplychainmanagement.entity.users.User::getRoles)
+                .map(roles -> roles.stream().anyMatch(role -> role.getRolename() == RoleEnum.ADMIN))
+                .orElse(false);
+    }
+
+    @Override
     public boolean isPrivilegedUser(User authUser) {
         return hasAnyAuthority(authUser, RoleEnum.ADMIN, RoleEnum.MANAGER);
     }

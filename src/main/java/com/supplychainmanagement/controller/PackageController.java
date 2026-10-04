@@ -32,8 +32,11 @@ public class PackageController {
      * {@code shipmentPackageId} tells apart. Paged like the other lists; {@code sort} takes the fields
      * of the package item itself (id, created, quantity, runNo, ...).
      */
+    // Packages belong to WAREHOUSE, shipments to LOGISTICS, and the two do not overlap: everything
+    // under /packages and /shipment-packages is packing work, everything under /shipments is
+    // planning. See the note on getShipmentPackages about what that costs.
     @GetMapping(path = "/packages", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<PackageItemResponse> getPackageItems(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -47,8 +50,11 @@ public class PackageController {
      * order list in {@code OrderController.list}, down to the parameter names. {@code sort} takes the
      * fields of the package itself (id, packageNumber, createdAt, ...).
      */
+    // LOGISTICS removed on purpose, see above. Note what it means: POST /shipments takes the ids of
+    // free PACKED packages, and this list - with status=PACKED - was the only way to find them. The
+    // planning side has no view of its own for that yet; see issues.txt.
     @GetMapping(path = "/shipment-packages", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN', 'LOGISTICS')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<ShipmentPackageListDto> getShipmentPackages(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -82,7 +88,7 @@ public class PackageController {
 
     /** One package with its items, in the same shape as the /shipment-packages list. Unknown id: 404. */
     @GetMapping(path = "/shipment-packages/{shipmentPackageId}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE','LOGISTICS')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public ShipmentPackageListDto getShipmentPackage(@PathVariable Long shipmentPackageId) {
         return packageQueryService.findShipmentPackage(shipmentPackageId);
     }

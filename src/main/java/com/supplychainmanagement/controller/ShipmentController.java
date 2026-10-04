@@ -136,9 +136,15 @@ public class ShipmentController {
      * Calls the shipment off while it is still in the house - up to ACCEPTED, later is a 409. Its
      * packages are free again, the order lines and orders it had moved on go back a step, and the
      * reason is kept on the shipment.
+     * <p>
+     * DISTRIBUTOR as well as LOGISTICS, and one endpoint rather than two: both sides call off the
+     * same thing, and after the cancellation the packages are detached, so the answer carries no
+     * package contents to keep from a carrier anyway. There used to be a second
+     * {@code PUT .../cancel} for the carrier, differing only in verb - which meant guessing the verb
+     * and getting a 403 instead of a hint.
      */
     @PostMapping(path = "/shipments/{shipmentId}/cancel", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS','DISTRIBUTOR')")
     public ShipmentResponse cancelShipment(@PathVariable Long shipmentId,
                                            @Valid @RequestBody CancelShipmentRequest request,
                                            @AuthenticationPrincipal User authUser) {

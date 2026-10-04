@@ -90,7 +90,7 @@ responsibilities — read all of them together before changing reservation/fulfi
   backwards step besides the fallback to `APPROVED` in `releaseItems`. `PARTIALLY_DELIVERED` is for
   an order of which something has arrived while the rest is still out, and `COMPLETED` comes from
   `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `acknowledge` parks an order whose stock
-  is not there (see below); `CANCELLED` is still unreachable on the order.
+  is not there, and `CANCELLED` comes from `POST /orders/{orderNo}/cancel` (both below).
 - **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
   (`OrderProgressService.recompute`). The shipment side says only *which orders were touched*; where
   each of them stands follows from the **quantities of its lines that sit in shipments**
@@ -111,7 +111,7 @@ responsibilities — read all of them together before changing reservation/fulfi
   order outside the range is skipped deliberately, not as the side effect of a list lookup, which is
   what the old `ORDER_FLOW` did: a status missing from that list was silently never moved.
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
-  PACKING → PACKED → READY_FOR_DISPATCH`), tracked per line item, and implemented end to end: the
+  PACKING → PACKED → READY_FOR_DISPATCH`, plus `CANCELLED`), tracked per line item, and implemented end to end: the
   last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
   `OrderHandlingService.readyForDispatch()`, whose endpoint is commented out in `ShipmentController`
   and which is left over. Note there is no `RESERVING` — it was removed
@@ -121,8 +121,9 @@ responsibilities — read all of them together before changing reservation/fulfi
   **`Shipment`** has `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT
   → DELIVERED`, plus `CANCELLED`): `CREATED` on insert, `READY` through
   `PUT /shipments/{id}/ready`, then the carrier's three steps, and `CANCELLED` through
-  `POST /shipments/{id}/cancel` (see below). `DISPATCH_REQUESTED` is not set by code yet - a
-  shipment goes from `READY` straight to `ACCEPTED`.
+  `POST /shipments/{id}/cancel` (see below). `DISPATCH_REQUESTED` comes from `assignDistributor` and
+  from nothing else, and `accept` requires it - so the handover to a carrier is a step that has to
+  happen, not an optional one.
 
 The chain is split by responsibility, not by entity. Which service owns which stretch - one
 controller per service, named after what it does (`PickingController`, `PackingController`,
@@ -296,8 +297,8 @@ controller per service, named after what it does (`PickingController`, `PackingC
   `/shipments` - that is the resource - and what separates them is the role and the direction:
   LOGISTICS plans a shipment, the DISTRIBUTOR reports on it. Assigning a distributor
   (`PUT /shipments/{id}/distributor/{id}`) is planning and stays with LOGISTICS - the house choosing a
-  carrier, not the carrier answering. `GET /shipments/distributor` is the distributor's work list:
-  their own shipments, optional `status`, paged, read from the authenticated user rather than from a
+  carrier, not the carrier answering. `GET /shipments/distributor` is the distributor's work list (ADMIN too,
+  as everywhere else): their own shipments, optional `status`, paged, read from the authenticated user rather than from a
   path variable, and two queries like every other shipment list. The literal segment wins over
   `GET /shipments/{shipmentId}` in the other controller - `DeliveryControllerTest` registers both
   controllers to hold that.
@@ -306,11 +307,21 @@ controller per service, named after what it does (`PickingController`, `PackingC
   that plans shipments, which is why it is not called `LogisticsService`). They answer with
   `DeliveryResponse`: address, package count, weight and package numbers, **no package contents** -
   the carrier is not shown the customer's SKUs and quantities. The steps are:
-  `POST /shipments/{id}/accept` (`READY`/`DISPATCH_REQUESTED` → `ACCEPTED`),
+  `POST /shipments/{id}/accept` (`DISPATCH_REQUESTED` → `ACCEPTED`),
   `POST /shipments/{id}/in-transit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
   packages from `PACKED` to `DISPATCHED`) and `POST /shipments/{id}/delivered` (`IN_TRANSIT` →
   `DELIVERED`, stamps `deliveredAt`); any other status is a 409, and the shipment is read
-  `FOR UPDATE`. None of the three names an order status: each one ends in
+  `FOR UPDATE`.
+  <br>**Only the assigned distributor reports** (`requireReportingDistributor`): another carrier is a
+  403, a shipment without an assignment a 409, and ADMIN is exempt as the role that has to be able to
+  correct things. Checked **before** the status, so a carrier poking at a shipment that is not theirs
+  learns nothing about where it stands. The ADMIN exemption reads the stored roles, not anything the
+  request carried.
+  <br>Why `accept` needs `DISPATCH_REQUESTED` rather than `READY`: that status is set by
+  `assignDistributor` alone. Without it the handover was optional - any carrier could take on any
+  ready shipment, nobody had to be assigned, and since `GET /shipments/distributor` filters on
+  `distributor_id`, every work list stayed empty while shipments ran to `DELIVERED` with
+  `distributor_id` still `NULL`. The whole carrier half of the chain was reachable but undiscoverable. None of the three names an order status: each one ends in
   `OrderProgressService.recompute` with the orders of the shipment, and where those really stand is
   worked out there. Each step takes **the orders of the shipment** along - `READY_FOR_DISPATCH`,
   `IN_TRANSIT`, `DELIVERED` - found through the packages (`OrderRepository.findByShipmentId`, a
@@ -331,7 +342,24 @@ controller per service, named after what it does (`PickingController`, `PackingC
   spot), and something still short - that last message names every line with ordered against
   delivered. `OrderStatus.DELIVERED` is deliberately **not** a precondition: it is set by whichever
   shipment arrives first and says less than the quantities do.
-- **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN and LOGISTICS): only up to
+- **Cancelling an order** (`POST /orders/{orderNo}/cancel`, ADMIN and MANAGER - deliberately not the
+  customer, since it frees stock and ends the order; `OrderService.cancel`): only **while nothing has
+  physically moved**. A line past `RESERVED` has its goods off the shelf and its reservation
+  `CONSUMED`; booking them in again is an operation this application does not have, so such a line is
+  a 409 naming every one of them (`FulfillmentService.linesPastReservation`). An order whose packages
+  already travel in a shipment is a 409 too - that is `POST /shipments/{id}/cancel`, which hands the
+  packages back and lets the orders fall with them - and `REJECTED`/`COMPLETED`/`CANCELLED` are ends.
+  <br>It undoes what the order held: every active reservation goes back to stock through
+  `releaseItems`, and every line ends on `FulfillmentStatus.CANCELLED`. **Order of operations**: the
+  status is written *before* the release, which looks backwards and is not - `releaseItems` takes an
+  `IN_FULFILLMENT` order to `APPROVED` on its way out (`revertOrderStatus`, which bails out for any
+  other status), so releasing first would leave a step in the history that never happened. The lines
+  are set *after* it, because the release puts them back to `WAITING`.
+  <br>`linesPastReservation` and the existing `hasLineBeyondReservation` share one predicate, so the
+  rule cannot drift; `CANCELLED` deliberately does not count as past reservation - the line holds
+  nothing and nothing moved for it.
+- **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN, LOGISTICS **and DISTRIBUTOR** -
+  one endpoint for both sides): only up to
   `ACCEPTED` (409 afterwards - once it rolls it is a return, which the process does not model), and
   only with a reason (400), which is kept in `comment`. It undoes what the shipment had set in
   motion: the packages are loose again and stay `PACKED`, lines go from `READY_FOR_DISPATCH` back to
@@ -339,6 +367,11 @@ controller per service, named after what it does (`PickingController`, `PackingC
   detached, sees the coverage gone and writes what is left, unless a line of theirs travels in
   another shipment. The order *ids* are read **before** the packages are detached: they are found
   over the packages, which the shipment no longer holds afterwards.
+  <br>The carrier used to have a second `PUT` on the same path, answering `DeliveryResponse` so as
+  not to show it the package contents. Merged, because after the cancellation the packages are
+  **detached** - the answer carries none either way, so there was nothing left to keep from a
+  carrier, and two verbs on one path meant guessing and getting a 403 instead of a hint.
+  `DeliveryService.cancelShipment` is gone with it.
 - **A package's weight is computed, never sent.** `ShipmentPackage.weight` is the weight of its
   contents (0 without items) and has no setter; no request carries a weight. The package keeps it
   itself: `@PrePersist` on insert, `addItem`/`removeItem` on every change of contents - the service's
@@ -454,6 +487,14 @@ join with ON, because `OrderItem` has no reference to its reservation, and a lef
 `WAITING` line has none. The count query leaves that join out; it cannot drop or duplicate lines as
 long as `uk_reservation_order_item` holds.
 
+**Packages are WAREHOUSE, shipments are LOGISTICS, and the two do not overlap.** Everything under
+`/packages` and `/shipment-packages` is packing work (ADMIN, WAREHOUSE); everything under
+`/shipments` is planning (ADMIN, LOGISTICS). LOGISTICS used to have the two package lists as well -
+removed, because the split is meant to be clean. What it costs: `POST /shipments` takes the ids of
+free `PACKED` packages, and `GET /shipment-packages?status=PACKED` was the only way to find them, so
+the planning side currently has no list of what it may ship. A view of its own under `/shipments`
+would be the way to close that without reintroducing the overlap - see `issues.txt`.
+
 The package read side lives in `PackageQueryService` (`PackageController`): `GET /shipment-packages`
 (by `ShipmentPackageStatus`, optional `packageNumber`), `GET /packages` (all package items),
 `GET /lonely-packages` (items without a package) and the single-entry variants `/{id}`. A package
@@ -525,14 +566,26 @@ shipment_package_id BIGINT NULL`.
 `order_status in ('CREATED', ...)` on first creation and `update` never touches it again, so a value
 added later is rejected at insert - and twice over, because `order_history` carries the same check on
 `previous_status` and `new_status`, and that insert happens inside the `AFTER_COMMIT` listener, where
-the error turns an operation that already succeeded into a 500. `OrderStatusCheckConstraintMigration`
-rewrites all three from `OrderStatus.values()`, so the next added value is covered without touching
-it. Note **how** it drops the old check: Hibernate writes it into the *column* definition, and a
+the error turns an operation that already succeeded into a 500. `StatusCheckConstraintMigration`
+rewrites them from the enum itself, so the next added value is covered without touching it - it
+covers `order_items.fulfillment_status` as well, which is where `FulfillmentStatus.CANCELLED` ran
+into the same wall. Each column carries its own enum class. Note **how** it drops the old check: Hibernate writes it into the *column* definition, and a
 column constraint is not reachable through `DROP CONSTRAINT` (MariaDB answers "Can't DROP CONSTRAINT;
 check that it exists") - the column has to be rewritten with `MODIFY COLUMN`, keeping its type and
 nullability. A constraint the migration added itself is a *table* constraint and does come off with
-`DROP CONSTRAINT`, which is why that is tried first. `OrderStatusCheckConstraintTest` writes every
+`DROP CONSTRAINT`, which is why that is tried first. `StatusCheckConstraintTest` writes every
 enum value to all three columns; a unit test cannot see any of this.
+
+**A changed id type is the worst case of this.** `request_components.id` was a `UUID` when the table
+was created; the entity has since become a `Long` with `GenerationType.IDENTITY`, and `update` left
+the column as `uuid` without `AUTO_INCREMENT`. Hibernate then leaves the column out of the insert and
+MariaDB answers `Field 'id' doesn't have a default value` - the endpoint was unusable, and no unit
+test could see it. `MODIFY COLUMN` does not help here either: MariaDB refuses with
+`Cannot cast 'uuid' as 'bigint' in assignment`, whatever the table holds. The column has to be
+**dropped and added back** (`RequestComponentIdMigration`), with `PRIMARY KEY` in the same statement -
+an `AUTO_INCREMENT` has to be a key - which is only safe because the table was empty; the migration
+refuses a table with rows and logs the statements instead. `RequestComponentIdTest` inserts a request
+and holds it.
 
 Data migrations that cannot wait for a real migration tool run as
 an `ApplicationReadyEvent` listener in `config` (`OrderDateToCreatedMigration`), guarded so they do
@@ -540,6 +593,10 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 
 ### Business/aspect utilities
 
+- **Reading the component catalogue** (`GET /components`, `/components/{sku}`,
+  `/components/article/{articleNo}`) is ADMIN, MANAGER and **WAREHOUSE** - the warehouse may order
+  components, and without the catalogue it would have to get the SKU from somewhere else. Creating and
+  changing a component stays ADMIN/MANAGER.
 - **Ordering components from a supplier** (`POST /components/request/{supplierId}`, ADMIN, MANAGER
   and WAREHOUSE - a method-level `@PreAuthorize` widening the controller's ADMIN/MANAGER, because the
   warehouse owns the stock and already consumes components through `POST /produce`;
@@ -553,9 +610,48 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   refuses the whole request with a 404 naming every one of them, so a caller never has to work out
   which half went through. One `findBySkuIn` for the whole body, not one query per line; an empty
   comment is stored as `null`. There is **no internal release step**: `RequestStatus` is the
-  supplier's side throughout (`OPEN` = placed, `APPROVED` = the supplier accepted, then `IN_TRANSIT`,
-  `STORAGE`, `ASSEMBLED`), so whoever may call this orders straight away. `RoleEnum.SUPPLIER` appears
-  in no controller at all - the supplier's half of that chain is not implemented.
+  supplier's side throughout, so whoever may call this orders straight away.
+- **The supplier answers** (`POST /components/supplier/{requestId}/approve`, `.../in-transit` and
+  `.../delivered`, ADMIN and SUPPLIER - a method-level `@PreAuthorize` replacing the controller's
+  ADMIN/MANAGER): `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, one step at a time, any other status a 409. The
+  request is read `FOR UPDATE` (`findForUpdateById`), because the status is checked and then written.
+  `DELIVERED` is the supplier's last step and books nothing - it is what they *claim*, namely that
+  the goods are at our dock. `IN_STOCK` is what we found when we unpacked it, and that one belongs to
+  the warehouse, see below. Those two looking alike is the point: claim and check, and therefore two
+  roles.
+  <br>**Only the supplier the request was placed with answers it** (`requireAnsweringSupplier`):
+  another supplier is a 403, a request without a supplier a 409, ADMIN exempt. Checked **before** the
+  status, so a supplier poking at a request that is not theirs learns nothing about it. No supplier id
+  in the path - it comes from the authenticated user, the same way the distributor's does.
+  <br>The ADMIN exemption on both sides goes through `RoleService.isAdmin(Long userId)`, which reads
+  the stored roles rather than anything a request carried. One implementation for the carrier and the
+  supplier side; `DeliveryServiceImpl` had a private copy until this was added.
+- **The goods receipt** (`POST /components/warehouse/{requestId}/in-stock/{storehouseId}`, ADMIN and
+  WAREHOUSE, `ComponentServiceImpl.receiveRequest`): `DELIVERED → IN_STOCK`, and the requested
+  quantity is added to `Stock.onHand` for that component's SKU in the receiving storehouse through
+  `StockService.add`. A physical receipt at the dock, which the supplier cannot report and which
+  belongs to the role that owns the stock. Any other status is a 409, an unknown storehouse a 404 -
+  checked here rather than left to `StockService`, whose `IllegalArgumentException` would end as a
+  500 for a wrong path variable. One transaction: if booking the stock fails, the status does not move.
+  <br>**`DELIVERED` and not `IN_TRANSIT`** on purpose: the receipt answers a handover the supplier
+  reported, rather than guessing that the pallet has arrived. That gate hangs an internal step on an
+  external party, which the ADMIN exemption on the supplier steps already covers - an ADMIN may report
+  `DELIVERED` for a silent supplier, so the gate is strict without being a dead end.
+  <br>Not LOGISTICS, although inbound freight might sound like it: in this codebase that role owns
+  shipments and nothing else, while writing stock is `ADMIN`/`WAREHOUSE` everywhere
+  (`StockController`, `/produce`). The receipt writes stock.
+  <br>**The quantity goes to `Stock`, never to `Component.qty`** - that one is the bill of materials,
+  how many go into *one* product, and adding a delivery to it would silently rewrite the recipe of
+  every product using the part. `ComponentServiceReceiveTest` holds both halves.
+  <br>The storehouse comes from the path because the request has no such field: booked in is where
+  the goods actually arrived. All or nothing per row - a request of 12 arriving as 8 + 4 cannot be
+  expressed by one status, which would need a received quantity on the row.
+  <br>**This is the only place component stock grows** other than `StockController` by hand. Without
+  it `assemble()` runs every 150 s and eventually finds nothing left to build from.
+  <br>`RequestStatus` ends here. There used to be an `ASSEMBLED` after it, which could never be set
+  correctly: `Stock` is keyed by `(storehouse_id, sku)` and holds a quantity with no batch and no
+  reference back to the request, and `produce()` only decrements it - nothing records whose screws
+  went into which product, and one status per row could not express "4 of 12 built in" either.
 - **A product's recipe is `Component.qty`.** A `Component` row belongs to exactly one product
   (`product_id` is `NOT NULL`), so it is a bill-of-materials line and not a shared catalogue part -
   which is why the quantity sits on it and not on a join table. `NOT NULL`, `@ColumnDefault("1")`,

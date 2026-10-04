@@ -1,11 +1,13 @@
 package com.supplychainmanagement.service.impl;
 
-import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Customer;
+import com.supplychainmanagement.entity.users.Distributor;
+import com.supplychainmanagement.entity.users.Admin;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.OrderStatus;
@@ -15,9 +17,11 @@ import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.OrderProgressService;
-import com.supplychainmanagement.service.ShipmentService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -32,6 +36,7 @@ import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -62,7 +67,7 @@ class DeliveryServiceImplTest {
     @Mock
     private OrderProgressService orderProgress;
     @Mock
-    private ShipmentService shipmentService;
+    private RoleService roleService;
 
     @InjectMocks
     private DeliveryServiceImpl service;
@@ -74,6 +79,15 @@ class DeliveryServiceImplTest {
         shipmentPackage.setShipmentPackageType(ShipmentPackageType.CARTON);
         shipmentPackage.setPackageNumber("PKG-" + id);
         return shipmentPackage;
+    }
+
+    /** The distributor the shipment was handed over to - the one allowed to report on it. */
+    private static Distributor assignedDistributor() {
+        Distributor distributor = new Distributor();
+        distributor.setId(DISTRIBUTOR_ID);
+        distributor.setFirstName("Grace");
+        distributor.setLastName("Hopper");
+        return distributor;
     }
 
     /** The shipment as the locking read hands it back, with an order behind its packages. */
@@ -88,6 +102,7 @@ class DeliveryServiceImplTest {
         shipment.setCustomer(customer);
         shipment.setStatus(status);
         shipment.setShippingAddress("Musterstr. 1");
+        shipment.setDistributor(assignedDistributor());
         for (ShipmentPackage shipmentPackage : packages) {
             shipment.addPackage(shipmentPackage);
         }
@@ -107,7 +122,7 @@ class DeliveryServiceImplTest {
 
     @Test
     void acceptTakesTheOrdersToReadyForDispatch() {
-        Shipment shipment = shipment(ShipmentStatus.READY, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
         DeliveryResponse response = service.acceptShipment(SHIPMENT_ID, 99L);
 
@@ -119,22 +134,76 @@ class DeliveryServiceImplTest {
         verify(orderProgress).recompute(List.of(ORDER_ID), 99L);
     }
 
-    /** A shipment still being put together is not accepted - READY or DISPATCH_REQUESTED first. */
-    @Test
-    void acceptsAReadyShipmentOnly() {
-        Shipment shipment = shipment(ShipmentStatus.CREATED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+    /**
+     * Only from DISPATCH_REQUESTED, and that status comes from assignDistributor alone - so the
+     * handover is a step that has to happen. A merely READY shipment used to be acceptable by any
+     * carrier, which left every distributor's work list empty.
+     */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "ACCEPTED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void acceptsAHandedOverShipmentOnly(ShipmentStatus status) {
+        Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
+        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, DISTRIBUTOR_ID)), HttpStatus.CONFLICT);
 
-        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CREATED);
+        assertThat(shipment.getStatus()).isEqualTo(status);
         verify(orderProgress, never()).recompute(any(), any());
+    }
+
+    // ------------------------------------------------------------------ whose shipment it is
+
+    /** Another carrier does not report on somebody else's shipment. */
+    @Test
+    void refusesACarrierTheShipmentWasNotAssignedTo() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, OTHER_DISTRIBUTOR_ID)), HttpStatus.FORBIDDEN);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+    }
+
+    /** ADMIN reports on any of them - the role that has to be able to correct things. */
+    @Test
+    void letsAnAdminReportOnAnyShipment() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        when(roleService.isAdmin(1L)).thenReturn(true);
+
+        service.acceptShipment(SHIPMENT_ID, 1L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
+    }
+
+    /**
+     * Asked before the status, so a carrier poking at a shipment that is not theirs learns nothing
+     * about where it stands.
+     */
+    @Test
+    void doesNotTellAnotherCarrierWhatStatusItIsIn() {
+        shipment(ShipmentStatus.CREATED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, OTHER_DISTRIBUTOR_ID)), HttpStatus.FORBIDDEN);
+    }
+
+    /**
+     * Not reachable through accept any more, which needs an assignment to get to
+     * DISPATCH_REQUESTED - checked all the same, so the later steps do not depend on that chain.
+     */
+    @Test
+    void refusesAShipmentWithoutADistributor() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        shipment.setDistributor(null);
+
+        Throwable thrown = catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, DISTRIBUTOR_ID));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("has no distributor assigned");
     }
 
     /** Only the step onto the road dispatches the packages - accepting leaves them packed. */
     @Test
     void acceptLeavesThePackagesPacked() {
         ShipmentPackage shipmentPackage = shipmentPackage(5L, ShipmentPackageStatus.PACKED);
-        shipment(ShipmentStatus.READY, shipmentPackage);
+        shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage);
 
         service.acceptShipment(SHIPMENT_ID, 99L);
 
@@ -176,7 +245,7 @@ class DeliveryServiceImplTest {
 
     @Test
     void goesOnTheRoadFromAcceptedOnly() {
-        shipment(ShipmentStatus.READY, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
         assertStatus(catchThrowable(() -> service.shipmentInTransit(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
     }
@@ -207,7 +276,10 @@ class DeliveryServiceImplTest {
 
     // ------------------------------------------------------------------ the distributor's work list
 
-    private static final Long DISTRIBUTOR_ID = 7L;
+    /** Who the shipments were handed over to - the same user the carrier steps act as. */
+    private static final Long DISTRIBUTOR_ID = 99L;
+    /** Somebody else's carrier, for the ownership checks. */
+    private static final Long OTHER_DISTRIBUTOR_ID = 7L;
     private static final Pageable FIRST_PAGE = PageRequest.of(0, 25);
 
     /** A shipment as the page query returns it: its customer, but not yet its packages. */
@@ -268,41 +340,6 @@ class DeliveryServiceImplTest {
         assertThat(service.findShipmentsForDistributor(DISTRIBUTOR_ID, null, FIRST_PAGE)).isEmpty();
 
         verify(shipmentRepository, never()).findWithPackagesByIdIn(any());
-    }
-
-    // ------------------------------------------------------------------ handing the shipment back
-
-    /**
-     * The winding back itself belongs to ShipmentService - which statuses may still be called off,
-     * the packages going loose, the lines and orders a step back - and its own test covers it. What
-     * is checked here is that the carrier call ends up there and answers with the carrier view.
-     */
-    @Test
-    void cancelGoesThroughTheShipmentServiceAndAnswersWithTheCarrierView() {
-        CancelShipmentRequest request = new CancelShipmentRequest("truck broke down");
-        Shipment cancelled = shipment(ShipmentStatus.ACCEPTED);
-        cancelled.setStatus(ShipmentStatus.CANCELLED);
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(cancelled));
-
-        DeliveryResponse response = service.cancelShipment(SHIPMENT_ID, request, 99L);
-
-        verify(shipmentService).cancelShipment(SHIPMENT_ID, request, 99L);
-        assertThat(response.status()).isEqualTo(ShipmentStatus.CANCELLED);
-        // The packages left the shipment with the cancellation, so the answer names none.
-        assertThat(response.packageCount()).isZero();
-        assertThat(response.packageNumbers()).isEmpty();
-    }
-
-    /** The rules stay in one place: nothing about statuses, packages or orders is decided here. */
-    @Test
-    void cancelDecidesNothingItself() {
-        Shipment cancelled = shipment(ShipmentStatus.ACCEPTED);
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(cancelled));
-
-        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("no driver"), 99L);
-
-        verify(orderProgress, never()).recompute(any(), any());
-        verify(shipmentPackageRepository, never()).saveAll(any());
     }
 
     @Test

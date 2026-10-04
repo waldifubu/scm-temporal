@@ -338,7 +338,8 @@ stateDiagram-v2
         [*] --> CREATED : POST /shipments
         CREATED --> CREATED : add / replace / remove packages
         CREATED --> READY : PUT /shipments/{id}/ready
-        READY --> ACCEPTED : POST /shipments/{id}/accept
+        READY --> DISPATCH_REQUESTED : PUT /shipments/{id}/distributor/{id}
+        DISPATCH_REQUESTED --> ACCEPTED : POST /shipments/{id}/accept
         ACCEPTED --> IN_TRANSIT : POST /shipments/{id}/in-transit
         IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
         ACCEPTED --> CANCELLED : POST /shipments/{id}/cancel - up to ACCEPTED
@@ -413,11 +414,20 @@ method and requested date. The customer is fixed — the packages are bound to i
 A distributor is assigned with `PUT /shipments/{id}/distributor/{distributorId}` while the shipment is
 `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor` (**400** otherwise).
 
+**Assigning a distributor is not optional.** It is the only thing that sets `DISPATCH_REQUESTED`,
+and `accept` requires that status — so the handover from LOGISTICS to the carrier has to happen.
+From then on **only the assigned distributor** may report on the shipment: another carrier is a
+**403**, a shipment without an assignment a **409**, and ADMIN is exempt. Checked before the status,
+so a carrier poking at a shipment that is not theirs learns nothing about where it stands.
+Before this, `accept` took any `READY` shipment from any carrier, nobody had to be assigned, and
+since the work list filters on `distributor_id` it stayed empty for everyone while shipments ran
+to `DELIVERED` with no record of who drove them.
+
 ### From ready to delivered
 
 ```
 PUT  /shipments/{id}/ready        CREATED → READY          lines + orders → READY_FOR_DISPATCH
-POST /shipments/{id}/accept       READY → ACCEPTED         (orders already there)
+POST /shipments/{id}/accept       DISPATCH_REQUESTED → ACCEPTED   (orders already there)
 POST /shipments/{id}/in-transit   ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
 POST /shipments/{id}/delivered    IN_TRANSIT → DELIVERED   orders → DELIVERED
 POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
@@ -802,21 +812,24 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge`, `/reject` and `/complete` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge`, `/reject`, `/complete` and `/cancel` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE |
 | Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE |
 | Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
-| | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, LOGISTICS |
-| | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE, LOGISTICS |
+| | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
+| | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
 | Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
 | | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
-| Components | `GET /components`, `GET /components/sku/{sku}`, `GET /components/article/{articleNo}`, `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
+| Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
+| | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` | ADMIN, MANAGER, WAREHOUSE |
 | | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU** | ADMIN, MANAGER, WAREHOUSE |
+| | `POST /components/supplier/{requestId}/approve`, `.../in-transit`, `.../delivered` — the supplier answers: `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, only on their own requests | ADMIN, SUPPLIER |
+| | `POST /components/warehouse/{requestId}/in-stock/{storehouseId}` — the goods receipt: `DELIVERED → IN_STOCK` and the quantity added to that SKU's stock in that storehouse | ADMIN, WAREHOUSE |
 | Stock | `POST /stock/add`, `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
 
@@ -922,7 +935,11 @@ part of them.
 | `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
 | `OrderProgressServiceImplTest` | the computed order status: every step from `IN_FULFILLMENT` to `DELIVERED` out of the shipped quantities, `PARTIALLY_DELIVERED` reserved for the delivery, the fallback when a cancellation takes the coverage away, statuses outside the shipment range left alone (`WAIT_SUPPLY` among them), and `changeStatus`/`recordCreated` |
 | `OrderServiceCompleteTest` | closing an order: the quantity check, and the four refusals (already closed, ended, no lines, still short — with the short lines named) |
-| `OrderStatusCheckConstraintTest` | that the database takes every `OrderStatus`, on the order and in both columns of its history (needs a database) |
+| `OrderServiceCancelTest` | cancelling an order: the stock handed back, every line on `CANCELLED`, the status written before the release, and the refusals (goods off the shelf, already in a shipment, ended) |
+| `ComponentServiceReceiveTest` | the goods receipt: the quantity booked onto `(sku, storehouse)`, the recipe quantity left alone, only from `IN_TRANSIT`, unknown storehouse as 404 |
+| `ComponentServiceSupplierStepsTest`, `ComponentControllerTest` | the supplier's two steps: one status at a time, only on their own request, ADMIN exempt, the status not leaking to a stranger, and both bodies of the ordering endpoint |
+| `RequestComponentIdTest` | that a component request can be inserted at all — its key column was a `uuid` without `AUTO_INCREMENT` (needs a database) |
+| `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
 | `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |

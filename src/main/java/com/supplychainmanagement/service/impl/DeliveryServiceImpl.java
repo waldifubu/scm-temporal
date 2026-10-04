@@ -1,20 +1,22 @@
 package com.supplychainmanagement.service.impl;
 
-import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
+import com.supplychainmanagement.entity.users.Distributor;
+import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.OrderProgressService;
-import com.supplychainmanagement.service.ShipmentService;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +28,7 @@ import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -38,7 +41,7 @@ public class DeliveryServiceImpl implements DeliveryService {
     private final ShipmentPackageRepository shipmentPackageRepository;
     private final OrderRepository orderRepository;
     private final OrderProgressService orderProgress;
-    private final ShipmentService shipmentService;
+    private final RoleService roleService;
 
     @Override
     @Transactional(readOnly = true)
@@ -62,7 +65,11 @@ public class DeliveryServiceImpl implements DeliveryService {
     @Override
     @Transactional
     public DeliveryResponse acceptShipment(Long shipmentId, Long userId) {
-        return advance(shipmentId, EnumSet.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED),
+        // DISPATCH_REQUESTED only, not READY: that status is set by assignDistributor and nothing
+        // else, so requiring it makes the handover a step that has to happen. Before this, a carrier
+        // could take on any ready shipment, nobody had to be assigned, and the distributor's work
+        // list - which filters on distributor_id - stayed empty for everyone.
+        return advance(shipmentId, EnumSet.of(ShipmentStatus.DISPATCH_REQUESTED),
                 ShipmentStatus.ACCEPTED, userId);
     }
 
@@ -100,22 +107,6 @@ public class DeliveryServiceImpl implements DeliveryService {
         return DeliveryResponse.from(shipment);
     }
 
-    @Override
-    @Transactional
-    public DeliveryResponse cancelShipment(Long shipmentId, CancelShipmentRequest request, Long userId) {
-        // Not reimplemented here: which statuses may still be called off, and what has to be wound
-        // back with it - packages loose again, order lines and orders a step back - is the shipment's
-        // own business and already lives on the planning side. A second copy would drift from it.
-        shipmentService.cancelShipment(shipmentId, request, userId);
-
-        // Read back rather than mapped from the planning answer: the carrier gets its own view. The
-        // shipment is in this transaction's persistence context by now, so findById costs no query,
-        // and its packages were detached above - the answer reports none, like the planning one.
-        Shipment shipment = shipmentRepository.findById(shipmentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
-        return DeliveryResponse.from(shipment);
-    }
-
     /**
      * One step of the carrier's part of the process: the shipment moves on, and every order it
      * carries follows. Locked with findForUpdateById - two distributors reporting on the same
@@ -127,6 +118,10 @@ public class DeliveryServiceImpl implements DeliveryService {
                                      ShipmentStatus target, Long userId) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+
+        // Asked before the status: a carrier poking at a shipment that is not theirs learns nothing
+        // about where it stands.
+        requireReportingDistributor(shipment, userId);
 
         if (!allowedFrom.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
@@ -150,6 +145,29 @@ public class DeliveryServiceImpl implements DeliveryService {
 
         // The carrier's own view - no package contents, see DeliveryResponse.
         return DeliveryResponse.from(shipment);
+    }
+
+    /**
+     * Only the distributor the shipment was assigned to reports on it - any other carrier is a 403.
+     * ADMIN is exempt, as the role that has to be able to correct things.
+     * <p>
+     * The missing assignment is a 409 and not reachable through {@code accept}, which needs
+     * DISPATCH_REQUESTED and therefore an assignment. The later steps check it all the same rather
+     * than trusting that chain to hold.
+     */
+    private void requireReportingDistributor(Shipment shipment, Long userId) {
+        Distributor assigned = shipment.getDistributor();
+        if (assigned == null) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipment.getId()
+                    + " has no distributor assigned - PUT /shipments/{id}/distributor/{id} comes first");
+        }
+
+        if (Objects.equals(assigned.getId(), userId) || roleService.isAdmin(userId)) {
+            return;
+        }
+
+        throw new APIException(HttpStatus.FORBIDDEN,
+                "Shipment " + shipment.getId() + " is assigned to another distributor");
     }
 
     /**

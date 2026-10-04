@@ -1,6 +1,5 @@
 package com.supplychainmanagement.service;
 
-import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import org.springframework.data.domain.Page;
@@ -26,7 +25,11 @@ public interface DeliveryService {
      */
     Page<DeliveryResponse> findShipmentsForDistributor(Long distributorId, ShipmentStatus status, Pageable pageable);
 
-    /** READY or DISPATCH_REQUESTED to ACCEPTED; the orders of the shipment go to READY_FOR_DISPATCH. */
+    /**
+     * DISPATCH_REQUESTED to ACCEPTED - the shipment has to have been handed over to this distributor
+     * first, which is what sets that status. Any other status is a 409, a shipment assigned to
+     * somebody else a 403 (ADMIN excepted).
+     */
     DeliveryResponse acceptShipment(Long shipmentId, Long userId);
 
     /**
@@ -40,15 +43,4 @@ public interface DeliveryService {
 
     DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber);
 
-    /**
-     * The carrier hands the shipment back: possible up to ACCEPTED, so after taking it on but before
-     * it rolls - from IN_TRANSIT it would be a return, which the process does not model (409).
-     * <p>
-     * Everything the shipment had set in motion is wound back: its packages are loose again and stay
-     * PACKED, the order lines go from READY_FOR_DISPATCH to PACKED and the orders from
-     * READY_FOR_DISPATCH to IN_FULFILLMENT. That winding back is the shipment's own business, so it
-     * is {@link ShipmentService#cancelShipment} doing it - one implementation for both callers, the
-     * planning side and this one. Only the answer differs: the carrier is not shown the contents.
-     */
-    DeliveryResponse cancelShipment(Long shipmentId, CancelShipmentRequest request, Long userId);
 }

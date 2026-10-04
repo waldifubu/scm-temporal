@@ -1,6 +1,7 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Component;
+import com.supplychainmanagement.entity.RequestComponent;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 

@@ -9,12 +9,14 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.dto.order.UndeliveredLine;
+import com.supplychainmanagement.service.FulfillmentService;
 import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.ProductionService;
@@ -47,12 +49,25 @@ public class OrderServiceImpl implements OrderService {
     static final int MAX_LINE_QUANTITY = 20;
 
     private static final LocalTime END_OF_WORKING_DAY = LocalTime.of(17, 0);
+
+    /** An order that ended is not cancelled, it is over. */
+    private static final Set<OrderStatus> ENDED_STATUSES =
+            EnumSet.of(OrderStatus.REJECTED, OrderStatus.COMPLETED);
+
+    /**
+     * From here on the goods are in a shipment, and it is the shipment that gets called off -
+     * POST /shipments/{id}/cancel, which hands the packages back and lets the orders fall with them.
+     */
+    private static final Set<OrderStatus> DISPATCH_STATUSES = EnumSet.of(
+            OrderStatus.READY_FOR_DISPATCH, OrderStatus.IN_TRANSIT,
+            OrderStatus.PARTIALLY_DELIVERED, OrderStatus.DELIVERED);
     private final OrderRepository orderRepository;
     private final UserRepository userRepository;
     private final ProductRepository productRepository;
     private final RoleService roleService;
     private final ProductionService productionService;
     private final OrderProgressService orderProgress;
+    private final FulfillmentService fulfillmentService;
     /**
      * Working days from acknowledgement to delivery when every line is covered by stock today.
      */
@@ -326,6 +341,51 @@ public class OrderServiceImpl implements OrderService {
         }
 
         orderProgress.changeStatus(order, OrderStatus.COMPLETED, userId);
+        return findById(order.getId());
+    }
+
+    /**
+     * Only the status and the lines change here; the stock goes back through FulfillmentService,
+     * which owns the reservations.
+     */
+    @Override
+    @Transactional
+    public Order cancel(Order order, String username, Long userId) {
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is already cancelled");
+        }
+
+        if (ENDED_STATUSES.contains(order.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be cancelled");
+        }
+
+        if (DISPATCH_STATUSES.contains(order.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " - its packages travel in a shipment, call that off instead");
+        }
+
+        List<OrderItem> moved = fulfillmentService.linesPastReservation(order);
+        if (!moved.isEmpty()) {
+            // Named one by one: the caller has to know which goods are already off the shelf, because
+            // putting them back is something only a human can do.
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo()
+                    + " cannot be cancelled, these lines have left the shelf: "
+                    + moved.stream()
+                    .map(line -> line.getId() + " (" + line.getFulfillmentStatus() + ")")
+                    .collect(Collectors.joining(", ")));
+        }
+
+        // Before the release on purpose - see OrderService.cancel.
+        orderProgress.changeStatus(order, OrderStatus.CANCELLED, userId);
+        fulfillmentService.releaseItems(order, username);
+
+        // After the release, which puts the lines back to WAITING on its way out. The order is
+        // managed and its orderItems cascade, so setting them here is enough.
+        if (order.getOrderItems() != null) {
+            order.getOrderItems().forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.CANCELLED));
+        }
+
         return findById(order.getId());
     }
 

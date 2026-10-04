@@ -3,9 +3,12 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
+import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
+import com.supplychainmanagement.service.RequestComponentService;
+import com.supplychainmanagement.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -34,19 +37,25 @@ class ComponentControllerTest {
 
     private final ComponentService componentService = mock(ComponentService.class);
     private final ComponentMapper componentMapper = mock(ComponentMapper.class);
+    private final UserService userService = mock(UserService.class);
+    private final RequestComponentService requestComponentService = mock(RequestComponentService.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new ComponentController(componentService, componentMapper))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ComponentController(componentService, componentMapper, userService, requestComponentService))
                 .setControllerAdvice(new GlobalExceptionHandler())
+                // @AuthenticationPrincipal has no resolver in a standalone setup - without it the two
+                // supplier steps fail before they reach the controller method.
+                .setCustomArgumentResolvers(
+                        new org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
 
         when(componentService.requestComponents(any(), any())).thenReturn(List.of(
                 new RequestComponentResponse(1L, 5L, SCREW, "screw", 12L, "Notwendig",
-                        RequestStatus.OPEN, null, 12L, "Ada Lovelace")));
+                        RequestStatus.OPEN, null, 12L)));
     }
 
     private RequestComponentsRequest bound() {
@@ -99,6 +108,30 @@ class ComponentControllerTest {
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8", "qty": 1 } ]
                                 """))
                 .andExpect(status().isCreated());
+    }
+
+    /** The supplier's two steps: the request id from the path and the acting user from the token. */
+    @Test
+    void passesTheSupplierStepsOn() throws Exception {
+        when(userService.getAuthenticatedUserId(any())).thenReturn(315L);
+        when(componentService.approveRequest(any(), any()))
+                .thenReturn(answered(RequestStatus.APPROVED));
+        when(componentService.requestInTransit(any(), any()))
+                .thenReturn(answered(RequestStatus.IN_TRANSIT));
+
+        mockMvc.perform(post("/api/1.0/components/supplier/5/approve"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestStatus").value("APPROVED"));
+        mockMvc.perform(post("/api/1.0/components/supplier/5/in-transit"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.requestStatus").value("IN_TRANSIT"));
+
+        verify(componentService).approveRequest(5L, 315L);
+        verify(componentService).requestInTransit(5L, 315L);
+    }
+
+    private static RequestComponentResponse answered(RequestStatus status) {
+        return new RequestComponentResponse(5L, 11L, SCREW, "Blech", 12L, null, status, null, 315L);
     }
 
     /** Nothing to order is not a request. */

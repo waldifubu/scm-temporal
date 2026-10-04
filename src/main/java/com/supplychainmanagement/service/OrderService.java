@@ -73,6 +73,26 @@ public interface OrderService {
      */
     Order complete(Order order, Long userId);
 
+    /**
+     * Cancels the order and hands back what it holds - ADMIN and MANAGER, not the customer.
+     * <p>
+     * Only while nothing has physically moved: a line past RESERVED means the goods have left the
+     * shelf, its reservation is CONSUMED, and booking them in again is an operation this application
+     * does not have. Such a line is a 409 naming every one of them
+     * ({@code FulfillmentService.linesPastReservation}). An order whose packages travel in a shipment
+     * is the shipment's business ({@code POST /shipments/&#123;id&#125;/cancel}) or a return, which the
+     * process does not model; REJECTED and COMPLETED are ends.
+     * <p>
+     * What it undoes: every active reservation goes back to stock, and every line ends on
+     * {@code FulfillmentStatus.CANCELLED}. The status is written <em>before</em> the release, which
+     * looks backwards and is not - {@code releaseItems} would otherwise take the order to APPROVED on
+     * its way out and the history would carry a step that never happened.
+     *
+     * @param username the acting user for the release, which resolves the id itself
+     * @param userId   the same user for the audit row, may be null
+     */
+    Order cancel(Order order, String username, Long userId);
+
     Order update(Long id, Order order);
 
     Order update(Long id, Order order, Long userId);

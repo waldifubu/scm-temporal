@@ -11,9 +11,13 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.ProductRepository;
+import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.repository.RequestComponentRepository;
+import com.supplychainmanagement.repository.StorehouseRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ComponentService;
+import com.supplychainmanagement.service.RoleService;
+import com.supplychainmanagement.service.impl.StockService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.http.HttpStatus;
@@ -23,6 +27,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -36,6 +41,9 @@ public class ComponentServiceImpl implements ComponentService {
     private final ProductRepository productRepository;
     private final RequestComponentRepository requestComponentRepository;
     private final UserRepository userRepository;
+    private final RoleService roleService;
+    private final StorehouseRepository storehouseRepository;
+    private final StockService stockService;
 
     @Override
     @Transactional
@@ -83,6 +91,121 @@ public class ComponentServiceImpl implements ComponentService {
         return requestComponentRepository.saveAll(requests).stream()
                 .map(RequestComponentResponse::from)
                 .toList();
+    }
+
+    @Override
+    @Transactional
+    public RequestComponentResponse approveRequest(Long requestId, Long userId) {
+        return advanceRequest(requestId, RequestStatus.OPEN, RequestStatus.APPROVED, userId);
+    }
+
+    @Override
+    @Transactional
+    public RequestComponentResponse requestInTransit(Long requestId, Long userId) {
+        return advanceRequest(requestId, RequestStatus.APPROVED, RequestStatus.IN_TRANSIT, userId);
+    }
+
+    @Override
+    @Transactional
+    public RequestComponentResponse requestDelivered(Long requestId, Long userId) {
+        return advanceRequest(requestId, RequestStatus.IN_TRANSIT, RequestStatus.DELIVERED, userId);
+    }
+
+    /**
+     * The goods receipt - the warehouse answering the supplier's DELIVERED with what it actually
+     * found, and the one step the warehouse owns, and the only place component stock grows
+     * other than through StockController by hand. Without it {@code assemble()} eventually finds
+     * nothing left to build from.
+     * <p>
+     * The quantity goes to {@code Stock.onHand} for {@code (sku, storehouse)}. Deliberately not to
+     * {@code Component.qty}: that is the bill-of-materials quantity - how many go into one product -
+     * and adding a delivery to it would silently rewrite the recipe.
+     * <p>
+     * One transaction: if booking the stock fails, the status does not move either.
+     */
+    @Override
+    @Transactional
+    public RequestComponentResponse receiveRequest(Long requestId, Long storehouseId, Long userId) {
+        RequestComponent request = requestComponentRepository.findForUpdateById(requestId)
+                .orElseThrow(() -> new ResourceNotFoundException("RequestComponent", "id", requestId));
+
+        // DELIVERED and not IN_TRANSIT: the supplier reports the handover first, so the receipt is
+        // the answer to a claim rather than a guess. A supplier who never reports it does not block
+        // the warehouse - an ADMIN may report DELIVERED for them, see requireAnsweringSupplier.
+        if (request.getRequestStatus() != RequestStatus.DELIVERED) {
+            throw new APIException(HttpStatus.CONFLICT, "Request " + requestId + " is "
+                    + request.getRequestStatus() + ", only " + RequestStatus.DELIVERED
+                    + " can be booked in");
+        }
+
+        // Checked here rather than left to StockService, whose IllegalArgumentException would end as
+        // a 500 for what is simply a wrong path variable.
+        if (!storehouseRepository.existsById(storehouseId)) {
+            throw new ResourceNotFoundException("Storehouse", "id", storehouseId);
+        }
+
+        Component component = request.getComponent();
+        if (component == null || component.getSku() == null) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Request " + requestId + " has no component to book in");
+        }
+        if (request.getQty() == null || request.getQty() < 1) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Request " + requestId + " has no usable quantity to book in");
+        }
+
+        stockService.add(component.getSku(), storehouseId, request.getQty().intValue());
+
+        request.setRequestStatus(RequestStatus.IN_STOCK);
+        requestComponentRepository.save(request);
+
+        return RequestComponentResponse.from(request);
+    }
+
+    /**
+     * One step of the supplier's part: the request moves on, one status at a time. Locked with
+     * findForUpdateById - two reports on the same request would otherwise both pass the status check.
+     *
+     * @param allowedFrom the only status the step may start from; anything else is a 409
+     */
+    private RequestComponentResponse advanceRequest(Long requestId, RequestStatus allowedFrom,
+                                                    RequestStatus target, Long userId) {
+        RequestComponent request = requestComponentRepository.findForUpdateById(requestId)
+                .orElseThrow(() -> new ResourceNotFoundException("RequestComponent", "id", requestId));
+
+        // Asked before the status: a supplier poking at a request that is not theirs learns nothing
+        // about where it stands. Same shape as the carrier side of a shipment.
+        requireAnsweringSupplier(request, userId);
+
+        if (request.getRequestStatus() != allowedFrom) {
+            throw new APIException(HttpStatus.CONFLICT, "Request " + requestId + " is "
+                    + request.getRequestStatus() + ", only " + allowedFrom + " can be moved to " + target);
+        }
+
+        request.setRequestStatus(target);
+        requestComponentRepository.save(request);
+
+        // Mapped here, while the transaction is open - component and supplier are LAZY.
+        return RequestComponentResponse.from(request);
+    }
+
+    /**
+     * Only the supplier the request was placed with answers it - anybody else is a 403. ADMIN is
+     * exempt, as the role that has to be able to correct things.
+     */
+    private void requireAnsweringSupplier(RequestComponent request, Long userId) {
+        Supplier supplier = request.getSupplier();
+        if (supplier == null) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Request " + request.getId() + " has no supplier to answer it");
+        }
+
+        if (Objects.equals(supplier.getId(), userId) || roleService.isAdmin(userId)) {
+            return;
+        }
+
+        throw new APIException(HttpStatus.FORBIDDEN,
+                "Request " + request.getId() + " was placed with another supplier");
     }
 
     /** An empty comment is no comment - stored as null, so it stays out of the JSON. */

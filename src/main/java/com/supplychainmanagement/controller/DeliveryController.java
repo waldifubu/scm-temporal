@@ -1,12 +1,10 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
-import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.UserService;
-import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -52,7 +50,7 @@ public class DeliveryController {
      * page - the full list is {@code GET /shipments}.
      */
     @GetMapping(path = "/shipments/distributor", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('DISTRIBUTOR')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public PageResponse<DeliveryResponse> getMyShipments(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -100,20 +98,4 @@ public class DeliveryController {
         return deliveryService.shipmentDelivered(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
 
-    /**
-     * The carrier hands the shipment back - up to ACCEPTED, so after taking it on but before it
-     * rolls; from IN_TRANSIT on it would be a return and is a 409. The reason is required and kept on
-     * the shipment. Its packages are loose again and stay PACKED, the order lines go back to PACKED
-     * and the orders to IN_FULFILLMENT.
-     * <p>
-     * The planning side calls the same thing off with {@code POST /shipments/{id}/cancel} - same path,
-     * different verb and different role, and both end in the same service method.
-     */
-    @PutMapping(path = "/shipments/{shipmentId}/cancel", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse cancelShipment(@PathVariable Long shipmentId,
-                                           @Valid @RequestBody CancelShipmentRequest request,
-                                           @AuthenticationPrincipal User authUser) {
-        return deliveryService.cancelShipment(shipmentId, request, userService.getAuthenticatedUserId(authUser));
-    }
 }

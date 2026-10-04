@@ -338,12 +338,33 @@ public class FulfillmentServiceImpl implements FulfillmentService {
                 .orElse(null);
     }
 
+    @Override
+    @Transactional(readOnly = true)
+    public List<OrderItem> linesPastReservation(Order order) {
+        if (order.getOrderItems() == null) {
+            return List.of();
+        }
+
+        return order.getOrderItems().stream()
+                .filter(line -> isPastReservation(line.getFulfillmentStatus()))
+                .toList();
+    }
+
     /** Whether any line has got further than holding a reservation - picking started or later. */
     private static boolean hasLineBeyondReservation(Order order) {
         return order.getOrderItems().stream()
                 .map(OrderItem::getFulfillmentStatus)
-                .anyMatch(status -> status != null
-                        && status != FulfillmentStatus.WAITING
-                        && status != FulfillmentStatus.RESERVED);
+                .anyMatch(FulfillmentServiceImpl::isPastReservation);
+    }
+
+    /**
+     * One predicate for both callers, so the rule cannot drift. CANCELLED is deliberately not past
+     * reservation: the line holds nothing and nothing moved for it.
+     */
+    private static boolean isPastReservation(FulfillmentStatus status) {
+        return status != null
+                && status != FulfillmentStatus.WAITING
+                && status != FulfillmentStatus.RESERVED
+                && status != FulfillmentStatus.CANCELLED;
     }
 }
