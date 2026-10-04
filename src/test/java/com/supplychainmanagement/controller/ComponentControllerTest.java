@@ -3,6 +3,7 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
+import com.supplychainmanagement.dto.mapper.RequestComponentMapper;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.RequestStatus;
@@ -39,12 +40,14 @@ class ComponentControllerTest {
     private final ComponentMapper componentMapper = mock(ComponentMapper.class);
     private final UserService userService = mock(UserService.class);
     private final RequestComponentService requestComponentService = mock(RequestComponentService.class);
+    private final RequestComponentMapper requestComponentMapper = mock(RequestComponentMapper.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
-        mockMvc = MockMvcBuilders.standaloneSetup(new ComponentController(componentService, componentMapper, userService, requestComponentService))
+        mockMvc = MockMvcBuilders.standaloneSetup(new ComponentController(
+                        componentService, componentMapper, userService, requestComponentService, requestComponentMapper))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 // @AuthenticationPrincipal has no resolver in a standalone setup - without it the two
                 // supplier steps fail before they reach the controller method.
