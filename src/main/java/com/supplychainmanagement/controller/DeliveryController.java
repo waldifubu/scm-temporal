@@ -87,7 +87,7 @@ public class DeliveryController {
     public DeliveryResponse trackNumber(@PathVariable Long shipmentId,
                                               @RequestBody String trackingNumber,
                                               @AuthenticationPrincipal User authUser) {
-        return deliveryService.assignTrackNumber(shipmentId, trackingNumber);
+        return deliveryService.assignTrackNumber(shipmentId, trackingNumber, userService.getAuthenticatedUserId(authUser));
     }
 
     /** The shipment has arrived: IN_TRANSIT to DELIVERED, its orders to DELIVERED. */

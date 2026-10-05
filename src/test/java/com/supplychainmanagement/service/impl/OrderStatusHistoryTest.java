@@ -10,7 +10,10 @@ import com.supplychainmanagement.service.OrderService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.supplychainmanagement.support.TestData;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.event.ApplicationEvents;
 import org.springframework.test.context.event.RecordApplicationEvents;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,10 +41,14 @@ import static org.assertj.core.api.Assertions.assertThat;
  * nothing it writes survives.
  */
 @SpringBootTest
+@Import(TestData.class)
+@ActiveProfiles("test")
 @Transactional
 @RecordApplicationEvents
 class OrderStatusHistoryTest {
 
+    @Autowired
+    private TestData testData;
     @Autowired
     private OrderService orderService;
     @Autowired
@@ -56,7 +63,7 @@ class OrderStatusHistoryTest {
     /** An order of its own, so the test does not depend on what is in the database. */
     @BeforeEach
     void createAnOrderToWorkOn() {
-        User customer = userRepository.findAll().getFirst();
+        User customer = testData.customer();
 
         // Over 1000 and free - validateOrderNo asks for both.
         orderNo = 999_000L;

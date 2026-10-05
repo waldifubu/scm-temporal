@@ -3,9 +3,11 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.mapper.ProductMapper;
 import com.supplychainmanagement.dto.product.ProductDto;
+import com.supplychainmanagement.dto.product.ProductRequestDto;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.service.ProductService;
 import com.supplychainmanagement.service.RoleService;
+import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -48,13 +50,14 @@ public class ProductController {
 
     @PostMapping(value = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ProductDto createProduct(@RequestBody Product product) {
+    public ProductDto createProduct(@Valid @RequestBody ProductRequestDto product) {
         return productMapper.mapToDto(productService.create(product));
     }
 
     @PutMapping(value = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ProductDto updateProduct(@PathVariable Long id, @RequestBody Product product) {
+    public ProductDto updateProduct(@PathVariable Long id,
+                                    @Valid @RequestBody ProductRequestDto product) {
         return productMapper.mapToDto(productService.update(id, product));
     }
 

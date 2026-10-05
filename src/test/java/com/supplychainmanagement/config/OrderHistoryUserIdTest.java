@@ -9,7 +9,10 @@ import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.supplychainmanagement.support.TestData;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
@@ -31,9 +34,13 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * repositories away. Needs a reachable database and rolls back.
  */
 @SpringBootTest
+@Import(TestData.class)
+@ActiveProfiles("test")
 @Transactional
 class OrderHistoryUserIdTest {
 
+    @Autowired
+    private TestData testData;
     @Autowired
     private OrderRepository orderRepository;
     @Autowired
@@ -43,7 +50,7 @@ class OrderHistoryUserIdTest {
 
     @Test
     void writesAnAuditRowWithoutAUser() {
-        User customer = userRepository.findAll().getFirst();
+        User customer = testData.customer();
 
         long orderNo = 997_000L;
         while (orderRepository.existsByOrderNo(orderNo)) {

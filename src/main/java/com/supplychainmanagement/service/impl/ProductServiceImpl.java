@@ -5,6 +5,8 @@ import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.ProductCategory;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.dto.product.ProductRequestDto;
+import com.supplychainmanagement.repository.ProductCategoryRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.service.ProductService;
 import lombok.RequiredArgsConstructor;
@@ -13,12 +15,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
 public class ProductServiceImpl implements ProductService {
     private final ProductRepository productRepository;
+    private final ProductCategoryRepository productCategoryRepository;
 
     @Override
     public List<Product> findAll() {
@@ -44,35 +49,139 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public Product create(Product product) {
-        if (productRepository.existsByArticleNo(product.getArticleNo())) {
+    public Product create(ProductRequestDto request) {
+        if (productRepository.existsByArticleNo(request.articleNo())) {
             throw new APIException(HttpStatus.CONFLICT, "Article number already exists!");
         }
-        bindComponentsToProduct(product, product.getComponents());
+
+        // A fresh entity: a request cannot carry an id and turn the save into a merge over an
+        // existing product, which is what taking the entity as the body allowed.
+        Product product = new Product();
+        applyProductData(request, product);
+        product.setComponents(new ArrayList<>(componentsFor(request, product, List.of())));
+        applyCategories(product, categoriesFor(request.categoryIds()));
+
         Product savedProduct = productRepository.save(product);
         return productRepository.findWithComponentsById(savedProduct.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", savedProduct.getId()));
     }
 
+    /** The product's own fields. {@code sku} and {@code active} only when they are sent. */
+    private void applyProductData(ProductRequestDto request, Product product) {
+        product.setArticleNo(request.articleNo());
+        product.setName(request.name());
+        product.setDescription(request.description());
+        product.setUnitPrice(request.unitPrice());
+        product.setWeight(request.weight());
+        if (request.sku() != null) {
+            product.setSku(request.sku());
+        }
+        if (request.active() != null) {
+            product.setActive(request.active());
+        }
+    }
+
+    /**
+     * The categories the request names, looked up rather than taken from the body. An unknown id is a
+     * 404 naming every one of them, so a caller does not have to guess which of a list was wrong.
+     * {@code null} means "leave the categories alone" and is passed through as null.
+     */
+    private Set<ProductCategory> categoriesFor(Set<Long> categoryIds) {
+        if (categoryIds == null) {
+            return null;
+        }
+        if (categoryIds.isEmpty()) {
+            return new LinkedHashSet<>();
+        }
+
+        List<ProductCategory> found = productCategoryRepository.findAllById(categoryIds);
+        if (found.size() != categoryIds.size()) {
+            Set<Long> known = found.stream().map(ProductCategory::getId).collect(Collectors.toSet());
+            String missing = categoryIds.stream()
+                    .filter(id -> !known.contains(id))
+                    .map(String::valueOf)
+                    .collect(Collectors.joining(", "));
+            // Every missing id at once rather than the first - ResourceNotFoundException only takes a
+            // Long, so the list goes into the message through APIException.
+            throw new APIException(HttpStatus.NOT_FOUND, "ProductCategory not found with id: " + missing);
+        }
+        return new LinkedHashSet<>(found);
+    }
+
+    /**
+     * Turns the request's bill-of-materials lines into components of this product.
+     * <p>
+     * This is where the hole was: a line used to arrive as a {@code Component} entity, and with the
+     * id of a component belonging to another product the {@code cascade = ALL} on
+     * {@code Product.components} reassigned that row to this product - rewriting a foreign bill of
+     * materials, with nothing in the request saying so. An id is now only accepted when it is one of
+     * <strong>this</strong> product's own lines; anything else is a 400 rather than a silent move.
+     *
+     * @param existing the product's current lines - empty on create, which is why an id is refused
+     *                 there
+     */
+    private List<Component> componentsFor(ProductRequestDto request, Product product,
+                                          List<Component> existing) {
+        if (request.components() == null) {
+            return null;
+        }
+
+        Map<Long, Component> ownById = existing.stream()
+                .filter(component -> component.getId() != null)
+                .collect(Collectors.toMap(Component::getId, Function.identity(), (first, same) -> first));
+
+        List<Component> lines = new ArrayList<>(request.components().size());
+        for (ProductRequestDto.ComponentLine line : request.components()) {
+            Component target;
+            if (line.id() == null) {
+                target = new Component();
+            } else {
+                target = ownById.get(line.id());
+                if (target == null) {
+                    throw new APIException(HttpStatus.BAD_REQUEST, "Component " + line.id()
+                            + " is not a component of product " + request.articleNo()
+                            + " - leave the id out to add a new one");
+                }
+            }
+
+            target.setName(line.name());
+            target.setManufacturer(line.manufacturer());
+            target.setArticleNo(line.articleNo());
+            target.setDescription(line.description());
+            target.setExternalId(line.externalId());
+            if (line.weight() != null) {
+                target.setWeight(line.weight());
+            }
+            if (line.sku() != null) {
+                target.setSku(line.sku());
+            }
+            if (line.qty() != null) {
+                target.setQty(line.qty());
+            }
+            target.setProduct(product);
+            lines.add(target);
+        }
+        return lines;
+    }
+
     @Override
     @Transactional
-    public Product update(Long id, Product product) {
-        Product existingProduct = productRepository.findById(id)
+    public Product update(Long id, ProductRequestDto request) {
+        Product existingProduct = productRepository.findWithComponentsById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
 
-        long newArticleNo = product.getArticleNo();
+        long newArticleNo = request.articleNo();
         if (newArticleNo != existingProduct.getArticleNo()
                 && productRepository.existsByArticleNo(newArticleNo)) {
             throw new APIException(HttpStatus.CONFLICT, "Article number already exists!");
         }
 
-        existingProduct.setArticleNo(newArticleNo);
-        existingProduct.setName(product.getName());
-        existingProduct.setDescription(product.getDescription());
-        existingProduct.setUnitPrice(product.getUnitPrice());
-        existingProduct.setWeight(product.getWeight());
-        applyCategories(existingProduct, product.getCategories());
-        applyComponents(existingProduct, product.getComponents());
+        applyProductData(request, existingProduct);
+        applyCategories(existingProduct, categoriesFor(request.categoryIds()));
+        // Read with its components above, so the ids in the request can be checked against the
+        // product's own lines before anything is attached.
+        applyComponents(existingProduct, componentsFor(request, existingProduct,
+                existingProduct.getComponents() == null ? List.of() : existingProduct.getComponents()));
 
         Product savedProduct = productRepository.save(existingProduct);
         return productRepository.findWithComponentsById(savedProduct.getId())

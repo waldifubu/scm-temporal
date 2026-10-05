@@ -48,6 +48,19 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     boolean existsByOrderNo(Long orderNo);
 
+    /**
+     * The next order number counter - one draw of the {@code order_no_seq} sequence, which
+     * {@code OrderNumberScrambler} then permutes into the number itself.
+     * <p>
+     * Native, because a sequence is not an entity and JPQL has no word for {@code NEXTVAL}. Not
+     * transactional either, which is the point: a rolled-back order keeps its counter rather than
+     * handing it to the next one. Gaps do not matter, reuse would.
+     * <p>
+     * The sequence is created by {@code OrderNoSequenceMigration} at startup.
+     */
+    @Query(value = "SELECT NEXTVAL(order_no_seq)", nativeQuery = true)
+    Long nextOrderNoCounter();
+
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 

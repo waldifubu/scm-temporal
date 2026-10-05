@@ -89,7 +89,7 @@ public class DeliveryServiceImpl implements DeliveryService {
 
     @Override
     @Transactional
-    public DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber) {
+    public DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber, Long userId) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
         if(trackingNumber == null || trackingNumber.isBlank()) {
@@ -100,6 +100,9 @@ public class DeliveryServiceImpl implements DeliveryService {
         }
         if(shipment.getStatus() == ShipmentStatus.IN_TRANSIT || shipment.getStatus() == ShipmentStatus.DELIVERED) {
             throw new APIException(HttpStatus.CONFLICT, "Cannot assign tracking number to shipment in status " + shipment.getStatus());
+        }
+        if(!Objects.equals(shipment.getDistributor().getId(), userId) && !roleService.isAdmin(userId)) {
+            throw new APIException(HttpStatus.FORBIDDEN, "Shipment " + shipmentId + " is assigned to another distributor");
         }
         shipment.setTrackingNumber(trackingNumber);
 

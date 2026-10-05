@@ -22,7 +22,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.supplychainmanagement.support.TestData;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
@@ -49,10 +52,14 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * back - nothing it writes survives.
  */
 @SpringBootTest
+@Import(TestData.class)
+@ActiveProfiles("test")
 @Transactional
 @ExtendWith(org.springframework.test.context.junit.jupiter.SpringExtension.class)
 class StatusCheckConstraintTest {
 
+    @Autowired
+    private TestData testData;
     @Autowired
     private OrderRepository orderRepository;
     @Autowired
@@ -69,7 +76,7 @@ class StatusCheckConstraintTest {
     private ComponentRepository componentRepository;
 
     private Order orderInStatus(OrderStatus status) {
-        User customer = userRepository.findAll().getFirst();
+        User customer = testData.customer();
 
         long orderNo = 998_000L;
         while (orderRepository.existsByOrderNo(orderNo)) {
@@ -95,7 +102,7 @@ class StatusCheckConstraintTest {
 
         OrderItem line = new OrderItem();
         line.setOrder(order);
-        line.setProduct(productRepository.findAll().getFirst());
+        line.setProduct(testData.product());
         line.setQuantity(1);
         line.setFulfillmentStatus(status);
 
@@ -110,13 +117,8 @@ class StatusCheckConstraintTest {
     @EnumSource(RequestStatus.class)
     void takesEveryRequestStatus(RequestStatus status) {
         RequestComponent request = new RequestComponent();
-        request.setComponent(componentRepository.findAll().getFirst());
-        request.setSupplier(userRepository.findAll().stream()
-                .map(Hibernate::unproxy)
-                .filter(Supplier.class::isInstance)
-                .map(Supplier.class::cast)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("no supplier in the database")));
+        request.setComponent(testData.component());
+        request.setSupplier(testData.supplier());
         request.setQty(1L);
         request.setRequestStatus(status);
 

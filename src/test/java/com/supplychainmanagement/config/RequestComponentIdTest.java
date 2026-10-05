@@ -10,7 +10,10 @@ import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import com.supplychainmanagement.support.TestData;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
 
 import org.hibernate.Hibernate;
@@ -32,9 +35,13 @@ import static org.assertj.core.api.Assertions.assertThat;
  * the repository away and passes either way. Needs a reachable database and rolls back.
  */
 @SpringBootTest
+@Import(TestData.class)
+@ActiveProfiles("test")
 @Transactional
 class RequestComponentIdTest {
 
+    @Autowired
+    private TestData testData;
     @Autowired
     private RequestComponentRepository requestComponentRepository;
     @Autowired
@@ -44,13 +51,8 @@ class RequestComponentIdTest {
 
     @Test
     void generatesTheKeyOfAComponentRequest() {
-        Component component = componentRepository.findAll().getFirst();
-        Supplier supplier = userRepository.findAll().stream()
-                .map(Hibernate::unproxy)
-                .filter(Supplier.class::isInstance)
-                .map(Supplier.class::cast)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("no supplier in the database to request from"));
+        Component component = testData.component();
+        Supplier supplier = testData.supplier();
 
         RequestComponent request = new RequestComponent();
         request.setComponent(component);
@@ -67,16 +69,11 @@ class RequestComponentIdTest {
     /** Two in a row get two different keys - an auto-increment, not a constant default. */
     @Test
     void countsTheKeyUp() {
-        Component component = componentRepository.findAll().getFirst();
-        User supplier = userRepository.findAll().stream()
-                .map(Hibernate::unproxy)
-                .filter(Supplier.class::isInstance)
-                .map(User.class::cast)
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("no supplier in the database to request from"));
+        Component component = testData.component();
+        Supplier supplier = testData.supplier();
 
-        Long first = saveOne(component, (Supplier) supplier).getId();
-        Long second = saveOne(component, (Supplier) supplier).getId();
+        Long first = saveOne(component, supplier).getId();
+        Long second = saveOne(component, supplier).getId();
 
         assertThat(second).isGreaterThan(first);
     }

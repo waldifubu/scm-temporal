@@ -66,6 +66,9 @@ class OrderServiceLineQuantityTest {
         when(roleService.isPrivilegedUser(any())).thenReturn(true);
         when(userRepository.findByUsername("manager")).thenReturn(Optional.of(new User()));
         when(userRepository.findById(3L)).thenReturn(Optional.of(customer));
+        // The order number comes from the order_no_seq sequence now, not from Math.random - a mocked
+        // repository hands out nothing, and OrderNumberScrambler refuses a counter below 1.
+        when(orderRepository.nextOrderNoCounter()).thenReturn(1L);
     }
 
     private static OrderItem line(int quantity) {

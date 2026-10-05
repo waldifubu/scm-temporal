@@ -15,8 +15,10 @@ import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
+import com.supplychainmanagement.config.OrderNoSequenceMigration;
 import com.supplychainmanagement.dto.order.UndeliveredLine;
 import com.supplychainmanagement.service.FulfillmentService;
+import com.supplychainmanagement.service.OrderNumberScrambler;
 import com.supplychainmanagement.service.OrderProgressService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.ProductionService;
@@ -167,7 +169,7 @@ public class OrderServiceImpl implements OrderService {
             order.setCustomer(dbUser);
         }
 
-        order.setOrderNo(randomOrderNo());
+        order.setOrderNo(nextOrderNo());
         validateOrderNo(order.getOrderNo(), null);
         bindCustomer(order);
         bindOrderItems(order);
@@ -182,13 +184,37 @@ public class OrderServiceImpl implements OrderService {
                 .orElseThrow(() -> new ResourceNotFoundException("Order", "id", createdId));
     }
 
-    private Long randomOrderNo() {
-        long candidate = 0L;
-        while (candidate <= 1000 || orderRepository.existsByOrderNo(candidate)) {
-            candidate = (long) (Math.random() * 9000) + 1000;
+    /**
+     * The next order number: one draw of the {@code order_no_seq} sequence, permuted into an
+     * eight-digit number by {@link OrderNumberScrambler}.
+     * <p>
+     * It replaces a loop that drew {@code Math.random() * 9000 + 1000} and asked the database whether
+     * the number was free. Three things were wrong with that, and the third was fatal: the check and
+     * the insert are two statements, so two requests could pass it with the same number; the chance
+     * of a redraw grew with every order; and once the roughly 9000 numbers were used up the loop
+     * never terminated - it span forever holding a request thread and its transaction. A permutation
+     * of a sequence cannot collide at all, so there is nothing to check and nothing to repeat.
+     * <p>
+     * Without the sequence nothing can be numbered, and that is said rather than worked around: a
+     * fallback to a random number would put the old problem back where nobody would look for it.
+     */
+    private Long nextOrderNo() {
+        Long counter;
+        try {
+            counter = orderRepository.nextOrderNoCounter();
+        } catch (RuntimeException e) {
+            throw new APIException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The order number sequence " + OrderNoSequenceMigration.SEQUENCE
+                            + " is missing - see OrderNoSequenceMigration");
         }
 
-        return candidate;
+        if (counter == null) {
+            throw new APIException(HttpStatus.INTERNAL_SERVER_ERROR,
+                    "The order number sequence " + OrderNoSequenceMigration.SEQUENCE
+                            + " returned nothing");
+        }
+
+        return OrderNumberScrambler.orderNoFor(counter);
     }
 
     public void statusCheck(Order existingOrder, Order order) {
@@ -398,6 +424,16 @@ public class OrderServiceImpl implements OrderService {
         orderRepository.deleteById(id);
     }
 
+    /**
+     * On create the number comes from {@link #nextOrderNo()} and cannot collide - the permutation is
+     * bijective. The lookup is kept anyway, as one query against the one way it could: somebody
+     * changing {@code OrderNumberScrambler}'s round constants or its range would make the mapping a
+     * different one, and a counter could then land on a number an earlier one already used. The
+     * unique index would catch it too, but as a failed insert rather than as a 409 that says what
+     * happened.
+     * <p>
+     * On update it is the real check: the number may be changed by hand there.
+     */
     private void validateOrderNo(Long orderNo, Order currentOrder) {
         if (orderNo == null || orderNo <= 1000) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Order number is required!");
