@@ -104,6 +104,31 @@ public class ShipmentController {
     }
 
     /**
+     * What the planning side may still ship: PACKED packages that are in no shipment yet - the ids
+     * {@code POST /shipments} and {@code POST /shipments/{id}/packages} take. Paged like the other
+     * lists, sorted by a field of the package, answered with the same row the warehouse's package
+     * list shows.
+     * <p>
+     * The planning side's own view on purpose: the package lists under /packages and
+     * /shipment-packages are packing work and belong to ADMIN and WAREHOUSE. LOGISTICS used to be on
+     * them because {@code GET /shipment-packages?status=PACKED} was the only way to find anything to
+     * ship - this is that way without the overlap, and it is the better list, since it leaves out the
+     * packages already travelling in a shipment.
+     * <p>
+     * The literal segment wins over {@code GET /shipments/{shipmentId}} below, the same way
+     * {@code GET /shipments/distributor} in {@link DeliveryController} does.
+     */
+    @GetMapping(path = "/shipments/packages", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")
+    public PageResponse<ShipmentPackageListDto> getShippablePackages(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(defaultValue = "ASC") String order) {
+        return PageResponse.of(shipmentService.findShippablePackages(pageRequest(page, size, sort, order)));
+    }
+
+    /**
      * One shipment with its packages and their contents. Unknown id: 404.
      */
     @GetMapping(path = "/shipments/{shipmentId}", version = "1.0")

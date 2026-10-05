@@ -3,9 +3,12 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
+import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
+import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
+import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.ShipmentService;
 import com.supplychainmanagement.service.UserService;
@@ -13,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver;
 import org.springframework.test.web.servlet.MockMvc;
@@ -72,6 +76,11 @@ class ShipmentControllerTest {
         when(shipmentService.cancelShipment(any(), any(), any())).thenReturn(response);
         when(shipmentService.findShipments(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(1), 0));
+        ShipmentPackageListDto shippable = new ShipmentPackageListDto(7L, "PKG-7", ShipmentPackageStatus.PACKED,
+                ShipmentPackageType.CARTON, BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ONE,
+                LocalDate.of(2026, 10, 1), 1, List.of());
+        when(shipmentService.findShippablePackages(any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(shippable), call.<Pageable>getArgument(0), 1));
     }
 
     @Test
@@ -157,6 +166,36 @@ class ShipmentControllerTest {
                 .andExpect(status().isOk());
 
         verify(shipmentService).findShipments(isNull(), any(Pageable.class));
+    }
+
+    /**
+     * The planning side's list of what it may ship, paged like every other list and with the
+     * defaults of OrderController.list.
+     */
+    @Test
+    void listsTheShippablePackages() throws Exception {
+        mockMvc.perform(get("/api/1.0/shipments/packages"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(1))
+                .andExpect(jsonPath("$.size").value(25))
+                .andExpect(jsonPath("$.content[0].id").value(7))
+                .andExpect(jsonPath("$.content[0].status").value("PACKED"));
+
+        verify(shipmentService).findShippablePackages(argThat((Pageable pageable) ->
+                pageable.getPageNumber() == 0 && pageable.getPageSize() == 25
+                        && Sort.by(Sort.Direction.ASC, "id").equals(pageable.getSort())));
+    }
+
+    /**
+     * The literal segment wins over GET /shipments/{shipmentId} - without that, "packages" would be
+     * bound as an id and answered with a 400. Same arrangement as /shipments/distributor.
+     */
+    @Test
+    void readsPackagesAsTheListAndNotAsAShipmentId() throws Exception {
+        mockMvc.perform(get("/api/1.0/shipments/packages"))
+                .andExpect(status().isOk());
+
+        verify(shipmentService, never()).findShipment(any());
     }
 
     @Test

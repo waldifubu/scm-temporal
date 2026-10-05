@@ -135,24 +135,39 @@ public class AutomaticReservationService {
     }
 
     /**
-     * The counterpart to {@link #tryToRelease}: nothing on the request path ever looks at
-     * {@code Reservation.expiresAt} for consumed reservations, so an abandoned reservation keeps its
-     * stock booked forever - invisible to every other order, and unreservable for its own because
-     * the per-SKU guard sees it as still held. This sweep deletes those reservations.
+     * Clears away consumed reservations once the goods are long gone: a CONSUMED row holds no stock,
+     * but it does hold the line's one slot ({@code uk_reservation_order_item}), so the line can
+     * never be reserved again while it is there. Nothing on the request path deletes it.
      * <p>
-     * Per order, and only the expired reservations of it: an order can hold a fresh reservation
-     * next to an expired one when its lines were reserved in separate calls.
+     * Only orders that are READY_FOR_DISPATCH, and only rows whose consumption is older than
+     * {@code deleteAfterDays}. The age comes from {@code Reservation.consumedAt} - when the stock
+     * actually left the shelf - and falls back to {@code expiresAt} for rows consumed before that
+     * column existed. It used to measure {@code expiresAt} alone, which is an hour after reserving
+     * and made a line picked on Friday look days old on the spot.
+     * <p>
+     * A row with neither timestamp is left alone rather than deleted: unknown age is not old age,
+     * and the next run sees it again.
+     * <p>
+     * No status is touched. The order is where its shipments put it
+     * ({@code OrderProgressService.recompute}) and a bookkeeping row does not move it - the
+     * {@code revertOrderStatus} this used to trigger could not fire on a READY_FOR_DISPATCH order
+     * anyway.
      */
     //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToDelete() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         var orders = orderService.findAllByStatus(OrderStatus.READY_FOR_DISPATCH, pageable);
 
+        LocalDateTime deleteBefore = LocalDateTime.now().minusDays(deleteAfterDays);
+
         orders.forEach(order -> {
             fulfillmentService.findConsumedReservations(order).forEach(reservation -> {
                 try {
-                    if (reservation.getExpiresAt().isBefore(LocalDateTime.now().minusDays(deleteAfterDays))) {
-                        var deleted = fulfillmentService.deleteReservation(reservation, SYSTEM_USER);
+                    LocalDateTime consumed = reservation.consumedOrExpiredAt();
+                    // No timestamp at all means unknown, not old - leave it for a later run rather
+                    // than throwing an NPE at the comparison, which is what used to happen.
+                    if (consumed != null && consumed.isBefore(deleteBefore)) {
+                        var deleted = fulfillmentService.deleteReservation(reservation);
                         log.info("Deleted consumed reservation {} for order {}", deleted.getId(), order.getOrderNo());
                     }
                 } catch (Exception e) {

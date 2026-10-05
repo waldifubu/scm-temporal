@@ -21,14 +21,20 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -99,7 +105,9 @@ class ComponentServiceSupplierStepsTest {
 
     /** One step at a time: anything but OPEN is a 409, a second accept included. */
     @ParameterizedTest
-    @EnumSource(value = RequestStatus.class, names = {"APPROVED", "IN_TRANSIT", "DELIVERED", "IN_STOCK"})
+    // EXCLUDE rather than a list of the others: a status added later is covered without this
+    // test being touched, which is how REJECTED and CANCELLED arrived.
+    @EnumSource(value = RequestStatus.class, names = "OPEN", mode = EnumSource.Mode.EXCLUDE)
     void approvesAnOpenRequestOnly(RequestStatus status) {
         RequestComponent request = request(status);
 
@@ -122,7 +130,7 @@ class ComponentServiceSupplierStepsTest {
 
     /** Not from OPEN either - the supplier accepts first and sends second. */
     @ParameterizedTest
-    @EnumSource(value = RequestStatus.class, names = {"OPEN", "IN_TRANSIT", "DELIVERED", "IN_STOCK"})
+    @EnumSource(value = RequestStatus.class, names = "APPROVED", mode = EnumSource.Mode.EXCLUDE)
     void sendsAnApprovedRequestOnly(RequestStatus status) {
         RequestComponent request = request(status);
 
@@ -146,7 +154,7 @@ class ComponentServiceSupplierStepsTest {
 
     /** Not from APPROVED either - sent first, handed over second. */
     @ParameterizedTest
-    @EnumSource(value = RequestStatus.class, names = {"OPEN", "APPROVED", "DELIVERED", "IN_STOCK"})
+    @EnumSource(value = RequestStatus.class, names = "IN_TRANSIT", mode = EnumSource.Mode.EXCLUDE)
     void handsOverASentRequestOnly(RequestStatus status) {
         RequestComponent request = request(status);
 
@@ -168,6 +176,166 @@ class ComponentServiceSupplierStepsTest {
         service.requestDelivered(REQUEST_ID, 1L);
 
         assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.DELIVERED);
+    }
+
+    // ------------------------------------------------------------------ saying no
+
+    /** Declining a request nobody promised anything for. An end state, nothing to undo. */
+    @Test
+    void rejectTakesAnOpenRequestToRejected() {
+        RequestComponent request = request(RequestStatus.OPEN);
+
+        RequestComponentResponse response = service.rejectRequest(REQUEST_ID, SUPPLIER_ID);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.REJECTED);
+        assertThat(response.requestStatus()).isEqualTo(RequestStatus.REJECTED);
+    }
+
+    /** Only while nothing was promised - afterwards it is a cancellation, which says something else. */
+    @ParameterizedTest
+    @EnumSource(value = RequestStatus.class, names = "OPEN", mode = EnumSource.Mode.EXCLUDE)
+    void declinesAnOpenRequestOnly(RequestStatus status) {
+        RequestComponent request = request(status);
+
+        assertStatus(catchThrowable(() -> service.rejectRequest(REQUEST_ID, SUPPLIER_ID)),
+                HttpStatus.CONFLICT);
+
+        assertThat(request.getRequestStatus()).isEqualTo(status);
+    }
+
+    /** Calling off a request that was taken on - from either status it can be taken on in. */
+    @ParameterizedTest
+    @EnumSource(value = RequestStatus.class, names = {"APPROVED", "IN_TRANSIT"})
+    void cancelTakesATakenOnRequestToCancelled(RequestStatus status) {
+        RequestComponent request = request(status);
+
+        RequestComponentResponse response = service.cancelRequest(REQUEST_ID, SUPPLIER_ID);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.CANCELLED);
+        assertThat(response.requestStatus()).isEqualTo(RequestStatus.CANCELLED);
+    }
+
+    /**
+     * Not from DELIVERED: the pallet is at our dock then, and calling the request off would be a
+     * return - the same line the shipment side draws at ACCEPTED. Not from OPEN either, that is
+     * reject. IN_STOCK and the two end states are ends.
+     */
+    @ParameterizedTest
+    @EnumSource(value = RequestStatus.class, names = {"APPROVED", "IN_TRANSIT"},
+            mode = EnumSource.Mode.EXCLUDE)
+    void refusesToCancelOutsideTheTakenOnStatuses(RequestStatus status) {
+        RequestComponent request = request(status);
+
+        assertStatus(catchThrowable(() -> service.cancelRequest(REQUEST_ID, SUPPLIER_ID)),
+                HttpStatus.CONFLICT);
+
+        assertThat(request.getRequestStatus()).isEqualTo(status);
+    }
+
+    /** Whose request it is counts here too, and it is asked before the status. */
+    @Test
+    void refusesACancelFromAnotherSupplier() {
+        RequestComponent request = request(RequestStatus.APPROVED);
+
+        assertStatus(catchThrowable(() -> service.cancelRequest(REQUEST_ID, 999L)),
+                HttpStatus.FORBIDDEN);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.APPROVED);
+    }
+
+    /** Both ends record who put the request there. */
+    @Test
+    void recordsWhoCancelled() {
+        RequestComponent request = request(RequestStatus.APPROVED);
+        Supplier acting = new Supplier();
+        acting.setId(SUPPLIER_ID);
+        acting.setFirstName("Sam");
+        acting.setLastName("Supply");
+        when(userRepository.findById(SUPPLIER_ID)).thenReturn(Optional.of(acting));
+
+        service.cancelRequest(REQUEST_ID, SUPPLIER_ID);
+
+        assertThat(request.getAssignedBy()).isSameAs(acting);
+    }
+
+    // ------------------------------------------------------------------ who moved it
+
+    /**
+     * Every step records the acting user next to the status - updated stamps itself through
+     * @UpdateTimestamp, this says who caused the stamp.
+     */
+    @Test
+    void recordsWhoMovedTheRequestOn() {
+        RequestComponent request = request(RequestStatus.OPEN);
+        Supplier acting = new Supplier();
+        acting.setId(SUPPLIER_ID);
+        acting.setFirstName("Sam");
+        acting.setLastName("Supply");
+        when(userRepository.findById(SUPPLIER_ID)).thenReturn(Optional.of(acting));
+
+        RequestComponentResponse response = service.approveRequest(REQUEST_ID, SUPPLIER_ID);
+
+        assertThat(request.getAssignedBy()).isSameAs(acting);
+        assertThat(response.assignedById()).isEqualTo(SUPPLIER_ID);
+        assertThat(response.assignedByName()).isEqualTo("Sam Supply");
+    }
+
+    /**
+     * A refused step records nobody: assignedBy is written after the checks, so a 409 leaves the row
+     * exactly as it was.
+     */
+    @Test
+    void recordsNobodyForARefusedStep() {
+        RequestComponent request = request(RequestStatus.IN_TRANSIT);
+
+        catchThrowable(() -> service.approveRequest(REQUEST_ID, SUPPLIER_ID));
+
+        assertThat(request.getAssignedBy()).isNull();
+    }
+
+    /**
+     * A user the lookup cannot resolve leaves the column null rather than failing the step - the
+     * order side treats its audit user the same way.
+     */
+    @Test
+    void stillMovesTheRequestWhenTheUserCannotBeResolved() {
+        RequestComponent request = request(RequestStatus.OPEN);
+        when(userRepository.findById(SUPPLIER_ID)).thenReturn(Optional.empty());
+
+        service.approveRequest(REQUEST_ID, SUPPLIER_ID);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.APPROVED);
+        assertThat(request.getAssignedBy()).isNull();
+    }
+
+    // ------------------------------------------------------------------ the work list
+
+    /** Without a status the list covers every request. */
+    @Test
+    void listsEveryRequestWithoutAStatus() {
+        RequestComponent request = request(RequestStatus.DELIVERED);
+        PageRequest pageable = PageRequest.of(0, 25);
+        when(requestComponentRepository.findAllBy(pageable))
+                .thenReturn(new PageImpl<>(List.of(request), pageable, 1));
+
+        var page = service.findRequests(null, pageable);
+
+        assertThat(page.getContent()).singleElement()
+                .satisfies(row -> assertThat(row.requestStatus()).isEqualTo(RequestStatus.DELIVERED));
+        verify(requestComponentRepository, never()).findAllByRequestStatus(any(), any());
+    }
+
+    /** With one, only that status is asked for - the warehouse works DELIVERED off. */
+    @Test
+    void narrowsTheListToOneStatus() {
+        PageRequest pageable = PageRequest.of(0, 25);
+        when(requestComponentRepository.findAllByRequestStatus(RequestStatus.DELIVERED, pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        var page = service.findRequests(RequestStatus.DELIVERED, pageable);
+
+        assertThat(page.getContent()).isEmpty();
+        verify(requestComponentRepository, never()).findAllBy(any());
     }
 
     // ------------------------------------------------------------------ whose request it is

@@ -34,7 +34,8 @@ public class PackageController {
      */
     // Packages belong to WAREHOUSE, shipments to LOGISTICS, and the two do not overlap: everything
     // under /packages and /shipment-packages is packing work, everything under /shipments is
-    // planning. See the note on getShipmentPackages about what that costs.
+    // planning. The planning side gets what it needs from a view of its own,
+    // GET /shipments/packages - see the note on getShipmentPackages.
     @GetMapping(path = "/packages", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<PackageItemResponse> getPackageItems(
@@ -50,9 +51,10 @@ public class PackageController {
      * order list in {@code OrderController.list}, down to the parameter names. {@code sort} takes the
      * fields of the package itself (id, packageNumber, createdAt, ...).
      */
-    // LOGISTICS removed on purpose, see above. Note what it means: POST /shipments takes the ids of
-    // free PACKED packages, and this list - with status=PACKED - was the only way to find them. The
-    // planning side has no view of its own for that yet; see issues.txt.
+    // LOGISTICS removed on purpose, see above. This list - with status=PACKED - used to be the only
+    // way to find the free packages POST /shipments takes, which is why the planning side was on it.
+    // It has GET /shipments/packages of its own now, and that one is the better list anyway: it
+    // leaves out the packages already travelling in a shipment, which this one still shows.
     @GetMapping(path = "/shipment-packages", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<ShipmentPackageListDto> getShipmentPackages(

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.entity.Component;
@@ -20,12 +21,15 @@ import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.impl.StockService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.EnumSet;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -45,9 +49,19 @@ public class ComponentServiceImpl implements ComponentService {
     private final StorehouseRepository storehouseRepository;
     private final StockService stockService;
 
+    /**
+     * While the supplier can still call a request off: they have taken it on, but the goods are not
+     * at our dock yet. From DELIVERED on it would be a return, which this process does not model -
+     * the same line the shipment side draws at ACCEPTED. OPEN is not here on purpose: declining a
+     * request nobody promised anything for is REJECTED, which says something else.
+     */
+    private static final Set<RequestStatus> CANCELLABLE_IN = EnumSet.of(
+            RequestStatus.APPROVED, RequestStatus.IN_TRANSIT);
+
     @Override
     @Transactional
-    public List<RequestComponentResponse> requestComponents(Long supplierId, RequestComponentsRequest request) {
+    public List<RequestComponentResponse> requestComponents(Long supplierId, RequestComponentsRequest request,
+                                                            Long userId) {
         User user = userRepository.findById(supplierId)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", supplierId));
 
@@ -76,12 +90,17 @@ public class ComponentServiceImpl implements ComponentService {
                     + unknown.stream().map(UUID::toString).collect(Collectors.joining(", ")));
         }
 
+        // Resolved once for the whole body rather than per line - every row of one request was
+        // placed by the same person.
+        User placedBy = actingUser(userId);
+
         List<RequestComponent> requests = items.stream().map(item -> {
             RequestComponent requested = new RequestComponent();
             requested.setComponent(bySku.get(item.componentId()));
             requested.setSupplier(supplier);
             requested.setQty(item.qty());
             requested.setComment(blankToNull(item.comment()));
+            requested.setAssignedBy(placedBy);
             // requestStatus stays what the entity sets on insert - OPEN.
             return requested;
         }).toList();
@@ -91,6 +110,20 @@ public class ComponentServiceImpl implements ComponentService {
         return requestComponentRepository.saveAll(requests).stream()
                 .map(RequestComponentResponse::from)
                 .toList();
+    }
+
+    /**
+     * Mapped here, while the transaction is open, like every other answer: the rows arrive with
+     * their component and their acting user fetched, so the page costs one query and not one per row.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<RequestComponentResponse> findRequests(RequestStatus status, Pageable pageable) {
+        Page<RequestComponent> page = status == null
+                ? requestComponentRepository.findAllBy(pageable)
+                : requestComponentRepository.findAllByRequestStatus(status, pageable);
+
+        return page.map(RequestComponentResponse::from);
     }
 
     @Override
@@ -109,6 +142,41 @@ public class ComponentServiceImpl implements ComponentService {
     @Transactional
     public RequestComponentResponse requestDelivered(Long requestId, Long userId) {
         return advanceRequest(requestId, RequestStatus.IN_TRANSIT, RequestStatus.DELIVERED, userId);
+    }
+
+    @Override
+    @Transactional
+    public RequestComponentResponse rejectRequest(Long requestId, Long userId) {
+        return advanceRequest(requestId, RequestStatus.OPEN, RequestStatus.REJECTED, userId);
+    }
+
+    /**
+     * The one step with two possible starting points, so it does not go through
+     * {@link #advanceRequest}, which allows exactly one.
+     * <p>
+     * Same shape otherwise: read FOR UPDATE, the answering supplier checked before the status (a
+     * supplier poking at a request that is not theirs learns nothing about where it stands), the
+     * acting user recorded after the checks.
+     */
+    @Override
+    @Transactional
+    public RequestComponentResponse cancelRequest(Long requestId, Long userId) {
+        RequestComponent request = requestComponentRepository.findForUpdateById(requestId)
+                .orElseThrow(() -> new ResourceNotFoundException("RequestComponent", "id", requestId));
+
+        requireAnsweringSupplier(request, userId);
+
+        if (!CANCELLABLE_IN.contains(request.getRequestStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Request " + requestId + " is "
+                    + request.getRequestStatus() + ", only " + CANCELLABLE_IN
+                    + " can be cancelled - a delivered request would be a return");
+        }
+
+        request.setRequestStatus(RequestStatus.CANCELLED);
+        request.setAssignedBy(actingUser(userId));
+        requestComponentRepository.save(request);
+
+        return RequestComponentResponse.from(request);
     }
 
     /**
@@ -153,10 +221,22 @@ public class ComponentServiceImpl implements ComponentService {
             throw new APIException(HttpStatus.CONFLICT,
                     "Request " + requestId + " has no usable quantity to book in");
         }
+        // Stock.onHand is an int and the quantity a Long: intValue() on anything above
+        // Integer.MAX_VALUE truncates, and 3_000_000_000 comes out as -1_294_967_296 - a receipt
+        // that *lowers* the stock it is meant to raise. The column is a bigint since
+        // RequestComponentQtyMigration, so a row can hold such a value; what keeps one from being
+        // ordered is RequestComponentsRequest.MAX_QTY, and what keeps it from being booked is this.
+        // Two gates on purpose - the one at the request can be raised, this one cannot be passed.
+        if (request.getQty() > Integer.MAX_VALUE) {
+            throw new APIException(HttpStatus.CONFLICT, "Request " + requestId + " is over "
+                    + request.getQty() + " units - too much to book into stock in one go");
+        }
 
         stockService.add(component.getSku(), storehouseId, request.getQty().intValue());
 
         request.setRequestStatus(RequestStatus.IN_STOCK);
+        // Who booked it in - the one step that creates real stock, so the one where it matters most.
+        request.setAssignedBy(actingUser(userId));
         requestComponentRepository.save(request);
 
         return RequestComponentResponse.from(request);
@@ -183,6 +263,9 @@ public class ComponentServiceImpl implements ComponentService {
         }
 
         request.setRequestStatus(target);
+        // Next to the status, every time: updated stamps itself through @UpdateTimestamp, this says
+        // who caused the stamp. Written after the checks, so a refused step changes nothing.
+        request.setAssignedBy(actingUser(userId));
         requestComponentRepository.save(request);
 
         // Mapped here, while the transaction is open - component and supplier are LAZY.
@@ -206,6 +289,16 @@ public class ComponentServiceImpl implements ComponentService {
 
         throw new APIException(HttpStatus.FORBIDDEN,
                 "Request " + request.getId() + " was placed with another supplier");
+    }
+
+    /**
+     * The acting user as an entity, for {@code assignedBy}. Leniently: a null id, or one no user
+     * answers to, leaves the column null rather than failing the step that is being reported. The
+     * order side treats its audit user the same way - a sweep running as nobody still has to be able
+     * to move a status.
+     */
+    private User actingUser(Long userId) {
+        return userId == null ? null : userRepository.findById(userId).orElse(null);
     }
 
     /** An empty comment is no comment - stored as null, so it stays out of the JSON. */
@@ -238,25 +331,60 @@ public class ComponentServiceImpl implements ComponentService {
 
     @Override
     @Transactional
-    public Component create(Component component) {
+    public Component create(ComponentRequestDto request) {
+        // A fresh entity, so there is no way for a request to carry an id and turn the save into a
+        // merge over somebody else's row.
+        Component component = new Component();
+        apply(request, component);
         validateUniqueIdentifiers(component, null);
-        bindProduct(component);
         return componentRepository.save(component);
+    }
+
+    /**
+     * Copies a request onto a component and resolves its product. Shared by create and update, so
+     * the two cannot drift apart on which fields a client may set.
+     * <p>
+     * {@code sku} and {@code weight} are only written when they are sent: left out on an update they
+     * keep their value, and left out on create the entity fills them in itself ({@code @PrePersist}).
+     */
+    private void apply(ComponentRequestDto request, Component component) {
+        Product product = productRepository.findByArticleNo(request.productArticleNo())
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "Product", "articleNo", request.productArticleNo()));
+
+        component.setProduct(product);
+        component.setName(request.name());
+        component.setManufacturer(request.manufacturer());
+        component.setArticleNo(request.articleNo());
+        component.setDescription(request.description());
+        component.setExternalId(request.externalId());
+        component.setQty(request.qty());
+        if (request.sku() != null) {
+            component.setSku(request.sku());
+        }
+        if (request.weight() != null) {
+            component.setWeight(request.weight());
+        }
     }
 
     @Override
     @Transactional
-    public Component update(Long id, Component component) {
+    public Component update(Long id, ComponentRequestDto request) {
         Component existingComponent = componentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
 
-        validateUniqueIdentifiers(component, existingComponent);
-        existingComponent.setManufacturer(component.getManufacturer());
-        existingComponent.setName(component.getName());
-        existingComponent.setSku(component.getSku());
-        existingComponent.setExternalId(component.getExternalId());
-        existingComponent.setProduct(component.getProduct());
-        bindProduct(existingComponent);
+        // Checked against a throwaway carrying the incoming identifiers, the way it was checked
+        // against the bound entity before: the existing row is excluded from the uniqueness test, so
+        // keeping your own sku is not a conflict with yourself.
+        Component incoming = new Component();
+        incoming.setSku(request.sku());
+        incoming.setExternalId(request.externalId());
+        validateUniqueIdentifiers(incoming, existingComponent);
+
+        // One place decides which fields a client may set - update used to copy a different, smaller
+        // selection than create bound, so description, weight, articleNo and qty could be created
+        // but never changed.
+        apply(request, existingComponent);
 
         return componentRepository.save(existingComponent);
     }
@@ -282,16 +410,5 @@ public class ComponentServiceImpl implements ComponentService {
                 && (existingComponent == null || !component.getExternalId().equals(existingComponent.getExternalId()))) {
             throw new APIException(HttpStatus.CONFLICT, "Article number already exists!");
         }
-    }
-
-    private void bindProduct(Component component) {
-        Product product = component.getProduct();
-        if (product == null || product.getId() == null) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Product is required!");
-        }
-
-        Product persistedProduct = productRepository.findById(product.getId())
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "id", product.getId()));
-        component.setProduct(persistedProduct);
     }
 }

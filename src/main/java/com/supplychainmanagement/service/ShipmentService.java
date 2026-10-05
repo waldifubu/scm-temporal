@@ -4,6 +4,7 @@ import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
+import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.dto.shipping.UpdateShipmentRequest;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
@@ -37,6 +38,22 @@ public interface ShipmentService {
 
     /** One page of shipments, all of them or those in the given status. */
     Page<ShipmentListDto> findShipments(ShipmentStatus status, Pageable pageable);
+
+    /**
+     * The packages the planning side may still ship: PACKED and in no shipment yet - exactly the set
+     * {@link #createShipment} and {@link #addShipmentPackages} accept.
+     * <p>
+     * A view of its own rather than the warehouse's package list: everything under /packages is
+     * packing work (ADMIN, WAREHOUSE), everything under /shipments is planning (ADMIN, LOGISTICS),
+     * and the two do not overlap. Without this, LOGISTICS had to go through
+     * {@code GET /shipment-packages?status=PACKED} to find anything to ship - the only way there was,
+     * which is why that list was LOGISTICS' as well and the split was not a split.
+     * <p>
+     * It says more than the filtered package list did: that one also showed packages already
+     * travelling in a shipment, so every id taken from it was a guess that {@code POST /shipments}
+     * answered with a 409.
+     */
+    Page<ShipmentPackageListDto> findShippablePackages(Pageable pageable);
 
     /** One shipment with its packages and their contents. */
     ShipmentResponse findShipment(Long shipmentId);

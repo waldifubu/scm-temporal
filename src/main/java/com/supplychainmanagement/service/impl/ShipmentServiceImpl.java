@@ -4,6 +4,7 @@ import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
+import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.dto.shipping.ShipmentResponse;
 import com.supplychainmanagement.dto.shipping.UpdateShipmentRequest;
 import com.supplychainmanagement.entity.Order;
@@ -219,6 +220,35 @@ public class ShipmentServiceImpl implements ShipmentService {
 
         // The page decides order and totals; the second query only supplies the packages.
         return page.map(shipment -> ShipmentListDto.from(withPackages.getOrDefault(shipment.getId(), shipment)));
+    }
+
+    /**
+     * The planning side's own list of what it may ship: PACKED packages no shipment holds.
+     * <p>
+     * Two queries like {@link #findShipments} and like the warehouse's package list - the page, then
+     * the packages of that page with their items, order lines, products and orders, which every row
+     * reads for the content weight and the due date. A collection fetch in the page query would make
+     * Hibernate page in memory.
+     * <p>
+     * Hard-wired to PACKED rather than taking a status parameter: any other status is not shippable,
+     * and a free OPEN package is the warehouse's business, not the planner's.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<ShipmentPackageListDto> findShippablePackages(Pageable pageable) {
+        Page<ShipmentPackage> page = shipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull(
+                ShipmentPackageStatus.PACKED, pageable);
+        if (page.isEmpty()) {
+            return page.map(ShipmentPackageListDto::from);
+        }
+
+        List<Long> ids = page.getContent().stream().map(ShipmentPackage::getId).toList();
+        Map<Long, ShipmentPackage> withContents = shipmentPackageRepository.findWithItemsByIdIn(ids).stream()
+                .collect(Collectors.toMap(ShipmentPackage::getId, Function.identity(), (first, same) -> first));
+
+        // The page decides order and totals; the second query only supplies the contents.
+        return page.map(shipmentPackage -> ShipmentPackageListDto.from(
+                withContents.getOrDefault(shipmentPackage.getId(), shipmentPackage)));
     }
 
     /**

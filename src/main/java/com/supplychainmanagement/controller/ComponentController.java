@@ -1,18 +1,22 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
-import com.supplychainmanagement.dto.mapper.RequestComponentMapper;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
+import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RequestComponentService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -34,7 +38,6 @@ public class ComponentController {
     private final ComponentMapper componentMapper;
     private final UserService userService;
     private final RequestComponentService requestComponentService;
-    private final RequestComponentMapper requestComponentMapper;
 
     // WAREHOUSE reads as well: it may order components through /request/{supplierId}, and without
     // the catalogue it would have to get the SKU from somewhere else. Reading only - creating and
@@ -45,10 +48,51 @@ public class ComponentController {
         return componentService.findAll().stream().map(componentMapper::mapToDto).toList();
     }
 
+    /**
+     * Component requests, all of them or those in one status - the warehouse's work list.
+     * <p>
+     * It exists because the goods receipt takes a request id and nothing told the warehouse which
+     * ids there are: {@code GET /my-requests} below is the supplier's own list, filtered by
+     * {@code supplier_id}, so WAREHOUSE could not read it and an ADMIN asking it got their own empty
+     * one. {@code ?status=DELIVERED} is the pile waiting at the dock; {@code IN_TRANSIT} is what is
+     * coming. Same arrangement as {@code GET /shipments/distributor} and
+     * {@code GET /shipments/packages} - a role gets its own view rather than read access to
+     * another's.
+     * <p>
+     * Paged like every other list, {@code sort} over the fields of the request itself. Oldest first
+     * by default, because a work list is worked off in the order things arrived - not {@code id},
+     * which the other lists use.
+     * <p>
+     * Plural, next to the singular {@code POST /request/{supplierId}} that creates one: the path of
+     * the existing endpoint is left as clients know it.
+     */
+    @GetMapping(path = "/requests", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public PageResponse<RequestComponentResponse> getRequests(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "requestDate") String sort,
+            @RequestParam(required = false) RequestStatus status,
+            @RequestParam(defaultValue = "ASC") String order) {
+        Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
+        return PageResponse.of(componentService.findRequests(
+                status, PageRequest.of(page, size, Sort.by(direction, sort))));
+    }
+
+    /**
+     * The supplier's own requests - filtered by {@code supplier_id}, so an ADMIN asking gets their
+     * own (empty) list. The warehouse's view of the same rows is {@code GET /requests} above.
+     * <p>
+     * Answers {@link RequestComponentResponseDto}, mapped in the service while the transaction is
+     * open. That DTO used to carry the {@code Component} <strong>entity</strong> in a field, which
+     * serialized the component's product along and resolved the graph through the open-in-view
+     * session, and its {@code qty} was an {@code Integer} while the entity's is a {@code Long} - two
+     * things MapStruct did silently.
+     */
     @GetMapping(path = "/my-requests", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public List<RequestComponentResponseDto> getMyRequests(@AuthenticationPrincipal User user) {
-        return requestComponentService.findMyRequests(userService.getAuthenticatedUserId(user)).stream().map(requestComponentMapper::mapToDto).toList();
+        return requestComponentService.findMyRequests(userService.getAuthenticatedUserId(user));
     }
 
     /*
@@ -90,8 +134,10 @@ public class ComponentController {
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
     @ResponseStatus(HttpStatus.CREATED)
     public List<RequestComponentResponse> requestComponents(@PathVariable Long supplierId,
-                                                            @Valid @RequestBody RequestComponentsRequest request) {
-        return componentService.requestComponents(supplierId, request);
+                                                            @Valid @RequestBody RequestComponentsRequest request,
+                                                            @AuthenticationPrincipal User authUser) {
+        return componentService.requestComponents(supplierId, request,
+                userService.getAuthenticatedUserId(authUser));
     }
 
     
@@ -127,7 +173,32 @@ public class ComponentController {
     }
 
     /**
-     * The warehouse books a delivery in: IN_TRANSIT to IN_STOCK, and the requested quantity is added
+     * The supplier declines a request they have not taken on: OPEN to REJECTED. An end state -
+     * nothing was promised, so nothing has to be undone.
+     */
+    @PostMapping(path = "/supplier/{requestId}/reject", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
+    public RequestComponentResponse rejectRequest(@PathVariable Long requestId,
+                                                  @AuthenticationPrincipal User authUser) {
+        return componentService.rejectRequest(requestId, userService.getAuthenticatedUserId(authUser));
+    }
+
+    /**
+     * The supplier calls off a request they had taken on: APPROVED or IN_TRANSIT to CANCELLED. Not
+     * from DELIVERED - the goods are at our dock then, and that would be a return.
+     * <p>
+     * No body: there is no column for a reason, and {@code comment} belongs to whoever ordered the
+     * part - overwriting it would throw away why it was needed.
+     */
+    @PostMapping(path = "/supplier/{requestId}/cancel", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
+    public RequestComponentResponse cancelRequest(@PathVariable Long requestId,
+                                                  @AuthenticationPrincipal User authUser) {
+        return componentService.cancelRequest(requestId, userService.getAuthenticatedUserId(authUser));
+    }
+
+    /**
+     * The warehouse books a delivery in: DELIVERED to IN_STOCK, and the requested quantity is added
      * to the stock of this component's SKU in the given storehouse. Only from DELIVERED - the
      * supplier reports the handover first. The storehouse is named here
      * because the request does not carry one - booked in is where the goods actually arrived.
@@ -144,15 +215,21 @@ public class ComponentController {
                 userService.getAuthenticatedUserId(authUser));
     }
 
+    /**
+     * Creates a component - a bill-of-materials line of one product, named by its {@code articleNo}.
+     * See {@link ComponentRequestDto} for what a client may send, and why it is not the entity.
+     */
     @PostMapping(path = "/", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ComponentResponseDto createComponent(@RequestBody Component component) {
+    public ComponentResponseDto createComponent(@Valid @RequestBody ComponentRequestDto component) {
         return componentMapper.mapToDto(componentService.create(component));
     }
 
     @PutMapping(path = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ComponentResponseDto updateComponent(@PathVariable Long id, @RequestBody Component component) {
+    /** Changes a component. The id comes from the path; the body never carries one. */
+    public ComponentResponseDto updateComponent(@PathVariable Long id,
+                                                @Valid @RequestBody ComponentRequestDto component) {
         return componentMapper.mapToDto(componentService.update(id, component));
     }
 

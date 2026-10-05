@@ -1,12 +1,15 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.service.OrderNumberScrambler;
 import com.supplychainmanagement.model.enums.ReservationStatus;
+import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
  * com.supplychainmanagement.ApplicationTests}.
  */
 @SpringBootTest
+@ActiveProfiles("test")
 @Transactional
 class CustomQueryExecutionTest {
 
@@ -200,6 +204,78 @@ class CustomQueryExecutionTest {
 
         assertThat(page.getContent()).allSatisfy(shipmentPackage ->
                 assertThat(shipmentPackage.getPackageNumber()).contains("PKG-"));
+    }
+
+    /**
+     * The planning side's list of shippable packages: every row it returns really is PACKED and in no
+     * shipment - checked against the data, so it also holds once there are such packages.
+     */
+    @Test
+    void findAllByShipmentPackageStatusAndShipmentIsNullReturnsOnlyFreePackedPackages() {
+        var page = shipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull(
+                ShipmentPackageStatus.PACKED, PageRequest.of(0, 50, Sort.by(Sort.Direction.ASC, "id")));
+
+        assertThat(page.getContent()).allSatisfy(shipmentPackage -> {
+            assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
+            assertThat(shipmentPackage.getShipment()).isNull();
+        });
+    }
+
+    /**
+     * The warehouse's work list, with its entity graph: component and acting user come along, which
+     * only resolves when the query runs. Sorted by a field of the request itself.
+     */
+    @Test
+    void findAllByOnRequestsRuns() {
+        var page = requestComponentRepository.findAllBy(
+                PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "requestDate")));
+
+        assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    /** The same page narrowed to a status - every row really is in it. */
+    @Test
+    void findAllByRequestStatusReturnsOnlyThatStatus() {
+        var page = requestComponentRepository.findAllByRequestStatus(
+                RequestStatus.DELIVERED, PageRequest.of(0, 50, Sort.by(Sort.Direction.ASC, "id")));
+
+        assertThat(page.getContent()).allSatisfy(request ->
+                assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.DELIVERED));
+    }
+
+    /** The locking stock finder - every write path reads the row through it. */
+    @Test
+    void findForUpdateByStorehouseIdAndSkuRuns() {
+        assertThatCode(() -> stockRepository.findForUpdateByStorehouseIdAndSku(UNKNOWN_ID, UNKNOWN_SKU))
+                .doesNotThrowAnyException();
+    }
+
+    /**
+     * The order number counter. Native and against a sequence, so no unit test can see whether the
+     * sequence is even there - and it has to be, or no order can be created. Two draws in a row to
+     * hold that it really counts up rather than returning a constant.
+     */
+    @Test
+    void nextOrderNoCounterCountsUp() {
+        Long first = orderRepository.nextOrderNoCounter();
+        Long second = orderRepository.nextOrderNoCounter();
+
+        assertThat(first).isNotNull().isPositive();
+        assertThat(second).isGreaterThan(first);
+    }
+
+    /**
+     * And that what the service makes of it is a usable order number - the counter alone says
+     * nothing about the range. The width is read off FIRST, so moving the range does not leave a
+     * false assertion behind.
+     */
+    @Test
+    void theCounterBecomesAnEightDigitOrderNumber() {
+        long orderNo = OrderNumberScrambler.orderNoFor(orderRepository.nextOrderNoCounter());
+
+        assertThat(orderNo).isBetween(OrderNumberScrambler.FIRST, OrderNumberScrambler.LAST);
+        assertThat(String.valueOf(orderNo))
+                .hasSize(String.valueOf(OrderNumberScrambler.FIRST).length());
     }
 
     /** The two detail finders with their entity graphs. */

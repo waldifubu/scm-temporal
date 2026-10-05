@@ -48,6 +48,16 @@ public interface ShipmentPackageRepository extends JpaRepository<ShipmentPackage
     Page<ShipmentPackage> findAllByShipmentPackageStatusAndPackageNumberContaining(ShipmentPackageStatus status, String packageNumber, Pageable pageable);
 
     /**
+     * The packages in a status that no shipment holds - with PACKED, exactly what POST /shipments may
+     * consume. {@code shipment} is the owning side of the relation, so a free package is one whose
+     * foreign key is null; a package taken out of a shipment is free again by the same rule.
+     * <p>
+     * The packages alone, like {@link #findAllByShipmentPackageStatus} - the contents come from
+     * {@link #findWithItemsByIdIn}, because a collection fetch in a paged query is paged in memory.
+     */
+    Page<ShipmentPackage> findAllByShipmentPackageStatusAndShipmentIsNull(ShipmentPackageStatus status, Pageable pageable);
+
+    /**
      * One package with its contents, fetched like {@link #findWithItemsByIdIn} - a single package is
      * not paged, so the collection can come with it in one query.
      */

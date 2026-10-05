@@ -6,6 +6,7 @@ import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.Customer;
 import com.supplychainmanagement.entity.users.Supplier;
+import com.supplychainmanagement.entity.users.Warehouse;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
@@ -48,6 +49,8 @@ import static org.mockito.Mockito.when;
 class ComponentServiceRequestTest {
 
     private static final Long SUPPLIER_ID = 12L;
+    /** Who is ordering - kept on every row as assignedBy. */
+    private static final Long ORDERED_BY = 77L;
     private static final UUID SCREW = UUID.fromString("706a99c3-944b-11f1-9b51-001e064520d8");
     private static final UUID PLANK = UUID.fromString("806a99c3-944b-11f1-9b51-001e064520d8");
 
@@ -86,9 +89,22 @@ class ComponentServiceRequestTest {
         when(componentRepository.findBySkuIn(any())).thenReturn(List.of(components));
     }
 
-    /** saveAll hands back what it was given, so the response can be read off the entities. */
+    /**
+     * saveAll hands back what it was given, so the response can be read off the entities - and it
+     * runs the @PrePersist callback the way JPA would.
+     * <p>
+     * That callback is where RequestStatus.OPEN comes from since the field initializer was dropped:
+     * the service deliberately sets no status, the entity decides. A mocked repository runs no
+     * lifecycle callback, so without this the rows come back with a null status and the test would
+     * be asserting against the mock rather than against the behaviour.
+     * RequestComponentIdTest holds the same thing against the real database.
+     */
     private void savesWhatItIsGiven() {
-        when(requestComponentRepository.saveAll(anyList())).thenAnswer(call -> call.getArgument(0));
+        when(requestComponentRepository.saveAll(anyList())).thenAnswer(call -> {
+            List<RequestComponent> rows = call.getArgument(0);
+            rows.forEach(RequestComponent::prePersist);
+            return rows;
+        });
     }
 
     private static RequestComponentsRequest request(RequestComponentsRequest.Item... items) {
@@ -114,7 +130,7 @@ class ComponentServiceRequestTest {
         savesWhatItIsGiven();
 
         List<RequestComponentResponse> placed =
-                service.requestComponents(SUPPLIER_ID, request(item(SCREW, 12, "Notwendig")));
+                service.requestComponents(SUPPLIER_ID, request(item(SCREW, 12, "Notwendig")), ORDERED_BY);
 
         assertThat(saved()).singleElement().satisfies(row -> {
             assertThat(row.getComponent().getSku()).isEqualTo(SCREW);
@@ -142,7 +158,7 @@ class ComponentServiceRequestTest {
         savesWhatItIsGiven();
 
         service.requestComponents(SUPPLIER_ID,
-                request(item(SCREW, 12, "für die Halle"), item(SCREW, 3, "Reserve")));
+                request(item(SCREW, 12, "für die Halle"), item(SCREW, 3, "Reserve")), ORDERED_BY);
 
         assertThat(saved())
                 .extracting(RequestComponent::getQty, RequestComponent::getComment)
@@ -157,7 +173,7 @@ class ComponentServiceRequestTest {
         savesWhatItIsGiven();
 
         service.requestComponents(SUPPLIER_ID,
-                request(item(SCREW, 12, null), item(PLANK, 2, null), item(SCREW, 1, null)));
+                request(item(SCREW, 12, null), item(PLANK, 2, null), item(SCREW, 1, null)), ORDERED_BY);
 
         verify(componentRepository).findBySkuIn(any());
         verify(componentRepository, never()).findBySku(any());
@@ -171,9 +187,43 @@ class ComponentServiceRequestTest {
         known(component(5L, SCREW, "screw"));
         savesWhatItIsGiven();
 
-        service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, "   "), item(SCREW, 1, null)));
+        service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, "   "), item(SCREW, 1, null)), ORDERED_BY);
 
         assertThat(saved()).extracting(RequestComponent::getComment).containsExactly(null, null);
+    }
+
+    /**
+     * Every row of one request names who placed it - resolved once for the whole body, since they
+     * were all placed by the same person.
+     */
+    @Test
+    void recordsWhoPlacedTheRequest() {
+        supplier();
+        known(component(5L, SCREW, "screw"));
+        savesWhatItIsGiven();
+        Warehouse orderer = new Warehouse();
+        orderer.setId(ORDERED_BY);
+        when(userRepository.findById(ORDERED_BY)).thenReturn(Optional.of(orderer));
+
+        service.requestComponents(SUPPLIER_ID,
+                request(item(SCREW, 2, null), item(SCREW, 3, null)), ORDERED_BY);
+
+        assertThat(saved()).hasSize(2)
+                .allSatisfy(row -> assertThat(row.getAssignedBy()).isSameAs(orderer));
+        verify(userRepository).findById(ORDERED_BY);
+    }
+
+    /** No acting user is no reason to refuse an order - the column stays null. */
+    @Test
+    void placesTheRequestWithoutAnActingUser() {
+        supplier();
+        known(component(5L, SCREW, "screw"));
+        savesWhatItIsGiven();
+
+        service.requestComponents(SUPPLIER_ID, request(item(SCREW, 2, null)), null);
+
+        assertThat(saved()).singleElement()
+                .satisfies(row -> assertThat(row.getAssignedBy()).isNull());
     }
 
     /** All or nothing: one unknown SKU places nothing, and the message names every one of them. */
@@ -183,7 +233,7 @@ class ComponentServiceRequestTest {
         known(component(5L, SCREW, "screw"));
 
         Throwable thrown = catchThrowable(() -> service.requestComponents(SUPPLIER_ID,
-                request(item(SCREW, 12, null), item(PLANK, 2, null))));
+                request(item(SCREW, 12, null), item(PLANK, 2, null)), ORDERED_BY));
 
         assertThat(thrown).isInstanceOfSatisfying(APIException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
@@ -195,7 +245,7 @@ class ComponentServiceRequestTest {
     void answersAnUnknownSupplierWith404() {
         when(userRepository.findById(SUPPLIER_ID)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, null))))
+        assertThatThrownBy(() -> service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, null)), ORDERED_BY))
                 .isInstanceOf(ResourceNotFoundException.class);
 
         verify(requestComponentRepository, never()).saveAll(anyList());
@@ -211,7 +261,7 @@ class ComponentServiceRequestTest {
         customer.setId(SUPPLIER_ID);
         when(userRepository.findById(SUPPLIER_ID)).thenReturn(Optional.of(customer));
 
-        Throwable thrown = catchThrowable(() -> service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, null))));
+        Throwable thrown = catchThrowable(() -> service.requestComponents(SUPPLIER_ID, request(item(SCREW, 1, null)), ORDERED_BY));
 
         assertThat(thrown).isInstanceOfSatisfying(APIException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));

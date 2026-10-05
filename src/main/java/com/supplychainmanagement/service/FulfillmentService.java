@@ -47,5 +47,11 @@ public interface FulfillmentService {
 
     List<Reservation> findConsumedReservations(Order order);
 
-    Reservation deleteReservation(Reservation reservation, String systemUser);
+    /**
+     * Deletes one consumed reservation - the row that keeps its order line from ever holding a
+     * reservation again. Bookkeeping only: no status is touched and no event is published, so it
+     * takes no acting user. It used to take one for a {@code revertOrderStatus} call that could
+     * never fire on the orders this is run for.
+     */
+    Reservation deleteReservation(Reservation reservation);
 }

@@ -68,6 +68,18 @@ public class Reservation {
 
     private LocalDateTime expiresAt;
 
+    /**
+     * When the stock behind this reservation was actually taken off the shelf - set by
+     * {@link #consume()} and null while the reservation is ACTIVE.
+     * <p>
+     * The cleanup sweep needs it. It used to measure the age of a consumed reservation against
+     * {@code expiresAt}, which is one hour after reserving and says nothing about when the goods
+     * moved: a line reserved on Monday and picked on Friday looked days old the moment it was
+     * picked. Nullable, because rows consumed before this column existed have no such moment - the
+     * sweep falls back to {@code expiresAt} for those.
+     */
+    private LocalDateTime consumedAt;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(
             name = "storehouse_id",
@@ -125,5 +137,16 @@ public class Reservation {
         }
 
         status = ReservationStatus.CONSUMED;
+        consumedAt = LocalDateTime.now();
+    }
+
+    /**
+     * How old the consumption is, measured from {@link #consumedAt} and from {@code expiresAt} where
+     * that is missing - a row consumed before the column existed. Null for a reservation that was
+     * never consumed and for one that has neither timestamp, which the caller has to read as
+     * "unknown", not as "old".
+     */
+    public LocalDateTime consumedOrExpiredAt() {
+        return consumedAt != null ? consumedAt : expiresAt;
     }
 }

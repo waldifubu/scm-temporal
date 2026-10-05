@@ -4,6 +4,7 @@ import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.Supplier;
+import com.supplychainmanagement.entity.users.Warehouse;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.RequestStatus;
@@ -124,7 +125,9 @@ class ComponentServiceReceiveTest {
      * the goods are on the road, not at the dock.
      */
     @ParameterizedTest
-    @EnumSource(value = RequestStatus.class, names = {"OPEN", "APPROVED", "IN_TRANSIT", "IN_STOCK"})
+    // EXCLUDE rather than a list of the others: a status added later is covered without this
+    // test being touched, which is how REJECTED and CANCELLED arrived.
+    @EnumSource(value = RequestStatus.class, names = "DELIVERED", mode = EnumSource.Mode.EXCLUDE)
     void booksInADeliveredRequestOnly(RequestStatus status) {
         RequestComponent request = request(status, 12L);
 
@@ -152,6 +155,42 @@ class ComponentServiceReceiveTest {
     @Test
     void refusesARequestWithoutAUsableQuantity() {
         RequestComponent request = request(RequestStatus.DELIVERED, 0L);
+
+        assertStatus(catchThrowable(() -> service.receiveRequest(REQUEST_ID, STOREHOUSE_ID, 99L)),
+                HttpStatus.CONFLICT);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.DELIVERED);
+        verify(stockService, never()).add(any(), any(), any());
+    }
+
+    /** The receipt records who booked it in - the one step that creates real stock. */
+    @Test
+    void recordsWhoBookedItIn() {
+        RequestComponent request = request(RequestStatus.DELIVERED, 12L);
+        Warehouse keeper = new Warehouse();
+        keeper.setId(77L);
+        keeper.setFirstName("Rita");
+        keeper.setLastName("Rack");
+        when(userRepository.findById(77L)).thenReturn(Optional.of(keeper));
+
+        RequestComponentResponse response = service.receiveRequest(REQUEST_ID, STOREHOUSE_ID, 77L);
+
+        assertThat(request.getAssignedBy()).isSameAs(keeper);
+        assertThat(response.assignedById()).isEqualTo(77L);
+        assertThat(response.assignedByName()).isEqualTo("Rita Rack");
+    }
+
+    /**
+     * A quantity that does not fit an int is refused rather than booked wrong: Stock.onHand is an
+     * int, and 3_000_000_000 comes through intValue() as -1_294_967_296, so the receipt would
+     * *lower* the stock it is meant to raise.
+     * <p>
+     * A row can hold such a value since the column became a bigint, so this is the gate that cannot
+     * be passed - MAX_QTY on the request is the one that can be raised.
+     */
+    @Test
+    void refusesAQuantityThatDoesNotFitAnInt() {
+        RequestComponent request = request(RequestStatus.DELIVERED, 3_000_000_000L);
 
         assertStatus(catchThrowable(() -> service.receiveRequest(REQUEST_ID, STOREHOUSE_ID, 99L)),
                 HttpStatus.CONFLICT);

@@ -6,6 +6,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.repository.StockRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
 import lombok.AllArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -22,8 +23,34 @@ public class StockService {
     private final StockRepository stockRepository;
     private final StorehouseRepository storehouseRepository;
 
+    /**
+     * Books {@code quantity} onto the stock of one SKU in one storehouse, creating the row if this is
+     * the first time anything of it lands there.
+     * <p>
+     * {@code @Transactional} and read {@code FOR UPDATE}, like everywhere else in this codebase where
+     * a value is read, checked and written back. It was neither: called from
+     * {@code POST /stock/add} there was no transaction at all, so the read and the write were two of
+     * them, and two concurrent bookings on the same row both computed from the same quantity. What
+     * saved the data was {@code @Version} - and what the caller saw was a 500 from the
+     * {@code Exception} handler for something they had done nothing wrong in. The goods receipt and
+     * {@code produce()} book into the same rows, and {@code assemble()} runs every 150 s.
+     * <p>
+     * Joining the caller's transaction is deliberate rather than {@code REQUIRES_NEW}: the goods
+     * receipt is all or nothing - if the booking fails, the request status must not move either.
+     * <p>
+     * One race is left and it cannot be closed here: if the row does not exist yet, there is nothing
+     * to lock, so two first-ever bookings of the same SKU and storehouse can both insert and the
+     * second hits {@code uq_stock_storehouse_sku}. Retrying would need a transaction of its own,
+     * which is exactly what the caller must not have. It is flushed here instead of at the outer
+     * commit, so it surfaces as a 409 saying what happened rather than as a 500 from somewhere else.
+     */
+    @Transactional
     public Stock add(UUID sku, Long storehouseId, Integer quantity) {
-        Stock stock = stockRepository.findByStorehouseIdAndSku(storehouseId, sku).orElse(null);
+        if (quantity == null || quantity <= 0) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Quantity must be greater than zero");
+        }
+
+        Stock stock = stockRepository.findForUpdateByStorehouseIdAndSku(storehouseId, sku).orElse(null);
 
         if (stock == null) {
             var storehouse = storehouseRepository.findById(storehouseId)
@@ -33,12 +60,19 @@ public class StockService {
             stock.setStorehouse(storehouse);
             stock.setOnHand(0);
             stock.setReserved(0);
+            stock.setOnHand(quantity);
+            try {
+                return stockRepository.saveAndFlush(stock);
+            } catch (DataIntegrityViolationException e) {
+                // The only thing uq_stock_storehouse_sku can mean here: somebody else created the
+                // row between the lock attempt finding nothing and this insert.
+                throw new APIException(HttpStatus.CONFLICT, "Stock for " + sku + " in storehouse "
+                        + storehouseId + " was created concurrently - repeat the booking");
+            }
         }
 
         stock.setOnHand(stock.getOnHand() + quantity);
-        stockRepository.save(stock);
-
-        return stock;
+        return stockRepository.save(stock);
     }
 
     public List<Stock> findAllBySku(UUID sku) {

@@ -214,16 +214,34 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<Reservation> findConsumedReservations(Order order) {
         // Asked per order in the database: loading the first 100 CONSUMED rows of all orders and
         // filtering them here lost every reservation beyond those 100.
         return reservationRepository.findByOrderItemOrderIdAndStatus(order.getId(), ReservationStatus.CONSUMED);
     }
 
+    /**
+     * Deletes one consumed reservation. Bookkeeping, not a business event: the goods left the shelf
+     * when the line was picked, and this row is what has been standing in the way of the line ever
+     * holding a reservation again (the unique constraint on {@code order_item_id}).
+     * <p>
+     * {@code @Transactional}, because it is called from a scheduler where there is no session at
+     * all - a plain repository call would have its own, and anything lazy touched around it fails.
+     * <p>
+     * It deliberately does <strong>not</strong> touch the order status. That call was copied from
+     * {@link #releaseItems}, where giving stock back really can take an order to APPROVED, and it was
+     * wrong in two ways here: {@code revertOrderStatus} only acts on IN_FULFILLMENT while this sweep
+     * works on READY_FOR_DISPATCH orders, so it never did anything - and if it had, it would have
+     * been nonsense. The order status follows the shipments its lines travel in
+     * ({@code OrderProgressService.recompute}); a consumed reservation row has no bearing on it.
+     * Reading {@code reservation.getOrderItem().getOrder()} for it, after the delete, was also the
+     * LazyInitializationException the sweep used to die on.
+     */
     @Override
-    public Reservation deleteReservation(Reservation reservation, String systemUser) {
+    @Transactional
+    public Reservation deleteReservation(Reservation reservation) {
         reservationRepository.delete(reservation);
-        revertOrderStatus(reservation.getOrderItem().getOrder(), systemUser);
         return reservation;
     }
 

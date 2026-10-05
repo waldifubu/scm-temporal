@@ -1,9 +1,11 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Stock;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -19,6 +21,20 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
             Long storehouseId,
             UUID sku
     );
+
+    /**
+     * Locks the stock row of one SKU in one storehouse for the rest of the transaction.
+     * <p>
+     * Everything that books stock reads the quantity and then writes it back, so two bookings on the
+     * same row would otherwise both compute from the same stale value. {@code @Version} turns that
+     * into an {@code OptimisticLockException} rather than a lost update, which is correct and
+     * useless: the caller has done nothing wrong and gets a 500. The lock makes the second one wait
+     * instead.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT s FROM Stock s WHERE s.storehouse.id = :storehouseId AND s.sku = :sku")
+    Optional<Stock> findForUpdateByStorehouseIdAndSku(@Param("storehouseId") Long storehouseId,
+                                                      @Param("sku") UUID sku);
 
     List<Stock> findBySku(UUID sku);
 

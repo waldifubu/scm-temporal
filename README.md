@@ -154,7 +154,7 @@ Which service owns which stretch — one controller per service, named after wha
 | `RESERVED → PICKED` | `OrderHandlingService` | `PickingController` |
 | `PICKED → PACKED`, package contents, completing a package | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`) |
 | reading packages and package items | `PackageQueryService` | `PackageController` |
-| packages → shipment, ready, cancel | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
+| packages → shipment, ready, cancel, what may still be shipped | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
 | accept → in transit → delivered, the distributor's work list | `DeliveryService` | `DeliveryController` (`/shipments/**`, DISTRIBUTOR) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
@@ -410,6 +410,15 @@ POST /api/1.0/shipments
 Packages are added, replaced and removed through `POST`/`PUT /shipments/{id}/packages` (wrapped or
 bare array) and `DELETE /shipments/{id}/packages/{packageId}`; `PUT /shipments/{id}` changes address,
 method and requested date. The customer is fixed — the packages are bound to it.
+
+**Which packages may go in**: `GET /shipments/packages` (paged, ADMIN and LOGISTICS) — the `PACKED`
+packages that are in no shipment yet, which is exactly the set the two calls above accept. The
+planning side's own view on purpose: `/packages` and `/shipment-packages` are packing work and belong
+to ADMIN and WAREHOUSE, `/shipments` is planning, and the two do not overlap. Same arrangement as
+`GET /shipments/distributor` for the carrier — a role gets its own list rather than read access to
+another's. It is also the better list: `GET /shipment-packages?status=PACKED` still shows the packages
+already travelling in a shipment, so every id taken from there was a guess `POST /shipments` answered
+with a **409**. The status is wired to `PACKED` and is not a parameter — nothing else is shippable.
 
 A distributor is assigned with `PUT /shipments/{id}/distributor/{distributorId}` while the shipment is
 `READY` or `DISPATCH_REQUESTED`; the user has to be a `Distributor` (**400** otherwise).
@@ -821,16 +830,19 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
-| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}` | ADMIN, LOGISTICS |
+| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}`, `GET /shipments/packages` *(paged, the `PACKED` packages in no shipment yet)* | ADMIN, LOGISTICS |
 | | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
 | | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` | ADMIN, MANAGER, WAREHOUSE |
-| | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU** | ADMIN, MANAGER, WAREHOUSE |
+| | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU**, `qty` at most 1,000,000 | ADMIN, MANAGER, WAREHOUSE |
+| | `GET /components/requests` *(paged, optional `status`, oldest first)* — the warehouse's work list; `?status=DELIVERED` is the pile waiting at the dock | ADMIN, WAREHOUSE |
+| | `GET /components/my-requests` — the supplier's own requests, filtered by `supplier_id`; `qty` is the ordered quantity, `component.qty` the bill-of-materials one | ADMIN, SUPPLIER |
 | | `POST /components/supplier/{requestId}/approve`, `.../in-transit`, `.../delivered` — the supplier answers: `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, only on their own requests | ADMIN, SUPPLIER |
+| | `.../reject` — `OPEN → REJECTED` (declined before anything was promised), `.../cancel` — `APPROVED`/`IN_TRANSIT` → `CANCELLED` (never from `DELIVERED`, that would be a return) | ADMIN, SUPPLIER |
 | | `POST /components/warehouse/{requestId}/in-stock/{storehouseId}` — the goods receipt: `DELIVERED → IN_STOCK` and the quantity added to that SKU's stock in that storehouse | ADMIN, WAREHOUSE |
-| Stock | `POST /stock/add`, `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* | ADMIN, WAREHOUSE |
+| Stock | `POST /stock/add` (`{"sku": ..., "storehouseId": ..., "qty": ...}`), `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* — all answer `StockResponse`, never the entity | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
 
 Notable response-code conventions:
@@ -946,9 +958,13 @@ part of them.
 | `UserMapperTest`, `ProductMapperTest` | that no password hash or internal field reaches the response; field suppression for non-privileged callers |
 | `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler, and that the catch-all keeps a status the exception carries |
 
-Three of them need a reachable database: `ApplicationTests` loads the whole context,
-`CustomQueryExecutionTest` runs the hand-written queries against it, and `ReservationDtoTest` needs
-real Hibernate proxies. They run against the same database as the app, startup migrations included.
+Nine of them need a reachable database - `ApplicationTests` loads the whole context,
+`CustomQueryExecutionTest` runs the hand-written queries against it, `ReservationDtoTest` needs real
+Hibernate proxies, and the migration tests check the schema itself. They run against **their own
+schema, `scm_test`**, through `@ActiveProfiles("test")` and
+`src/test/resources/application-test.properties`, with the startup migrations included and the same
+MariaDB version as production. Each one creates the rows it needs via `support/TestData` and rolls
+them back, so a run leaves nothing behind and does not depend on what is in the database.
 The rest is plain Mockito/AssertJ and finishes in a couple of seconds:
 
 ```bash
@@ -979,13 +995,14 @@ Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse select
 - `ShipmentServiceImpl.assignDistributor` reads the shipment without a lock, unlike the other
   shipment changes.
 - Two error response shapes coexist, see [Error responses](#error-responses).
-- `OrderServiceImpl.randomOrderNo()` draws from only ~9000 numbers and re-checks existence in a
-  loop — a TOCTOU race against the insert, and effectively an endless loop once a few thousand
-  orders exist.
+- The order number range `90000..99999` holds **10000 orders**, and the 10001st is refused. That is
+  the ceiling of `OrderNumberScrambler`, and it can only be widened while no numbers are in use — a
+  different range is a different permutation. (It replaced a `Math.random()` loop whose ceiling was
+  about the same but which failed far worse: a TOCTOU race against the insert, and an endless loop
+  once the numbers were used up.)
 - `Reservation.expiresAt` only decides which orders `tryToRelease()` picks up. Once one reservation
   of an order has expired, every active reservation of that order is released — a fresh one reserved
   in a later call included.
-- `tryToDelete()` is not ready to be switched on — see `issues.txt`.
 - `POST /orders/{orderId}/consume` is commented out in `InventoryController`; consumption happens
   only as part of picking.
 - `spring-boot-starter-webflux` is still declared in `pom.xml` although no code uses Reactor

@@ -1,6 +1,8 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.stock.AddStockRequest;
+import com.supplychainmanagement.dto.stock.StockResponse;
 import com.supplychainmanagement.dto.stock.TransferStockRequest;
 import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.exception.APIException;
@@ -29,44 +31,33 @@ public class StockController {
 
     private final StockService stockService;
 
+    /**
+     * Books a quantity onto the stock of one SKU in one storehouse, creating the row the first time
+     * anything of that article lands there.
+     * <p>
+     * The body is {@link AddStockRequest} and used to be a {@code Map<String, String>}: unvalidated,
+     * and a missing {@code sku} ended in an NPE inside the {@code "new"} check - a 500 for an
+     * incomplete request. That {@code "new"} branch is gone with it. It made the controller invent a
+     * random UUID and book stock onto a SKU no article carries and nothing can find again; a SKU
+     * comes into being with the article it identifies, not with a booking.
+     */
     @PostMapping(value = "/add", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
-    public ResponseEntity<Stock> addToStock(
-            @RequestBody Map<String, String> params
-    ) {
-        Integer quantity = requireNumericParam(params, "qty").intValue();
-        Long storehouseId = requireNumericParam(params, "storehouseId");
-        if (params.get("sku").equals("new")) {
-            params.put("sku", UUID.randomUUID().toString());
-        }
-        UUID sku = UUID.fromString(params.get("sku"));
-
-        Stock stock = stockService.add(sku, storehouseId, quantity);
-        return ResponseEntity.ok().body(stock);
+    public ResponseEntity<StockResponse> addToStock(@Valid @RequestBody AddStockRequest request) {
+        Stock stock = stockService.add(request.sku(), request.storehouseId(), request.qty());
+        return ResponseEntity.ok().body(StockResponse.from(stock));
     }
 
     @PostMapping(value = "/transfer", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
-    public ResponseEntity<Stock> transfer(@Valid @RequestBody TransferStockRequest request) {
+    public ResponseEntity<StockResponse> transfer(@Valid @RequestBody TransferStockRequest request) {
         Stock stock = stockService.transferItemToStock(
                 request.sku(),
                 request.storehouseFrom(),
                 request.storehouseTo(),
                 request.qty()
         );
-        return ResponseEntity.ok().body(stock);
-    }
-
-    private Long requireNumericParam(Map<String, String> params, String name) {
-        String value = params.get(name);
-        if (value == null || value.isBlank()) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Missing request parameter: " + name);
-        }
-        try {
-            return Long.valueOf(value);
-        } catch (NumberFormatException ex) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Request parameter '" + name + "' must be numeric");
-        }
+        return ResponseEntity.ok().body(StockResponse.from(stock));
     }
 
     /**
@@ -79,15 +70,15 @@ public class StockController {
      */
     @GetMapping(value = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
-    public ResponseEntity<List<Stock>> stock(
+    public ResponseEntity<List<StockResponse>> stock(
             @PathVariable UUID sku,
             @RequestParam(defaultValue = "0") Long storehouseId
     ) {
-        List<Stock> stockList = new ArrayList<>();
+        List<StockResponse> stockList = new ArrayList<>();
 
         for (Stock stock : stockService.findAllBySku(sku)) {
             if (stock.getStorehouse().getId().equals(storehouseId) || storehouseId == 0) {
-                stockList.add(stock);
+                stockList.add(StockResponse.from(stock));
             }
         }
 
@@ -104,7 +95,7 @@ public class StockController {
      */
     @GetMapping(value = "/storehouse/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
-    public PageResponse<Stock> stockByStorehouse(
+    public PageResponse<StockResponse> stockByStorehouse(
             @PathVariable(required = false) Long id,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -125,6 +116,8 @@ public class StockController {
             throw new ResourceNotFoundException("Stock", "storehouse ID", id);
         }
 
-        return PageResponse.of(stockPage);
+        // Mapped before the page leaves the method: the rows come out of the service's read-only
+        // transaction and their storehouse is LAZY.
+        return PageResponse.of(stockPage.map(StockResponse::from));
     }
 }

@@ -916,4 +916,57 @@ class ShipmentServiceImplTest {
                 .satisfies(row -> assertThat(row.shipmentPackageIds()).containsExactly(5L, 6L));
         verify(shipmentRepository, never()).findAllWithCustomerByStatus(any(), any());
     }
+
+    // ------------------------------------------------------------------ what may still be shipped
+
+    /**
+     * The planning side's own list: PACKED and in no shipment. Hard-wired to PACKED - the status is
+     * not a parameter, because nothing else is shippable.
+     */
+    @Test
+    void listsThePackedPackagesNoShipmentHolds() {
+        ShipmentPackage free = packed(7L);
+        PageRequest pageable = PageRequest.of(0, 25);
+        when(shipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull(
+                ShipmentPackageStatus.PACKED, pageable)).thenReturn(new PageImpl<>(List.of(free), pageable, 1));
+
+        var page = service.findShippablePackages(pageable);
+
+        assertThat(page.getContent()).singleElement().satisfies(row -> {
+            assertThat(row.id()).isEqualTo(7L);
+            assertThat(row.status()).isEqualTo(ShipmentPackageStatus.PACKED);
+        });
+        verify(shipmentPackageRepository, never()).findAllByShipmentPackageStatus(any(), any());
+    }
+
+    /**
+     * The contents come from the second query, like every other package list - the page query brings
+     * the packages alone, because a collection fetch in it would be paged in memory.
+     */
+    @Test
+    void readsTheContentsOfTheListedPackagesInOneSecondQuery() {
+        ShipmentPackage free = packed(7L);
+        PageRequest pageable = PageRequest.of(0, 25);
+        when(shipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull(
+                ShipmentPackageStatus.PACKED, pageable)).thenReturn(new PageImpl<>(List.of(free), pageable, 1));
+
+        var page = service.findShippablePackages(pageable);
+
+        assertThat(page.getContent().getFirst().items()).hasSize(1);
+        verify(shipmentPackageRepository).findWithItemsByIdIn(List.of(7L));
+    }
+
+    /** Nothing to ship: no second query at all, and the paging of the empty page is kept. */
+    @Test
+    void asksForNoContentsWhenNothingIsShippable() {
+        PageRequest pageable = PageRequest.of(2, 10);
+        when(shipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull(
+                ShipmentPackageStatus.PACKED, pageable)).thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        var page = service.findShippablePackages(pageable);
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.getTotalElements()).isZero();
+        verify(shipmentPackageRepository, never()).findWithItemsByIdIn(anyCollection());
+    }
 }
