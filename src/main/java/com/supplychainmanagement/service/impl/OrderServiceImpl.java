@@ -1,7 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.annotation.NoCheck;
-import com.supplychainmanagement.config.OrderNoSequenceMigration;
+import com.supplychainmanagement.config.migration.OrderNoSequenceMigration;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.order.UndeliveredLine;
 import com.supplychainmanagement.entity.Order;
