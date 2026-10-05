@@ -79,6 +79,16 @@ with the Thymeleaf `/` route in `WebController`. Vaadin views live in
 UI lives in `src/main/frontend` (Vaadin+React via `@vaadin/react-components`, routes generated into
 `src/main/frontend/generated`).
 
+**The signing key comes from the environment**: `app.jwtSecret=${JWT_SECRET:...}`. The default in
+`application.properties` exists only so the application starts and can sign - it is not a production
+key and says so. `JwtTokenProvider` refuses anything under 32 bytes at startup
+(`requireUsableSecret`, `@PostConstruct`), because HMAC-SHA needs 256 bits: the key was 30 characters
+for a long time, `Keys.hmacShaKeyFor` threw from inside `generateToken`, and so the application
+started cleanly while **every login answered 500** on any profile but `dev`. Nothing noticed - the
+app is always started with the dev profile, and the one test that loads the context without a profile
+never mints a token. `JwtSecretTest` reads the shipped property file and actually signs with it;
+checking the length alone would miss the point, which was always whether it can sign.
+
 Auth for the API is JWT-based: `JwtAuthenticationFilter` + `JwtTokenProvider` +
 `JwtAuthenticationEntryPoint` (`security/`). Roles are `RoleEnum` (`CUSTOMER`, `MANAGER`,
 `SUPPLIER`, `WAREHOUSE`, `LOGISTICS`, `DISTRIBUTOR`, `ADMIN`); controllers authorize with

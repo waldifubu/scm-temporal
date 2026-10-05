@@ -11,9 +11,11 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
+import jakarta.annotation.PostConstruct;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.ArrayList;
 import java.util.Date;
@@ -58,10 +60,38 @@ public class JwtTokenProvider {
                 .compact();
     }
 
+    /**
+     * The smallest key HMAC-SHA accepts: RFC 7518 requires the key to be at least as long as the
+     * hash output, so 256 bits - 32 bytes - for HS256.
+     */
+    static final int MIN_SECRET_BYTES = 32;
+
+    /**
+     * Refuses a key that cannot sign, at startup instead of at the first login.
+     * <p>
+     * {@code app.jwtSecret} was 30 characters for a long time. {@code Keys.hmacShaKeyFor} then throws
+     * {@code WeakKeyException} from deep inside {@code generateToken}, so the application started
+     * cleanly and every login answered 500 - on every profile except dev, which happens to carry a
+     * long key. Nothing noticed, because the application is always started with the dev profile and
+     * the one test that loads the context without a profile never mints a token.
+     * <p>
+     * A key is either usable or the application cannot do its job, so this belongs in the startup
+     * path. The message names the property and the actual length - the library's own talks about
+     * byte arrays and JWA sections, which does not say which setting to change.
+     */
+    @PostConstruct
+    void requireUsableSecret() {
+        int bytes = jwtSecret == null ? 0 : jwtSecret.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes < MIN_SECRET_BYTES) {
+            throw new IllegalStateException("app.jwtSecret is " + bytes + " bytes (" + bytes * 8
+                    + " bits) and HMAC-SHA needs at least " + MIN_SECRET_BYTES + " bytes ("
+                    + MIN_SECRET_BYTES * 8 + " bits). Set the JWT_SECRET environment variable to a"
+                    + " longer value - with a shorter one no token can be issued at all.");
+        }
+    }
+
     private Key key() {
-//        Base64.Decoder decoder = Base64.getDecoder();
-//        byte[] decodedSecret = decoder.decode(jwtSecret);
-        return Keys.hmacShaKeyFor(jwtSecret.getBytes());
+        return Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
     }
 
     public String getUsername(String token) {

@@ -1,7 +1,9 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.annotation.NoCheck;
+import com.supplychainmanagement.config.OrderNoSequenceMigration;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
+import com.supplychainmanagement.dto.order.UndeliveredLine;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
@@ -9,20 +11,12 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
-import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.UserRepository;
-import com.supplychainmanagement.config.OrderNoSequenceMigration;
-import com.supplychainmanagement.dto.order.UndeliveredLine;
-import com.supplychainmanagement.service.FulfillmentService;
-import com.supplychainmanagement.service.OrderNumberScrambler;
-import com.supplychainmanagement.service.OrderProgressService;
-import com.supplychainmanagement.service.OrderService;
-import com.supplychainmanagement.service.ProductionService;
-import com.supplychainmanagement.service.RoleService;
+import com.supplychainmanagement.service.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
@@ -52,7 +46,9 @@ public class OrderServiceImpl implements OrderService {
 
     private static final LocalTime END_OF_WORKING_DAY = LocalTime.of(17, 0);
 
-    /** An order that ended is not cancelled, it is over. */
+    /**
+     * An order that ended is not cancelled, it is over.
+     */
     private static final Set<OrderStatus> ENDED_STATUSES =
             EnumSet.of(OrderStatus.REJECTED, OrderStatus.COMPLETED);
 
@@ -89,7 +85,7 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public Page<Order> findAllByUserAndStatus (org.springframework.security.core.userdetails.User authUser, OrderStatus status, Pageable pageable) {
+    public Page<Order> findAllByUserAndStatus(org.springframework.security.core.userdetails.User authUser, OrderStatus status, Pageable pageable) {
         if (roleService.isAdmin(authUser)) {
             return findAllByStatus(status, pageable);
         }
@@ -582,7 +578,9 @@ public class OrderServiceImpl implements OrderService {
         return merged;
     }
 
-    /** A missing quantity counts as nothing here; recalculateOrder is what rejects it. */
+    /**
+     * A missing quantity counts as nothing here; recalculateOrder is what rejects it.
+     */
     private int quantityOf(OrderItem orderItem) {
         return orderItem.getQuantity() != null ? orderItem.getQuantity() : 0;
     }
