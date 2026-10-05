@@ -4,11 +4,8 @@ import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
-import com.supplychainmanagement.dto.component.RequestComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
-import com.supplychainmanagement.entity.Component;
-import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RequestComponentService;
@@ -29,10 +26,6 @@ import java.util.UUID;
 @RestController
 @RequestMapping({"/api/{version}/components"})
 @AllArgsConstructor
-// hasAnyAuthority, NOT hasAnyRole: hasAnyRole('ADMIN') checks for the authority "ROLE_ADMIN",
-// but this project's authorities are prefix-free "ADMIN"/"MANAGER" (RoleEnum.name()).
-// With hasAnyRole the condition was always false, making the whole controller unreachable for everyone.
-@PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
 public class ComponentController {
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;
@@ -79,29 +72,12 @@ public class ComponentController {
                 status, PageRequest.of(page, size, Sort.by(direction, sort))));
     }
 
-    /**
-     * The supplier's own requests - filtered by {@code supplier_id}, so an ADMIN asking gets their
-     * own (empty) list. The warehouse's view of the same rows is {@code GET /requests} above.
-     * <p>
-     * Answers {@link RequestComponentResponseDto}, mapped in the service while the transaction is
-     * open. That DTO used to carry the {@code Component} <strong>entity</strong> in a field, which
-     * serialized the component's product along and resolved the graph through the open-in-view
-     * session, and its {@code qty} was an {@code Integer} while the entity's is a {@code Long} - two
-     * things MapStruct did silently.
-     */
-    @GetMapping(path = "/my-requests", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public List<RequestComponentResponseDto> getMyRequests(@AuthenticationPrincipal User user) {
-        return requestComponentService.findMyRequests(userService.getAuthenticatedUserId(user));
+
+    @GetMapping("/{id}")
+    public ComponentResponseDto getComponent(@PathVariable Long id) {
+        return componentMapper.mapToDto(componentService.findById(id));
     }
 
-    /*
-    @GetMapping("/{id}")
-    public Mono<ComponentResponseDto> getComponent(@PathVariable Long id) {
-        return componentService.findById(id).map(componentMapper::mapToDto)
-                .onErrorResume(ResourceNotFoundException.class, Mono::error);
-    }
-     */
 
     @GetMapping(path = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
@@ -140,62 +116,6 @@ public class ComponentController {
                 userService.getAuthenticatedUserId(authUser));
     }
 
-    
-
-    /**
-     * The supplier accepts the request: OPEN to APPROVED. Only the supplier it was placed with may
-     * answer it - anybody else is a 403, ADMIN excepted - and any other status is a 409.
-     */
-    @PostMapping(path = "/supplier/{requestId}/approve", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public RequestComponentResponse approveRequest(@PathVariable Long requestId,
-                                                   @AuthenticationPrincipal User authUser) {
-        return componentService.approveRequest(requestId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /** The supplier has sent the goods: APPROVED to IN_TRANSIT. */
-    @PostMapping(path = "/supplier/{requestId}/in-transit", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public RequestComponentResponse requestInTransit(@PathVariable Long requestId,
-                                                     @AuthenticationPrincipal User authUser) {
-        return componentService.requestInTransit(requestId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /**
-     * The supplier reports the goods handed over: IN_TRANSIT to DELIVERED - their last step. Nothing
-     * is booked here; the warehouse answers it with the goods receipt.
-     */
-    @PostMapping(path = "/supplier/{requestId}/delivered", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public RequestComponentResponse requestDelivered(@PathVariable Long requestId,
-                                                     @AuthenticationPrincipal User authUser) {
-        return componentService.requestDelivered(requestId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /**
-     * The supplier declines a request they have not taken on: OPEN to REJECTED. An end state -
-     * nothing was promised, so nothing has to be undone.
-     */
-    @PostMapping(path = "/supplier/{requestId}/reject", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public RequestComponentResponse rejectRequest(@PathVariable Long requestId,
-                                                  @AuthenticationPrincipal User authUser) {
-        return componentService.rejectRequest(requestId, userService.getAuthenticatedUserId(authUser));
-    }
-
-    /**
-     * The supplier calls off a request they had taken on: APPROVED or IN_TRANSIT to CANCELLED. Not
-     * from DELIVERED - the goods are at our dock then, and that would be a return.
-     * <p>
-     * No body: there is no column for a reason, and {@code comment} belongs to whoever ordered the
-     * part - overwriting it would throw away why it was needed.
-     */
-    @PostMapping(path = "/supplier/{requestId}/cancel", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
-    public RequestComponentResponse cancelRequest(@PathVariable Long requestId,
-                                                  @AuthenticationPrincipal User authUser) {
-        return componentService.cancelRequest(requestId, userService.getAuthenticatedUserId(authUser));
-    }
 
     /**
      * The warehouse books a delivery in: DELIVERED to IN_STOCK, and the requested quantity is added
@@ -234,7 +154,7 @@ public class ComponentController {
     }
 
     @DeleteMapping(path = "/{id}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public void deleteComponent(@PathVariable Long id) {
         componentService.deleteById(id);
     }

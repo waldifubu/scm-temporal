@@ -266,16 +266,15 @@ class CustomQueryExecutionTest {
 
     /**
      * And that what the service makes of it is a usable order number - the counter alone says
-     * nothing about the range. The width is read off FIRST, so moving the range does not leave a
-     * false assertion behind.
+     * nothing about the range. Checked against the range itself, not against a digit count: the
+     * range spans two widths.
      */
     @Test
-    void theCounterBecomesAnEightDigitOrderNumber() {
+    void theCounterBecomesAUsableOrderNumber() {
         long orderNo = OrderNumberScrambler.orderNoFor(orderRepository.nextOrderNoCounter());
 
         assertThat(orderNo).isBetween(OrderNumberScrambler.FIRST, OrderNumberScrambler.LAST);
-        assertThat(String.valueOf(orderNo))
-                .hasSize(String.valueOf(OrderNumberScrambler.FIRST).length());
+        assertThat(orderNo).isGreaterThanOrEqualTo(9_000L);
     }
 
     /** The two detail finders with their entity graphs. */

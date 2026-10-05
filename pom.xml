@@ -28,6 +28,7 @@
     </scm>
     <properties>
         <java.version>25</java.version>
+        <vaadin.version>25.2.6</vaadin.version>
     </properties>
     <dependencies>
         <dependency>

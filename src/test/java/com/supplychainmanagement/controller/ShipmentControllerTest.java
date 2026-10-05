@@ -45,7 +45,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The planning endpoints as a client calls them: binding, validation and status codes. The carrier's
- * three steps moved to {@link DeliveryControllerTest} with the endpoints themselves.
+ * three steps moved to {@link OutboundControllerTest} with the endpoints themselves.
  */
 class ShipmentControllerTest {
 

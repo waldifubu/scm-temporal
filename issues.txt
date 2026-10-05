@@ -1,0 +1,747 @@
+Überblick
+
+Spring Boot 4.1.0 / Java 25, MariaDB via JPA, drei Frontends auf einer Codebase: Thymeleaf (/), Vaadin Flow (/app/*), Hilla/React (src/main/frontend) plus versionierte JSON-API (/api/{version}/...). 3 isolierte SecurityFilterChains. Der interessante Teil ist die Order→Fulfillment→Picking→Packing→Shipping-Kette; der Rest ist weitgehend CRUD.
+
+Der Arbeitsstand ist deutlich Work-in-Progress: viel uncommitteter Code, viel auskommentierter Code. 64 Testklassen mit zusammen 594 Tests, alle grün (Stand 2026-10-05). ApplicationTests (Context-Load), CustomQueryExecutionTest (führt jede handgeschriebene @Query und jeden EntityGraph einmal aus) und ReservationDtoTest (braucht echte Hibernate-Proxies) starten den Spring-Kontext und brauchen eine erreichbare Datenbank, der Rest läuft mit Mockito/AssertJ bzw. Standalone-MockMvc in Sekunden.
+
+Fachlogik-Bugs
+
+1. (erledigt - Ordernummer ist ein permutierter Zähler, siehe "Erledigt")
+
+2. (erledigt - Gesamtzahl der Seite und Component.qty, siehe "Erledigt")
+
+3. Expiry-Sweep gibt ganze Orders frei, nicht nur das Abgelaufene
+
+Reservation.expiresAt steht auf now().plusHours(1). AutomaticReservationService.tryToRelease() holt über FulfillmentService.findOrdersWithExpiredReservations() jede Order, die mindestens eine abgelaufene Reservierung hält, und ruft dafür releaseItems(order, "system") auf. releaseItems gibt aber alle aktiven Reservierungen der Order frei - es gibt keinen Weg mehr, nur einen Teil freizugeben.
+
+Folge: Eine Order, deren Zeilen in getrennten Aufrufen reserviert wurden, verliert beim ersten Ablauf auch die frische Reservierung daneben, samt Bestand. Ist danach nichts mehr aktiv, fällt die Order auf APPROVED zurück, und tryToReserve() (nur IN_FULFILLMENT) holt sie nicht wieder ab.
+
+Die @Scheduled-Annotationen in AutomaticReservationService sind während der Entwicklung bewusst auskommentiert - das ist kein Befund, relevant wird der Punkt beim Einschalten.
+
+4. (erledigt - Rückfall auf APPROVED trotz Picking, siehe "Erledigt")
+
+5. Rollenvergabe über /users ist ungeprüft
+
+Ein- und Ausgabe sind DTOs: UserController nimmt UserRequestDto (dto.user) entgegen und antwortet mit UserDto (siehe "Erledigt"). id, userType, createdAt, lastLogin kommen nicht mehr an.
+
+Der isActive-Punkt ist erledigt (siehe "Erledigt"): ein Update ohne das Feld laesst die Sperre stehen.
+
+Offen: Welche Rollen der Aufrufer vergeben darf, prüft niemand. UserServiceImpl.update übernimmt die Rollen aus dem Request (existing.setRoles(user.getRoles())), create ebenso (prepareUserForCreate) - ein MANAGER kann sich selbst oder anderen ADMIN geben oder einen ADMIN anlegen; die erste Rolle entscheidet dabei auch den Benutzertyp (saveWithUserType). Lösung: nur ADMIN darf ADMIN (und ggf. MANAGER) vergeben, sonst 403.
+
+
+6. Versand: Rücksendung, DISPATCH_REQUESTED und Historie fehlen
+
+Die Kette läuft jetzt durch: Paket abschließen, Shipment anlegen, bereit melden, annehmen, unterwegs, geliefert, abbrechen (siehe "Erledigt"). Offen bleibt:
+- (erledigt - DISPATCH_REQUESTED ist Pflichtschritt, siehe "Erledigt")
+- Ab IN_TRANSIT gibt es keinen Weg zurück: eine Rücksendung oder eine fehlgeschlagene Zustellung lässt sich nicht abbilden (ShipmentStatus kennt weder RETURNED noch DELIVERY_FAILED). Ein Abbruch ist nur bis ACCEPTED möglich.
+- Für Shipments gibt es keine Historie wie OrderHistory. Wer wann abgebrochen hat, steht nur als Freitext im comment; die Zeitpunkte shippedAt und deliveredAt sind das Einzige, was bleibt.
+- Tracking fehlt: trackingNumber wird nirgends gesetzt. Das leere LogisticsService-Interface ist entfernt, der Platz dafuer ist DeliveryService.
+- (erledigt - Wareneingang, siehe "Erledigt")
+- Teillieferungen gehen nicht: eine Zeile ueber 12, die als 8 + 4 ankommt, laesst sich mit einem Status nicht abbilden. Braeuchte eine Spalte receivedQty.
+- applyComponents aendert die qty einer bestehenden Stuecklistenzeile nicht: ueber PUT /products
+  laesst sich die Rezeptmenge einer vorhandenen Komponente also nicht korrigieren, nur ueber
+  PUT /components/{id}. Die Felder, die es kopiert, sind articleNo, name, description, weight und
+  sku - qty, manufacturer und externalId fehlen.
+- Keine Historie der Anforderung: assignedBy nennt seit 2026-10-05 den letzten Bearbeiter, aber nicht die Kette. Wer hat approved, wer hat DELIVERED gemeldet, wann - dafuer braeuchte es eine Tabelle wie order_history mit dem gleichen Event-Muster (OrderStatusChangedEvent + AFTER_COMMIT-Listener).
+- (erledigt - Order-Storno, siehe "Erledigt"). COMPLETED ist seit /complete erreichbar.
+
+7. (erledigt - dieselbe Position zweimal im Paket-Request, siehe "Erledigt")
+
+8. (erledigt - Paketgewicht wird immer berechnet, siehe "Erledigt")
+
+9. (erledigt - tryToDelete, siehe "Erledigt")
+
+10. (erledigt - Request-DTOs fuer /components und /products, siehe "Erledigt")
+
+11. (erledigt - Bestandsschreibung mit Sperre, siehe "Erledigt")
+
+12. (erledigt - AddStockRequest und StockResponse, siehe "Erledigt")
+
+13. (erledigt - eigenes Schema scm_test, siehe "Erledigt")
+
+14. Sieben Startup-Klassen statt Migrationen
+
+In config liegen inzwischen ComponentQtyMigration, OrderDateToCreatedMigration,
+OrderHistoryUserIdMigration, RequestComponentIdMigration, RequestComponentQtyMigration,
+StatusCheckConstraintMigration sowie RoleDataFixer und UserTypeConstraintInitializer (beide mit
+auskommentiertem @Component). Jede ist fuer sich idempotent und begruendet, aber zusammen sind sie
+eine Migrationshistorie ohne Reihenfolge, ohne Versionsstand und ohne Protokoll darueber, was auf
+welcher Datenbank schon lief. OrderDateToCreatedMigration ist seit dem 2026-09-16 erledigt und tut
+nichts mehr.
+Loesung: Flyway. Die bestehenden Klassen werden zu V1__...sql bis V6__...sql, ddl-auto geht auf
+validate, und der Punkt, an dem eine Typaenderung still durchfaellt, ist damit weg -
+request_components.qty und .id waren beide genau dieser Fall.
+
+Betrieb & Repo-Hygiene
+Keine DB-Migrationen: ddl-auto=update plus drei handgeschriebene Schema-Klassen in config. RoleDataFixer und UserTypeConstraintInitializer haben ein auskommentiertes @Component. OrderDateToCreatedMigration ist aktiv, aber erledigt (Log vom 2026-09-16 18:17: 10 Zeilen kopiert, Spalte gelöscht) und tut seitdem nichts mehr - kann bei Gelegenheit raus. Die Umbauten dieser Wochen (Constraints, shipment_package-Spalten) liefen per Hand-SQL. Das ist der Punkt, an dem Flyway/Liquibase fällig wird.
+Tests mit Spring-Kontext laufen gegen dieselbe Datenbank wie die App: Sie führen jede aktive Startup-Migration mit aus, und ddl-auto=update legt beim Start neue Unique-Constraints aus den Entities selbst an. Vor Schema-Änderungen daran denken.
+AutomaticProductionService.assemble() ist aktiv (alle 150 s produce(), baut Produkte aus Komponentenbestand), während die Routinen in AutomaticReservationService auskommentiert sind.
+Tests: Reservierungs-Idempotenz auf Service-Ebene abgedeckt (FulfillmentServiceReserveItemsTest, InventoryReservationTransactionServiceTest), auf Persistenz-Ebene und die Retry-Schleife in InventoryServiceImpl nicht. Picking (pick), Packing (packLine, Paketinhalte) und die Shipping-Listen sind abgedeckt, auch auf Controller-Ebene. Ohne Tests: die Schleifen in OrderHandlingServiceImpl, readyForDispatch(), die Storehouse-Auswahl in produce() und die Routinen in AutomaticReservationService.
+Kleineres
+WebConfig.defaultVersion (Default 2.0) wird nirgends mehr benutzt — der setDefaultVersion-Aufruf ist auskommentiert, ApiVersionDefaultFilter hat sein eigenes Feld und nutzt 1.0.
+Javadocs in AutomaticReservationService veraltet: checkCreatedOrders() nennt sich "read only" und schreibt über orderService.acknowledge(); tryToRelease() verspricht, nur Abgelaufenes freizugeben (Befund 3); tryToDelete() siehe Befund 9.
+Paketnummern sind nur innerhalb eines Shipments eindeutig: uk_shipment_package_number liegt auf (shipment_id, package_number) und greift erst, wenn ein Paket in einem Shipment steckt (ShipmentServiceImpl prüft das vorab, 409). Pakete ohne Shipment können dieselbe Nummer tragen - NULLs gelten im Unique-Index als verschieden. Ein Paket (von 9) hat gar keine Nummer.
+4 von 14 package_item-Zeilen haben keine run_no (aus der Zeit vor der Spalte). Die DB lässt für sie doppelte Zeilen je Paket und Position zu (NULLs sind verschieden), der Service lehnt sie vorsichtshalber ab.
+POST /packing ist nicht auf eine Order beschränkt, ein Lauf kann Positionen mehrerer Orders enthalten; erst beim Einsortieren in ein Paket gilt "eine Order pro Paket".
+PackingService.validateOrderItemPacking wird nirgends aufgerufen - bewusst behalten für einen manuellen "complete"-Endpunkt. Beim Packen deckt packLine die Fälle ab (PACKED/READY_FOR_DISPATCH werden übersprungen, auch ohne Package-Items).
+Fehlerformate der Pack-Endpunkte uneinheitlich: 400/409 aus APIException fängt der Controller und antwortet mit {"message": ...}; eine unbekannte OrderItem- oder Paket-ID (ResourceNotFoundException) geht an den GlobalExceptionHandler und kommt als ErrorDetails; unbekannte PackageItem-IDs beim Einsortieren kommen als 404 im {"message"}-Format; Bean-Validation als Feld-Map.
+webFilterChain endet auf anyRequest().permitAll(), die requestMatchers davor sind damit wirkungslos.
+spring-boot-starter-webflux steht weiterhin in der pom.xml, obwohl kein Code mehr Reactor benutzt (der einzige Mono-Endpunkt in ComponentController ist auskommentiert).
+Wenn ich priorisieren müsste
+Rollenprüfung in UserServiceImpl (Befund 5) — ein MANAGER kann sich aktuell selbst die ADMIN-Rolle geben.
+Vor dem Einschalten der Sweeps: Befund 3 (nur Abgelaufenes freigeben) und Befund 9 (tryToDelete).
+Rücksendung/fehlgeschlagene Zustellung (Befund 6) - ab IN_TRANSIT gibt es heute keinen Weg zurück.
+
+Achtung Tabellennamen: gemischt. Plural bei categories, components, order_items, orders, products, request_components, roles, storehouses — Singular bei stock, reservation, shipment, order_history, shipment_package, package_item.
+Die spalten created und updated oder expires müssen unbenannt werden in created_at, updated_at, expires_at, sonst gibt es Konflikte mit den JPA-Annotationen @CreatedDate, @LastModifiedDate und @PreUpdate.
+Die Spalte order_date wurde in created umbenannt (Migration OrderDateToCreatedMigration).
+
+--------------------------------------------------------------------------
+Erledigt (Stand 2026-09-21, aus dieser Liste entfernt)
+
+- Ordernummer ist ein permutierter Zaehler (Stand 2026-10-05, war Befund 1): statt eine Zufallszahl
+  zu ziehen und die Datenbank zu fragen, ob sie frei ist, wird ein dichter Zaehler bijektiv auf den
+  Wertebereich abgebildet. Bijektiv heisst: zwei verschiedene Zaehler koennen nie dieselbe Nummer
+  ergeben, es gibt also nichts zu pruefen und nichts zu wiederholen. Damit sind die Schleife, das
+  TOCTOU-Race und die Endlosschleife bei Erschoepfung weg.
+  Vier Teile: OrderNoSequenceMigration legt die Sequenz order_no_seq an (ddl-auto kann das nicht,
+  sie haengt an keiner Entity), OrderRepository.nextOrderNoCounter zieht sie (native, NEXTVAL),
+  OrderNumberScrambler permutiert, OrderServiceImpl.nextOrderNo setzt sie zusammen.
+  Die Permutation ist ein vierrundiges Feistel-Netz - das ist eine Permutation, egal was die
+  Rundenfunktion tut, weshalb die Garantie leicht zu halten ist; die Rundenfunktion entscheidet nur,
+  wie zufaellig es aussieht. Bewusst kein id * Primzahl mod n: auch bijektiv, aber linear - alle
+  benachbarten Nummern haetten denselben Abstand, aus zwei Ordernummern liesse sich der Rest
+  ableiten. Der Test misst genau das (ueber 10.000 Paare keine zwei gleichen Differenzen).
+  Die Blockbreite wird aus dem Wertebereich berechnet (halfBitsFor) und nicht hingeschrieben: cycle
+  walking kostet BLOCK / COUNT Runden, bei einem Block, der nicht mehr zum Bereich passt, sind das
+  ueber tausend statt 1,6.
+  Belegt: der Test laeuft den GANZEN Bereich durch und haelt, dass es eine Bijektion darauf ist -
+  eine Stichprobe koennte nur sagen "noch keine Kollision gefunden". Dazu CustomQueryExecutionTest
+  fuer die Sequenz selbst (zwei Zuege, zaehlt hoch), weil kein Unit-Test sieht, ob die Sequenz
+  ueberhaupt existiert.
+  Der Bereich 90000..199999 traegt 110.000 Orders; die naechste wird mit klarer Meldung abgelehnt,
+  statt eine Nummer doppelt zu vergeben oder sich aufzuhaengen. Er spannt zwei Stellenbreiten: eine
+  Ordernummer ist fuenf- oder sechsstellig, und die ueber 99999 beginnen mit 1. Was fuer alle gilt,
+  ist der Wert - nie unter 9000; eine einheitliche Breite oder eine fuehrende 9 gilt nicht.
+  Der Bereich laesst sich nur aendern, SOLANGE keine Nummern im Umlauf sind: ein anderer Bereich ist
+  eine andere Permutation, und ein Zaehler koennte dann auf eine Nummer fallen, die ein frueherer
+  schon hatte. Dasselbe gilt fuer die vier Rundenkonstanten.
+
+- Eigene Testdatenbank (Stand 2026-10-05, war Befund 13): die Kontext-Tests laufen gegen scm_test
+  statt gegen scm. src/test/resources/application-test.properties traegt den Datasource, jeder
+  @SpringBootTest traegt @ActiveProfiles("test"). Bewusst profil-spezifisch und nicht
+  application.properties: eine Datei dieses Namens in src/test/resources verdeckt die aus
+  src/main/resources komplett und nimmt alle anderen Einstellungen mit.
+  Dieselbe MariaDB-Version wie im Betrieb, kein H2 - die halbe Migrationslogik in config/ existiert
+  wegen des Verhaltens dieses Servers (inline Spalten-CHECKs, die DROP CONSTRAINT nicht erreicht;
+  ein MODIFY COLUMN, das uuid nach bigint verweigert; innodb_snapshot_isolation), H2 wuerde
+  durchlassen, was MariaDB ablehnt.
+  Dazu support/TestData: die sechs Tests, die ihre Zeilen mit findAll().getFirst() aus der Datenbank
+  nahmen, legen sie jetzt selbst an (customer, supplier, product, component, storehouse). Das war
+  die zweite Haelfte des Problems - die Tests hingen nicht nur an der falschen Datenbank, sondern an
+  deren Inhalt. Alles entsteht in der Transaktion des Tests und rollt mit ihr zurueck; die Unique-
+  Spalten bekommen gezaehlte und zufaellige Werte, damit ein Lauf, der nicht zurueckrollte, den
+  naechsten nicht blockiert.
+  Belegt: zwei vollstaendige Laeufe hintereinander gruen (594 Tests), scm_test danach wieder leer,
+  scm unveraendert (19 users, 16 components, 4 products, 10 orders, 22 stock - wie vorher).
+  Der Benutzer hat scm_test und die Berechtigung dafuer angelegt; Testcontainers bleibt die
+  langfristig bessere Antwort, braucht aber einen laufenden Docker-Daemon (siehe Befund 14).
+
+- Request-DTOs fuer /components und /products (Stand 2026-10-05, war Befund 10): beide Endpunkte
+  banden die Entity, nahmen also jedes Feld an, das sie hat - id eingeschlossen. create gab das
+  gebundene Objekt an save(), was mit gesetzter id ein merge ist: ein POST ueberschrieb eine
+  bestehende Zeile. Bei Product war es weiter reichend, weil cascade = ALL auf Product.components
+  eine Komponentenzeile mit fremder id diesem Produkt zuschlug und damit die Stueckliste eines
+  anderen Produkts umschrieb - still, nichts im Request sagte das.
+  Jetzt ComponentRequestDto und ProductRequestDto, beides Records ohne id-Feld, Vorlage
+  UserRequestDto. Der Produktbezug einer Komponente kommt als articleNo statt als verschachteltes
+  {"product": {"id": 3}} - unique und NOT NULL, und die restliche API nennt ein Produkt ohnehin so.
+  Kategorien kommen als categoryIds und werden nachgeschlagen (neues ProductCategoryRepository);
+  vorher kamen ganze ProductCategory-Objekte, die ihrerseits ein Set<Product> tragen. Die
+  Stuecklistenzeilen behalten eine optionale id, weil applyComponents sie beim Update sinnvoll
+  nutzt - aber sie muss eine Zeile dieses Produkts sein (400 sonst), und beim Anlegen ist jede id
+  ein 400. Nebenbei: Component.update schrieb bisher eine kleinere Feldauswahl als create band,
+  description, weight, articleNo und qty liessen sich also anlegen, aber nie aendern; jetzt
+  entscheidet eine Stelle (apply), welche Felder ein Client setzen darf. Abgedeckt durch
+  ComponentServiceRequestDtoTest und ProductServiceRequestDtoTest.
+
+- Die Bestandsschreibung ist abgesichert (Stand 2026-10-05, war Befund 11): StockService.add ist
+  @Transactional und liest die Zeile ueber findForUpdateByStorehouseIdAndSku - dasselbe Muster wie
+  ueberall sonst, wo hier ein Wert gelesen, geprueft und zurueckgeschrieben wird. Vorher war die
+  Methode weder transaktional noch sperrend: aus POST /stock/add kam keine Transaktion mit, Lesen
+  und Schreiben waren zwei, und zwei gleichzeitige Buchungen rechneten von derselben Menge. Die
+  Daten retteten @Version, der Aufrufer bekam einen 500. Eine Menge <= 0 ist jetzt ein 400.
+  Ein Rennen bleibt und ist dort nicht zu schliessen: existiert die Zeile noch nicht, gibt es nichts
+  zu sperren, also koennen zwei erste Buchungen beide einfuegen. Das wird auf der Stelle geflusht und
+  als 409 mit Begruendung beantwortet statt als 500 an irgendeinem spaeteren Commit; ein Retry
+  braeuchte eine eigene Transaktion, die der Wareneingang nicht haben darf (Status und Buchung sind
+  alles oder nichts). Abgedeckt durch StockServiceAddTest.
+
+- AddStockRequest und StockResponse (Stand 2026-10-05, war Befund 12): POST /stock/add nahm ein
+  Map<String, String> ohne Validierung; fehlte sku, warf params.get("sku").equals("new") eine NPE
+  (500). Der "new"-Zweig ist weg - er erzeugte eine frische UUID und buchte Bestand auf eine SKU, die
+  kein Artikel traegt und nichts wiederfindet. Dazu antworteten /stock/add, /stock/transfer,
+  /stock/{sku} und /stock/storehouse/{id} mit der Stock-Entity samt LAZY Storehouse; jetzt
+  StockResponse mit storehouseId/-name und dem berechneten available.
+  requireNumericParam in StockController ist damit weg, ebenso bindProduct in ComponentServiceImpl
+  (apply() loest das Produkt selbst ueber articleNo auf).
+
+- tryToDelete laeuft (Stand 2026-10-05, war Befund 9): drei Dinge waren falsch, alle daran, was die
+  Routine misst und was sie anfasst.
+  * Das Alter kam aus expiresAt, eine Stunde nach dem Reservieren - eine Zeile, die Wochen spaeter
+    gepickt wurde, sah im Moment des Pickens tagealt aus. Neue Spalte Reservation.consumedAt, von
+    consume() gestempelt, plus consumedOrExpiredAt() als Rueckfall fuer Zeilen von vor der Spalte.
+    Eine Zeile ohne beide Zeitstempel wird liegen gelassen: unbekanntes Alter ist nicht hohes Alter,
+    und der Vergleich lief vorher in eine NPE.
+  * deleteReservation rief revertOrderStatus, was nur auf IN_FULFILLMENT wirkt, waehrend die Routine
+    READY_FOR_DISPATCH-Orders abarbeitet - es passierte also nie etwas, und haette es etwas getan,
+    waere es falsch gewesen: der Order-Status folgt den Shipments ihrer Zeilen
+    (OrderProgressService.recompute), eine Buchhaltungszeile bewegt ihn nicht. Der Aufruf ist weg.
+  * Genau dafuer wurde reservation.getOrderItem().getOrder() NACH dem Delete gelesen - im Scheduler
+    ohne Session die LazyInitializationException, an der die Routine starb. Mit dem Aufruf ist auch
+    das weg, und findConsumedReservations/deleteReservation sind jetzt @Transactional.
+  Die Signatur deleteReservation(Reservation, String systemUser) ist zu deleteReservation(Reservation)
+  geworden: ohne den Statuswechsel gibt es keinen handelnden Benutzer zu protokollieren.
+  Abgedeckt durch AutomaticReservationServiceDeleteTest. Das @Scheduled bleibt auskommentiert.
+
+- Der Lieferant kann ablehnen und stornieren (Stand 2026-10-05): RequestStatus hat REJECTED und
+  CANCELLED. POST /components/supplier/{id}/reject nimmt eine OPEN-Anforderung zu REJECTED - abgelehnt,
+  bevor etwas zugesagt war, also nichts zurueckzudrehen. POST /components/supplier/{id}/cancel nimmt
+  eine APPROVED oder IN_TRANSIT zu CANCELLED: zugesagt, und jetzt kommt sie doch nicht. Zwei Status
+  und nicht einer, weil sie Verschiedenes sagen. Nicht aus DELIVERED - dann steht die Palette an
+  unserer Rampe und es waere eine Ruecksendung, dieselbe Linie, die die Shipment-Seite bei ACCEPTED
+  zieht. Rollen ADMIN und SUPPLIER, requireAnsweringSupplier vor dem Status wie bei den anderen
+  Schritten, assignedBy wird mitgeschrieben. Kein Body: es gibt keine Spalte fuer einen Grund, und
+  comment gehoert dem Besteller - es zu ueberschreiben wuerde wegwerfen, warum das Teil gebraucht
+  wurde. Das CHECK-Constraint zog StatusCheckConstraintMigration von selbst nach
+  (StatusCheckConstraintTest von 38 auf 41 Tests). Die @EnumSource-Listen der Tests sind dabei auf
+  mode = EXCLUDE umgestellt, damit ein spaeter ergaenzter Status automatisch mitgeprueft wird.
+  Abgedeckt durch ComponentServiceSupplierStepsTest und ComponentControllerTest.
+  Offen: wer bestellt hat (ADMIN/MANAGER/WAREHOUSE), kann eine Anforderung weiterhin nicht
+  zurueckziehen - nur der Lieferant und ADMIN.
+
+- request_components.qty ist ein bigint (Stand 2026-10-05): die Spalte war ein int(11), waehrend
+  RequestComponent.qty ein Long ist - ddl-auto=update zieht Typaenderungen nie nach, derselbe Fall
+  wie bei request_components.id und den Enum-CHECKs. Mit STRICT_TRANS_TABLES lehnte der Server eine
+  zu grosse Menge beim Insert ab, eine vertippte Zahl kam also als 500 zurueck. int nach bigint ist
+  eine Verbreiterung, deshalb anders als bei der id ein einfaches MODIFY COLUMN auf der gefuellten
+  Tabelle: RequestComponentQtyMigration liest den Typ aus information_schema, laesst ein bigint in
+  Ruhe und behaelt die Nullability, die MODIFY COLUMN sonst wegwirft. Geprueft am Schema
+  (qty bigint(20), NOT NULL erhalten) und abgedeckt durch RequestComponentQtyTest - Typ plus ein
+  Wert jenseits des int-Bereichs im Round-Trip.
+  Die beiden Mengen-Grenzen bleiben und machen Unterschiedliches: MAX_QTY (1.000.000) an der
+  Anfrage ist die, die sich anheben laesst, der Integer-Riegel im Wareneingang die, die sich nicht
+  passieren laesst - gebucht wird ueber Long.intValue().
+
+- RequestComponentResponseDto traegt keine Entity mehr (Stand 2026-10-05): das Feld component hielt
+  die Component-Entity, die Antwort von GET /components/my-requests serialisierte also das Product
+  der Komponente mit und loeste den Graphen ueber open-in-view Referenz fuer Referenz auf - genau
+  das, was "Responses sind DTOs, niemals Entities" meint. Jetzt ein ComponentResponseDto, das seinen
+  Produktbezug als ProductRefDto fuehrt und nicht tiefer geht.
+  Dazu war qty dort ein Integer gegen das Long der Entity. Der Grund ist die Stelle selbst: in dieser
+  Antwort stehen zwei Mengen unter dem Namen qty - die der Anforderung (wie viele bestellt wurden,
+  ein Long ueber einem bigint) und component.qty (wie viele in ein Produkt gehen, ein Integer) - und
+  die aeussere war von der inneren abgeschrieben. MapStruct hat stillschweigend verengt, nichts ist
+  dabei umgefallen.
+  Der Endpunkt behaelt dieses DTO. Gemappt wird jetzt in RequestComponentServiceImpl innerhalb der
+  Transaktion statt danach im Controller, und findBySupplierId holt die Komponente per @EntityGraph
+  mit - vorher eine Abfrage je Zeile und Ebene. assignedBy traegt dieses DTO bewusst nicht: der
+  Lieferant sieht seine eigene Anforderung, wer sie im Haus zuletzt bewegt hat, gehoert ihn nicht an.
+  Abgedeckt durch RequestComponentMapperTest (inkl. dass die zwei Mengen auseinander bleiben) und
+  ComponentControllerTest. Das Mapper-Feld in ComponentController ist damit weg - gemappt wird im
+  Service, der Controller reicht nur durch.
+
+- Das Lager hat seine eigene Arbeitsliste fuer Komponenten-Anforderungen (Stand 2026-10-05):
+  GET /components/requests (paginiert, optionaler status, ADMIN und WAREHOUSE). Derselbe blinde
+  Fleck wie bei LOGISTICS und den versandfertigen Paketen: der Wareneingang nimmt eine requestId,
+  und lesen konnte man Anforderungen nur ueber GET /components/my-requests - die Liste des
+  Lieferanten (findBySupplierId). Die Rolle, die den Endpunkt aufrufen muss, hatte keine
+  Moeglichkeit zu erfahren, welche Anforderung auf DELIVERED steht, und ein ADMIN bekam auf
+  my-requests seine eigene, leere Liste. Sortierung standardmaessig nach requestDate aufsteigend -
+  ein Stapel an der Rampe wird in der Reihenfolge abgearbeitet, in der er angekommen ist. Eine
+  Abfrage pro Seite: component und assignedBy kommen per @EntityGraph mit (beide to-one, also
+  bleibt die Seite in SQL paginiert), supplier bewusst nicht, weil nur dessen Id gelesen wird.
+  Neu: findAllBy / findAllByRequestStatus. Abgedeckt durch ComponentServiceSupplierStepsTest,
+  ComponentControllerTest (inkl. literales Segment gewinnt gegen /components/{sku}),
+  ComponentRequestWorkflowTest und CustomQueryExecutionTest.
+
+- RequestComponent haelt fest, wer den Status gesetzt hat (Stand 2026-10-05): neue Spalte
+  assigned_by_id (nullable, FK auf users), geschrieben von jedem Schritt - Anlegen, die drei
+  Lieferantenschritte, der Wareneingang - jeweils neben updated, das @UpdateTimestamp selbst
+  stempelt. Keine History, eine Zeile davon: die Statuswerte sagen, wo die Anforderung war, das
+  hier sagt, wer sie zuletzt dorthin gebracht hat. Nullable mit Absicht, wie OrderHistory.user_id:
+  Zeilen von vor der Spalte haben niemanden zu nennen, und ein nicht aufloesbarer Benutzer darf den
+  gemeldeten Schritt nicht scheitern lassen. Ein User und kein Supplier, weil Lieferant und Lager
+  beide schreiben. Deshalb nimmt requestComponents jetzt den handelnden Benutzer entgegen.
+  Geschrieben nach den Pruefungen, ein abgelehnter Schritt aendert also nichts.
+  RequestComponentResponse antwortet mit assignedById und assignedByName.
+  Offen bleibt die volle Historie (eine Tabelle wie order_history) - siehe unten.
+
+- Mengen-Obergrenze bei der Komponenten-Bestellung (Stand 2026-10-05): @Max auf die Zeile,
+  RequestComponentsRequest.MAX_QTY = 1.000.000. Vorher erreichte eine vertippte Milliarde das
+  Insert, wo int(11) und STRICT_TRANS_TABLES daraus einen 500 machten; jetzt ist es ein 400, der
+  das Feld nennt. receiveRequest hat zusaetzlich einen Riegel gegen Integer.MAX_VALUE, der bei der
+  heutigen Spalte nicht feuern kann - er ist fuer den Tag, an dem die Spalte auf den Entity-Typ
+  gezogen wird, weil der Wareneingang ueber Long.intValue() bucht und 3.000.000.000 als
+  -1.294.967.296 herauskommt: ein Wareneingang, der den Bestand senkt.
+
+- Die Planungsseite hat ihre eigene Liste versandfertiger Pakete (Stand 2026-10-05):
+  GET /shipments/packages (ADMIN, LOGISTICS) zeigt die PACKED-Pakete, die in keinem Shipment stecken
+  - genau die Ids, die POST /shipments und POST /shipments/{id}/packages annehmen. Damit ist die
+  Luecke geschlossen, die der saubere Rollenschnitt vom 2026-10-04 aufgerissen hatte, ohne die
+  Ueberschneidung zurueckzuholen: /packages und /shipment-packages bleiben Packarbeit (WAREHOUSE),
+  /shipments bleibt Planung (LOGISTICS). Dasselbe Muster wie GET /shipments/distributor - eine Rolle
+  bekommt ihre eigene Sicht statt Leserechte auf die Liste einer anderen.
+  Sie sagt mehr als die alte gefilterte Paketliste: die zeigte auch Pakete, die schon in einem
+  Shipment unterwegs sind, also war jede Id daraus ein Versuch, den POST /shipments mit 409
+  beantwortet hat. Der Status ist fest PACKED und kein Parameter - alles andere ist nicht versandfaehig.
+  Neu: ShipmentPackageRepository.findAllByShipmentPackageStatusAndShipmentIsNull (abgeleitete Query
+  ueber den Fremdschluessel der Besitzerseite), ShipmentService.findShippablePackages in zwei
+  Abfragen wie jede andere Paketliste. Abgedeckt durch ShipmentServiceImplTest,
+  ShipmentControllerTest (inklusive: das literale Segment gewinnt gegen /shipments/{shipmentId}) und
+  CustomQueryExecutionTest.
+
+- Rollen nachgezogen (Stand 2026-10-04), nach einer Auswertung aller API-Endpunkte mit ihren
+  tatsaechlichen @PreAuthorize-Werten:
+  * GET /orders/{orderNo} jetzt auch LOGISTICS (lesend). Ein ShipmentResponse nennt Kunde, Adresse
+    und Paketinhalte, aber nicht dueDate oder deliveryDate - ohne die kann ein Versandplaner
+    Dringlichkeit nicht beurteilen.
+  * Die zwei Storno-Endpunkte auf demselben Pfad sind zu einem zusammengelegt:
+    POST /shipments/{id}/cancel mit ADMIN, LOGISTICS und DISTRIBUTOR. Das ging, weil die Pakete beim
+    Stornieren abgehaengt werden - die Antwort traegt danach ohnehin keine Paketinhalte, es gab also
+    nichts, was man vor einem Frachtfuehrer verbergen muesste. Der zweite Endpunkt (PUT, gleicher
+    Pfad, andere Rolle) hiess in der Praxis: falsches Verb raten und 403 bekommen.
+    DeliveryService.cancelShipment ist damit weg.
+  * GET /shipments/distributor jetzt auch ADMIN - ueberall sonst darf ADMIN mit, und bei den
+    Frachtfuehrer-Schritten ist ADMIN ausdruecklich die Korrekturrolle.
+  * Die Komponenten-Lesezugriffe (GET /components, /{sku}, /article/{articleNo}) jetzt auch
+    WAREHOUSE: das Lager darf anfordern, konnte aber den Katalog nicht sehen und musste die SKU
+    anderswo herbekommen. Schreibzugriffe bleiben ADMIN/MANAGER.
+
+- RequestStatus.DELIVERED eingefuegt (Stand 2026-10-04): die Kette ist jetzt
+  OPEN -> APPROVED -> IN_TRANSIT -> DELIVERED -> IN_STOCK. DELIVERED meldet der Lieferant
+  (POST /components/supplier/{id}/delivered, ADMIN und SUPPLIER) und bucht nichts - es ist, was er
+  BEHAUPTET, naemlich dass die Ware an der Rampe steht. IN_STOCK ist, was das Lager beim Auspacken
+  feststellt, und nur das bucht Bestand. Der Unterschied ist genau der klassische Wareneingang,
+  deshalb zwei Rollen.
+  receiveRequest startet damit nur noch aus DELIVERED, nicht mehr aus IN_TRANSIT. Der Gate haengt
+  einen internen Vorgang an eine externe Partei - abgedeckt durch die schon vorhandene
+  ADMIN-Ausnahme in requireAnsweringSupplier: ein ADMIN kann DELIVERED fuer einen schweigenden
+  Lieferanten melden, der Gate ist also strikt und trotzdem keine Sackgasse. Ein eigener Test haelt
+  das fest.
+  LOGISTICS bekommt den Wareneingang bewusst NICHT: die Rolle besitzt in dieser Codebase
+  ausschliesslich Shipments, Bestand schreiben ist durchgehend ADMIN/WAREHOUSE (StockController,
+  /produce) - und der Wareneingang schreibt Bestand.
+  CHECK-Constraint hat StatusCheckConstraintMigration automatisch nachgezogen, nachgeprueft:
+  in ('OPEN','APPROVED','IN_TRANSIT','DELIVERED','IN_STOCK'). Abgedeckt durch
+  ComponentServiceSupplierStepsTest, ComponentServiceReceiveTest und StatusCheckConstraintTest.
+
+- Wareneingang, und damit waechst der Komponentenbestand wieder (Stand 2026-10-04):
+  POST /components/warehouse/{requestId}/in-stock/{storehouseId} (ADMIN, WAREHOUSE) setzt
+  IN_TRANSIT -> IN_STOCK und bucht die Menge ueber StockService.add auf Stock.onHand fuer
+  (sku, storehouse). Das ist die einzige Stelle neben dem StockController, an der Komponentenbestand
+  entsteht - ohne sie laeuft assemble() alle 150 s und findet irgendwann nichts mehr zu bauen.
+  WICHTIG: die Menge geht in den BESTAND, nicht in Component.qty - das ist die Stuecklistenmenge
+  (wie viele in EIN Produkt gehen), eine Addition dort wuerde das Rezept jedes Produkts verfaelschen.
+  Ein eigener Test haelt beide Haelften fest.
+  Rolle WAREHOUSE, weil es ein physischer Vorgang an der Rampe ist, den der Lieferant nicht melden
+  kann und der zu der Rolle gehoert, die den Bestand besitzt. Das Lager kommt aus dem Pfad, weil die
+  Anforderung kein Lagerfeld hat - gebucht wird, wo die Ware tatsaechlich ankam. Unbekanntes Lager
+  404 (hier geprueft, StockService wuerde mit IllegalArgumentException einen 500 erzeugen), jeder
+  andere Status 409, alles in einer Transaktion.
+  RequestStatus umgebaut: STORAGE heisst IN_STOCK (sagt, was passiert ist, und benennt die
+  Nebenwirkung), ASSEMBLED ist weg - der Wert war nie korrekt setzbar, weil Stock nach
+  (storehouse_id, sku) eine Menge ohne Charge und ohne Rueckverweis auf die Anforderung haelt und
+  produce() sie nur dekrementiert. Datenmigration war nicht noetig, alle Zeilen standen auf OPEN; die
+  CHECK-Constraint hat StatusCheckConstraintMigration umgeschrieben (vierte Spalte), nachgeprueft:
+  in ('OPEN','APPROVED','IN_TRANSIT','IN_STOCK'). Abgedeckt durch ComponentServiceReceiveTest und
+  StatusCheckConstraintTest.
+
+- Der Lieferant kann antworten (Stand 2026-10-04): POST /components/supplier/{requestId}/approve und
+  /in-transit (ADMIN, SUPPLIER - Methoden-PreAuthorize, das das ADMIN/MANAGER der Klasse ersetzt).
+  OPEN -> APPROVED -> IN_TRANSIT, ein Schritt auf einmal, jeder andere Ausgangsstatus 409. Die Zeile
+  wird FOR UPDATE gelesen (neues findForUpdateById), weil Status geprueft und dann geschrieben wird.
+  Nur der Lieferant, bei dem die Anforderung liegt, darf antworten: ein fremder 403, eine Anforderung
+  ohne Lieferant 409, ADMIN ausgenommen - geprueft VOR dem Status, damit ein Fremder nichts ueber den
+  Stand erfaehrt. Keine supplierId im Pfad, sie kommt aus dem angemeldeten Benutzer wie beim
+  Distributor. Damit taucht RoleEnum.SUPPLIER erstmals in einem Controller auf.
+  Nebenbei: RoleService.isAdmin(Long userId) ist neu und liest die gespeicherten Rollen -
+  DeliveryServiceImpl hatte dafuer eine private Kopie, die jetzt weg ist. Abgedeckt durch
+  ComponentServiceSupplierStepsTest, ComponentControllerTest und CustomQueryExecutionTest.
+
+- request_components.id generiert sich wieder selbst (Stand 2026-10-04): POST /components/request/{id}
+  lief auf "Field 'id' doesn't have a default value". Ursache: die Tabelle entstand, als
+  RequestComponent.id eine UUID war - die Spalte ist uuid ohne AUTO_INCREMENT, waehrend die Entity
+  inzwischen Long mit GenerationType.IDENTITY ist. Hibernate laesst die Spalte im Insert weg und
+  erwartet, dass die DB sie fuellt. Jede andere Tabelle im Schema hat hier bigint auto_increment;
+  ddl-auto=update aendert den Typ einer bestehenden Spalte nie.
+  MODIFY COLUMN hilft nicht - MariaDB lehnt mit "Cannot cast 'uuid' as 'bigint' in assignment" ab.
+  RequestComponentIdMigration droppt die Spalte und legt sie neu an, PRIMARY KEY im selben Statement
+  (ein AUTO_INCREMENT muss ein Key sein), FIRST an die alte Position. Nur zulaessig, weil die Tabelle
+  leer war - bei Zeilen verweigert die Migration und loggt die Statements. Abgedeckt durch
+  RequestComponentIdTest; ein Unit-Test kann das nicht sehen, ComponentServiceRequestTest mockt das
+  Repository weg und lief die ganze Zeit gruen.
+  Uebrig: RequestComponent importiert weiterhin UuidGenerator und java.util.UUID, beide ungenutzt.
+
+- Order-Storno (Stand 2026-10-04): POST /orders/{orderNo}/cancel (ADMIN, MANAGER - bewusst nicht der
+  Kunde, es gibt Bestand frei und beendet die Order). Nur solange nichts physisch bewegt wurde: eine
+  Zeile ueber RESERVED hinaus hat die Ware vom Regal und ihre Reservierung ist CONSUMED - zurueck
+  einbuchen kann die Anwendung nicht, also 409 mit Nennung jeder betroffenen Zeile
+  (FulfillmentService.linesPastReservation, macht die bisher private Regel sichtbar und teilt ein
+  Praedikat mit hasLineBeyondReservation). Ebenfalls 409: Pakete schon in einem Shipment (dafuer gibt
+  es POST /shipments/{id}/cancel) und REJECTED/COMPLETED/CANCELLED.
+  Zurueckgedreht wird: alle aktiven Reservierungen ueber releaseItems, und jede Zeile endet auf
+  FulfillmentStatus.CANCELLED (neuer Enum-Wert). Reihenfolge ist tragend - der Status wird VOR der
+  Freigabe geschrieben, weil releaseItems eine IN_FULFILLMENT-Order unterwegs auf APPROVED setzt und
+  die Historie sonst einen Schritt enthielte, den es nie gab; die Zeilen danach, weil die Freigabe sie
+  auf WAITING zurueckstellt.
+  Dazu: StatusCheckConstraintMigration deckt jetzt auch order_items.fulfillment_status ab, jede
+  Spalte mit ihrer eigenen Enum-Klasse - CANCELLED waere sonst am CHECK gescheitert. Abgedeckt durch
+  OrderServiceCancelTest und StatusCheckConstraintTest.
+  Offen bleibt: ein Grund wie beim Shipment ist nicht gefordert (Order hat kein comment-Feld).
+
+- Uebergabe an den Distributor verdrahtet (Stand 2026-10-04): Die Kette hatte genau an der Stelle ein
+  Loch, an der sie zwischen zwei Rollen uebergeben wird. GET /shipments/distributor filtert auf
+  distributor_id, assignDistributor war das Einzige, was die Spalte setzt, und war optional - accept
+  liess READY zu, pruefte keinen zugewiesenen Distributor, setzte keinen und pruefte auch nicht, ob
+  der Anrufer der zugewiesene ist. Folge: im Normalablauf wies niemand zu, jede Arbeitsliste war
+  leer, der Frachtfuehrer fand ueber die API nichts - konnte aber jedes fremde Shipment annehmen und
+  bis DELIVERED durchfahren, mit distributor_id NULL und ohne Spur, wer es war.
+  Jetzt: accept nur noch aus DISPATCH_REQUESTED, und diesen Status setzt ausschliesslich
+  assignDistributor - damit ist die Uebergabe ein Pflichtschritt und der Status erstmals an etwas
+  gebunden. Dazu requireReportingDistributor: ein fremder Frachtfuehrer 403, ein Shipment ohne
+  Zuweisung 409, ADMIN ausgenommen (aus den gespeicherten Rollen gelesen). Geprueft VOR dem Status,
+  damit ein fremder Anrufer nichts ueber den Stand erfaehrt.
+  API-Verhaltensaenderung: ein READY-Shipment ist nicht mehr direkt annehmbar. Abgedeckt durch
+  DeliveryServiceImplTest.
+
+- Komponenten beim Lieferanten bestellen (Stand 2026-09-28): POST /components/request/{supplierId}
+  (ADMIN, MANAGER) legt je Zeile des Bodys eine eigene request_components-Zeile an, Status OPEN.
+  componentId traegt die SKU, nicht die numerische Id - der UUID-Typ macht das eindeutig. Eine
+  doppelte SKU bleibt zwei Zeilen (zwei Bestellungen mit eigener Menge und eigenem Kommentar),
+  anders als bei Order-Positionen, wo mergeDuplicateProducts zusammenfasst. comment ist optional und
+  wird leer als null gespeichert. Supplier: 404 wenn es den Benutzer nicht gibt, 400 wenn er kein
+  Supplier ist (Hibernate.unproxy, wie beim Distributor). Alles oder nichts: eine unbekannte SKU
+  lehnt den ganzen Request mit 404 ab und nennt alle unbekannten. Der Body wird als nacktes Array
+  ODER als {"items": [...]} angenommen (@JsonCreator DELEGATING, wie die uebrigen Id-Listen).
+  Abgedeckt durch ComponentServiceRequestTest und ComponentControllerTest.
+
+- Component.qty: das Rezept wird gelesen (Stand 2026-09-28, ex Befund 2): getRequiredComponents
+  zaehlte jede Component als Menge 1 (merge(sku, 1, Integer::sum)) - ein Produkt, das vier Schrauben
+  braucht, hat eine verbraucht und wurde aus Bestand gebaut, den es nie gab. Component hat jetzt ein
+  Feld qty (NOT NULL, ColumnDefault 1, PrePersist hebt fehlend/<1 auf 1), das die Stueckliste traegt;
+  es sitzt an Component und nicht an einer Zwischentabelle, weil product_id dort NOT NULL ist - jede
+  Zeile gehoert genau einem Produkt. getRequiredComponents summiert es je SKU; eine Zeile ohne SKU
+  oder ohne brauchbare Menge macht das ganze Rezept ungueltig ("No valid component requirements"),
+  statt eine Menge zu raten - assemble() laeuft alle 150 s unbeaufsichtigt. qty steht auch in
+  ComponentResponseDto und ProductComponentDto, das Rezept ist also aus dem Produkt lesbar.
+  ComponentQtyMigration setzt Altzeilen auf 1; geprueft: die Spalte kam als int(11) NOT NULL
+  DEFAULT 1 an, alle 16 Zeilen stehen auf 1. Abgedeckt durch ProductionServiceProduceTest und
+  ComponentQtyTest.
+
+- order_history.user_id ist nullable (Stand 2026-09-28, ex Befund 13): Die Spalte war NOT NULL,
+  waehrend der Code ausdruecklich ohne Benutzer schreibt (Sweep als "system", update(id, order) ohne
+  Id). Jede solche Statusaenderung scheiterte beim Schreiben der Historienzeile - im AFTER_COMMIT-
+  Listener, also nach dem Commit: 500 fuer eine Operation, die geklappt hat. OrderHistoryUserIdMigration
+  weitet die Spalte beim Start, idempotent und mit dem Typ aus information_schema. Abgedeckt durch
+  OrderHistoryUserIdTest; StatusCheckConstraintTest schreibt seine Historienzeile wieder mit
+  userId null, die Umgehung dort ist raus.
+
+- assignDistributor sperrt jetzt (Stand 2026-09-28): findForUpdateById statt findWithPackagesById. Es
+  war die letzte Shipment-Aenderung, die einen Status prueft und einen schreibt, ohne die Zeile zu
+  sperren. Abgedeckt durch ShipmentServiceImplTest.
+
+- Update ohne isActive laesst die Sperre stehen (Stand 2026-09-28): UserServiceImpl.update setzte das
+  Feld auf true, wenn es im Request fehlte - jedes Update ohne das Feld (neues Passwort, Farbe)
+  reaktivierte einen gesperrten Benutzer. Jetzt wird nur geschrieben, was gesendet wurde. Abgedeckt
+  durch UserServiceRequestDtoTest.
+
+- WAIT_SUPPLY ist keine Sackgasse mehr (Stand 2026-09-28): Hinein setzt ihn OrderService.acknowledge -
+  deckt checkItems nicht jede Zeile, wird die Order trotzdem bestaetigt (der Kunde bekommt ein Datum,
+  und zwar die Wiederbeschaffungs-Lieferzeit), der Status sagt nur, warum es so weit weg liegt.
+  ACKNOWLEDGED bleibt der Fall "alles auf Lager". checkItems wird dafuer nur noch EINMAL gefragt und
+  an confirmDeliveryDate durchgereicht, statt zweimal zu laufen. Heraus fuehrt eine Reservierung:
+  WAIT_SUPPLY steht jetzt in PRE_FULFILLMENT_STATUSES, reserveItems hebt die Order also auf
+  IN_FULFILLMENT, sobald Bestand haltbar ist - und tryToReserve schaut neben IN_FULFILLMENT auch auf
+  WAIT_SUPPLY, sonst wuerde der Weg hinaus nie automatisch ausgeloest. Abgedeckt durch
+  OrderServiceAcknowledgeTest.
+
+- Order-Status wird berechnet statt geschoben (Stand 2026-09-28): OrderProgressService.recompute
+  ersetzt advance, takeBackFromDispatch und recordDelivery. Die Versandseite nennt kein Ziel mehr,
+  sondern nur noch die betroffenen Orders; wo eine Order steht, faellt aus den MENGEN ihrer Zeilen in
+  Shipments (OrderItemRepository.findShippedQuantities, eine Zeile je Position und Shipment-Status,
+  eine Query pro Stapel). Alles geliefert -> DELIVERED; etwas geliefert und etwas nicht ->
+  PARTIALLY_DELIVERED; alles mindestens unterwegs -> IN_TRANSIT; alles mindestens in einem READY-
+  Shipment -> READY_FOR_DISPATCH; sonst IN_FULFILLMENT. PARTIALLY_DELIVERED bleibt der Lieferung
+  vorbehalten - ein abgefahrenes Shipment allein macht eine Order nicht "teilweise" irgendwas.
+  Behebt "Status kommt zu frueh" an allen drei Stellen: vorher hat das erste meldende Shipment eine
+  Order als bereit, unterwegs oder geliefert gesetzt, egal ueber wie viele Shipments sie verteilt war.
+  Geht in beide Richtungen, ein storniertes Shipment gibt seine Pakete zurueck und die Order faellt von
+  selbst - der eigene Rueckweg entfaellt. Schreibt nur innerhalb IN_FULFILLMENT bis DELIVERED und nur
+  fuer Orders, die schon dort stehen (RECOMPUTED_FROM); alles davor ist Sache der Order-Seite,
+  REJECTED/CANCELLED/COMPLETED sind Enden. Damit ist auch ORDER_FLOW weg, dessen indexOf einen nicht
+  eingetragenen Status stumm uebersprungen hat. Abgedeckt durch OrderProgressServiceImplTest,
+  DeliveryServiceImplTest, ShipmentServiceImplTest, CustomQueryExecutionTest.
+
+- Order abschliessen und Teillieferungen (Stand 2026-09-28): POST /orders/{orderNo}/complete (ADMIN,
+  MANAGER) schliesst eine Order ab - der einzige Weg nach COMPLETED. Geprueft wird ueber MENGEN, nicht
+  ueber Status: jede Zeile muss durch PackageItems gedeckt sein, die in Shipments mit Status DELIVERED
+  gereist sind (OrderItemRepository.findDeliveredQuantities, OrderProgressService.undeliveredLines).
+  Zeilen zaehlen reicht nicht - eine Zeile darf in mehreren Runs und Shipments reisen, 5 von 10 ist
+  keine gelieferte Zeile. Alle Joins der Query sind Inner Joins, eine Zeile ohne Ankunft fehlt im
+  Ergebnis komplett, deshalb wird die Deckung von den Order-Zeilen aus gezaehlt. Vier 409er: schon
+  COMPLETED, in REJECTED/CANCELLED geendet, gar keine Zeilen, und noch etwas offen - die letzte
+  Meldung nennt jede fehlende Zeile mit bestellt gegen geliefert. OrderStatus.DELIVERED ist bewusst
+  keine Vorbedingung.
+
+- OrderStatus.PARTIALLY_DELIVERED eingefuehrt (Stand 2026-09-28): shipmentDelivered ruft nicht mehr
+  advance mit festem Ziel DELIVERED, sondern OrderProgressService.recordDelivery - eine Order, deren
+  andere Pakete noch unterwegs sind, erreicht PARTIALLY_DELIVERED statt DELIVERED. Vorher hat der
+  erste meldende Frachtfuehrer die ganze Order als geliefert gesetzt. Vorwaerts-Regel gilt weiter:
+  ein spaeter Nachzuegler zieht eine DELIVERED-Order nicht zurueck.
+
+- CHECK-Constraints wachsen mit dem Enum (Stand 2026-09-28): StatusCheckConstraintMigration
+  richtet orders.order_status, order_history.previous_status und order_history.new_status nach
+  OrderStatus.values() aus. Ohne das haette PARTIALLY_DELIVERED beim Insert gescheitert - und zwar
+  auch in der Historie, deren Insert im AFTER_COMMIT-Listener laeuft und aus einer erfolgreichen
+  Operation eine 500 gemacht haette. Wichtig fuer spaeter: Hibernate schreibt den CHECK in die
+  SPALTENDEFINITION, und ein Column-Constraint findet DROP CONSTRAINT nicht ("Can't DROP CONSTRAINT;
+  check that it exists") - die Spalte muss mit MODIFY COLUMN neu geschrieben werden. Was die Migration
+  selbst anlegt, ist ein Table-Constraint und laesst sich normal droppen. Abgedeckt durch
+  StatusCheckConstraintTest (schreibt jeden Enum-Wert in alle drei Spalten).
+
+- DeliveryController abgetrennt (Stand 2026-09-25): accept, in-transit und delivered sind aus dem
+  ShipmentController in einen eigenen DeliveryController gezogen. Die Pfade bleiben unter /shipments -
+  das ist die Ressource; getrennt wird nach Rolle und Richtung: LOGISTICS plant, der DISTRIBUTOR
+  meldet zurueck. Das Zuweisen eines Distributors bleibt bewusst bei LOGISTICS (das Haus waehlt einen
+  Frachtfuehrer, nicht der Frachtfuehrer antwortet). Neu:
+  GET /shipments/distributor (ADMIN, DISTRIBUTOR) - die Shipments des eingeloggten Distributors,
+  optional nach Status, paginiert, Antwort sind DeliveryResponse-Zeilen ohne Paketinhalte. Keine
+  distributorId im Pfad, sie kommt aus dem angemeldeten Benutzer. Zwei Queries wie jede andere
+  Shipment-Liste. Abgedeckt durch DeliveryControllerTest (registriert beide Controller, damit die
+  Kollision mit GET /shipments/{id} wirklich getestet ist), DeliveryServiceImplTest und
+  CustomQueryExecutionTest.
+
+- Reject und Acknowledge schreiben wieder Historie (Stand 2026-09-23): OrderController lud die Order,
+  setzte den Status auf ihr und reichte dieselbe Entity an update weiter; acknowledge genauso. Mit
+  spring.jpa.open-in-view auf dem Default true teilen sich beide Aufrufe einen EntityManager pro
+  Request - die zweite Ladung lieferte genau die schon geaenderte Instanz, der Vergleich in update sah
+  keine Aenderung. Der Status ging in die DB (eine managed Entity wird auch ohne save geflusht), das
+  OrderStatusChangedEvent nicht. acknowledge ruft jetzt orderProgress.changeStatus, und fuer das
+  Ablehnen gibt es OrderService.reject(order, userId) - der Controller setzt keinen Status mehr. Ein
+  zweites Ablehnen ist damit auch 400 statt 500 (IllegalArgumentException kannte der
+  GlobalExceptionHandler nicht). Nachgewiesen und abgesichert durch OrderStatusHistoryTest
+  (SpringBootTest mit @RecordApplicationEvents, eine Transaktion und ein Persistence-Context - ein
+  Unit-Test kann das nicht zeigen, dort liefern die Mocks bei beiden Ladungen dasselbe).
+
+- Order-Statusänderungen an einer Stelle (Stand 2026-09-23): OrderProgressService.changeStatus
+  schreibt den Status, speichert und veröffentlicht das OrderStatusChangedEvent; advance /
+  takeBackFromDispatch sind die Varianten mit Richtungsregel, recordCreated die erste Zeile einer
+  neuen Order. OrderServiceImpl (create, update - und damit acknowledge und reject) und
+  FulfillmentServiceImpl (IN_FULFILLMENT, zurück auf APPROVED) rufen sie auf, statt setStatus und
+  publishEvent je selbst zu bauen. Zwei Fehler fielen dabei weg: reserveItems hängte das Event an ein
+  ifPresent auf die Benutzersuche und schrieb den Status auch ohne Treffer - die Order bewegte sich
+  ohne Historienzeile; und update() schrieb einen fehlenden Status als null in die Order. Abgedeckt
+  durch OrderProgressServiceImplTest, FulfillmentServiceReserveItemsTest,
+  FulfillmentServiceReleaseItemsTest.
+
+- Order geht beim Bereitmelden mit (Stand 2026-09-23): PUT /shipments/{id}/ready setzt nicht mehr nur
+  die Order-Zeilen, sondern auch die Orders dahinter auf READY_FOR_DISPATCH - der Status ist das
+  Lager, das eine Order für den Distributor fertig meldet, nicht die Antwort des Distributors. Der
+  advance-Aufruf in /accept bleibt als Nachzügler stehen. checkShipmentReady nimmt dafür die userId
+  entgegen, der Controller reicht den angemeldeten Benutzer durch. Abgedeckt durch
+  ShipmentServiceImplTest.
+
+- Zuständigkeiten im Versand geschnitten (Stand 2026-09-23): OrderProgressService (advance /
+  takeBackFromDispatch, ORDER_FLOW, Events, Propagation.MANDATORY) trägt die Order-Statuslogik,
+  DeliveryService die drei Frachtführer-Schritte (accept, in-transit, delivered). Sie antworten mit
+  DeliveryResponse statt ShipmentResponse - ohne Paketinhalte, der Distributor sieht keine SKUs und
+  Mengen. ShipmentService bleibt die Planungsseite (LOGISTICS). Abgedeckt durch
+  OrderProgressServiceImplTest, DeliveryServiceImplTest, ShipmentServiceImplTest, ShipmentControllerTest.
+
+- Versandkette vollständig (Stand 2026-09-23): PUT /shipments/{id}/ready (nur CREATED, Adresse,
+  mindestens ein Paket, alle Pakete PACKED, Shipment FOR UPDATE; setzt die Order-Zeilen von PACKED
+  auf READY_FOR_DISPATCH), POST /shipments/{id}/accept, /in-transit (Pakete PACKED -> DISPATCHED,
+  shippedAt) und /delivered (deliveredAt) für ADMIN und DISTRIBUTOR, jeweils mit den Orders des
+  Shipments (nur vorwärts, mit OrderStatusChangedEvent), sowie POST /shipments/{id}/cancel für ADMIN
+  und LOGISTICS (nur bis ACCEPTED, Grund Pflicht, Pakete werden wieder lose, Zeilen und Orders gehen
+  einen Schritt zurück). Änderbar bleibt: Pakete nur bei CREATED, Shipment-Daten bis ACCEPTED.
+  Abgedeckt durch ShipmentServiceImplTest, ShipmentControllerTest, CustomQueryExecutionTest.
+
+- Übergabe an den Distributor (Stand 2026-09-23): POST /shipments/{id}/accept, /in-transit und
+  /delivered (ADMIN, DISTRIBUTOR) setzen den ShipmentStatus (ACCEPTED, IN_TRANSIT mit shippedAt,
+  DELIVERED mit deliveredAt; falscher Ausgangsstatus 409, Shipment FOR UPDATE) und nehmen die Orders
+  des Shipments mit (READY_FOR_DISPATCH, IN_TRANSIT, DELIVERED) - nur vorwärts, REJECTED/CANCELLED
+  bleiben unberührt, jede Änderung mit OrderStatusChangedEvent. Abgedeckt durch
+  ShipmentServiceImplTest, ShipmentControllerTest, CustomQueryExecutionTest.
+
+- Reservation.orderId entfernt (Stand 2026-09-22): redundant zu orderItem.order und ein String
+  neben dem numerischen Order.id. Reservierungen einer Order über findByOrderItemOrderIdAndStatus
+  (Join über zwei indizierte FKs), InventoryService/-TransactionService mit Long orderId,
+  ReservationDto.of(reservation, orderId), Picking liest die Order über orderItem.order. Die
+  ungenutzten Finder findByOrderIdAndSkuAndStorehouseIdAndStatus, findActive(orderId, sku,
+  storehouseId) und findByOrderIdAndStatusAndExpiresAtBefore sind mit entfernt.
+  DB-Spalte muss per Hand weg - siehe "Offene Datenpflege".
+
+- Distributor-Zuweisung (Stand 2026-09-22): Nicht-Distributor gab eine ClassCastException (500),
+  weil vor der Prüfung gecastet wurde, und die Prüfung "instanceof User" war immer wahr - jetzt
+  unproxy + instanceof Distributor, sonst 400. ShipmentResponse enthielt die Distributor-Entity
+  (Passwort-Hash, Rollen) - jetzt distributorId/distributorName. findShipment gibt wieder
+  ShipmentResponse zurück, gemappt im Service (Paketinhalte in einer Abfrage).
+  ShipmentControllerTest an den geänderten Record angepasst. Abgedeckt durch ShipmentServiceImplTest.
+
+- Controller nach Zuständigkeit aufgeteilt (Stand 2026-09-22), URLs unverändert:
+  PackingController (/packing/** aus FulfillmentController), PackageController (/packages,
+  /shipment-packages, /lonely-packages aus ShipmentController), ShipmentController nur /shipments/**.
+  FulfillmentController heißt jetzt PickingController und enthält nur noch Picking; /order-items
+  (die gepickten Zeilen zum Packen) steht im PackingController. Tests entsprechend umbenannt:
+  PackingControllerTest, PackageControllerTest, ShipmentControllerTest.
+
+- Paket abschließen (ex Befund 6): PUT /packing/shipment/{id}/complete - OPEN -> PACKED, nicht OPEN
+  409, ohne Items 400 (niemals ein leeres Paket abschließen; complete() selbst lehnt es ebenfalls
+  ab), unbekannt 404. completePackage ist @Transactional, damit die Sperre bis zum Schreiben hält.
+  Abgedeckt durch PackingServicePackageContentsTest, ShipmentPackageCompleteTest,
+  PackingControllerTest, ShipmentServiceImplTest.
+
+- Shipments anlegen und ändern (ShipmentController + neuer ShipmentService): POST /shipments,
+  POST/PUT /shipments/{id}/packages, DELETE /shipments/{id}/packages/{packageId}, PUT /shipments/{id},
+  GET /shipments (optional ?status=), GET /shipments/{id}. Regeln: customerId muss ein Customer sein
+  (400), mindestens ein Paket, nie leer (auch nicht per PUT [] oder DELETE des letzten, 400), nur
+  PACKED (409), Paket nicht in anderem Shipment (409), jedes Paket enthält Items einer Order dieses
+  Kunden (400, leeres Paket ebenso), keine doppelte Paketnummer (409), shippingAddress Pflicht, nur
+  CREATED änderbar (409). Shipment -> ShipmentPackage wie ShipmentPackage -> PackageItem (Paket hält
+  den Fremdschlüssel, addPackage/removePackage, kein Löschen). Abgedeckt durch
+  ShipmentServiceImplTest, ShipmentControllerTest, CustomQueryExecutionTest.
+
+- UserController nahm die User-Entity als Request-Body (Teil von Befund 5): jetzt UserRequestDto
+  mit firstName, lastName, username, email, password, color, isActive und roles als Namen
+  (["MANAGER"], Groß-/Kleinschreibung egal; unbekannter Name 400, Rolle nicht in der DB 400).
+  UserService hat dafür create(UserRequestDto)/update(Long, UserRequestDto), die auf die
+  bestehenden Methoden abbilden - Verhalten sonst unverändert. Achtung Clients: Rollen kommen als
+  Namen, nicht mehr als Role-Objekte. Abgedeckt durch UserControllerTest, UserServiceRequestDtoTest.
+
+- Paketgewicht (ex Befund 8): weight kommt aus keinem Request mehr (CreatePackageRequest,
+  UpdatePackageRequest; ein mitgeschicktes "weight" wird ignoriert). ShipmentPackage.weight ist
+  immer das Inhaltsgewicht, ohne Items 0, und hat keinen Setter. Das Paket pflegt es selbst:
+  @PrePersist beim Anlegen, addItem/removeItem bei jeder Inhaltsänderung (items ohne Setter).
+  Kein @PreUpdate - das liefe bei reinen Inhaltsänderungen gar nicht (nur package_item ändert sich)
+  und würde sonst mitten im Flush nachladen.
+  getPackageWeight() = Inhalt + Tara, Javadocs angeglichen. Abgedeckt durch
+  ShipmentPackageWeightTest und PackingServicePackageContentsTest.
+
+- Dieselbe Position zweimal im Paket-Request (ex Befund 7): Jeder Eintrag läuft weiter einzeln
+  durch packLine (5 + 5 + 5 auf 10 überspringt den dritten, 8 + 8 bleibt ein 400), das gepackte
+  Ergebnis wird aber auf das Item derselben Position im Lauf aufaddiert (addToRun) - ein Item je
+  Position und Lauf, kein Verstoß gegen uq_package_item_order_item_run mehr. Gilt für alle drei
+  Pack-Wege. Abgedeckt durch PackingServiceCreatePackageTest (foldsTheSameLineTwice...).
+- findConsumedReservations (Teil von Befund 9): fragt jetzt per findByOrderIdAndStatus je Order,
+  statt die ersten 100 CONSUMED-Reservierungen aller Orders im Speicher zu filtern. Abgedeckt durch
+  FulfillmentServiceConsumedReservationsTest.
+- OrderItem.@Max(20) lief beim Flush als 500 auf: Die Annotation ist entfernt, die Grenze prüft
+  OrderServiceImpl.mergeDuplicateProducts nach dem Zusammenfassen (MAX_LINE_QUANTITY = 20) und
+  antwortet mit 400 inkl. Artikelnummer. Abgedeckt durch OrderServiceLineQuantityTest.
+
+- Order fiel auf APPROVED zurück, obwohl schon gepickt war (ex Befund 4): revertOrderStatus lässt
+  die Order auf IN_FULFILLMENT, sobald eine Zeile über RESERVED hinaus ist (PICKING und weiter) -
+  eine gepickte Zeile hält nur eine CONSUMED-Reservierung, die nicht als aktiv zählt. Abgedeckt
+  durch FulfillmentServiceReleaseItemsTest.keepsTheOrderInFulfillmentWhenALineIsAlreadyPicked.
+- produce() meldete als Gesamtzahl die erfolgreichen Produktionen der Seite (ex Befund 2, erster
+  Teil): jetzt die Gesamtzahl der Produkte. Abgedeckt durch ProductionServiceProduceTest.
+- Product.@PrePersist warf ohne Komponenten eine NullPointerException (500): Ohne Komponenten ist
+  das Gewicht 0, Komponenten ohne Gewicht zählen nicht. Abgedeckt durch ProductWeightTest.
+
+- Rote Tests CreatePackageRequestTest (3): Der Test schickte noch den alten JSON-Schlüssel
+  "packageType". Jetzt "shipmentPackageType"; ein neuer Test hält fest, dass der alte Schlüssel
+  still ignoriert wird (Typ bleibt null) - Clients müssen den neuen schicken.
+
+- Lose PackageItems ließen sich keinem Paket zuordnen: Paketinhalte sind jetzt änderbar -
+  POST /packing/shipment/{id}/items (hinzufügen), PUT .../items (ersetzen, [] leert),
+  DELETE .../items/{itemId} (herausnehmen), PUT /packing/shipment/{id} (nur Paketangaben). Paket und
+  Items werden gesperrt gelesen, nur OPEN ist änderbar (409), fremdes Paket 409, eine Order pro
+  Paket (400), ein Item je Position und Lauf (409). ShipmentPackage.items ohne orphanRemoval und
+  ohne REMOVE-Cascade - herausgenommene Items werden lose, nicht gelöscht. Abgedeckt durch
+  PackingServicePackageContentsTest, ShipmentPackageMappingTest, PackingControllerTest.
+- package_item-Constraint um den Lauf erweitert: uq_package_item_order_item_run auf
+  (shipment_package_id, order_item_id, run_no) statt (shipment_package_id, order_item_id) - eine
+  Position aus zwei Läufen darf in ein Paket. In der DB umgestellt, alter Index entfernt.
+- POST /packing/shipment (createCustomShipment): Paket ohne Pflicht-Items; mitgeschickte Items werden
+  gepackt und vorher per requireValidItems geprüft (früher still ignoriert bzw. ungeprüft).
+- shipment_package-Spalten migriert: package_type/type -> shipment_package_type, status ->
+  shipment_package_status (stand in allen Zeilen auf ''), alte Spalten gelöscht.
+- Shipping-Lesezugriff: ShipmentController über PackageQueryService statt Repository, GET
+  /shipment-packages nach ShipmentPackageStatus (der Status wurde vorher angenommen und ignoriert)
+  plus optionaler packageNumber-Filter (leer = kein Filter, sonst fielen Pakete ohne Nummer heraus),
+  GET /packages (alle Items), GET /lonely-packages (lose Items), Einzelabrufe /packages/{id} und
+  /shipment-packages/{id}. Paketlisten in zwei Abfragen statt Nachladen je Paket und Item.
+- ShipmentPackageListDto gab PackageItem-Entities aus - Jackson lief im Kreis (Paket -> Items ->
+  Paket). Jetzt ShipmentPackageItemDto ohne Paketbezug. PackageItemResponse.siblings wird berechnet
+  (PackageItemResponseAssembler, eine Abfrage pro Antwort). Abgedeckt durch
+  ShipmentPackageListDtoTest, PackageItemResponseAssemblerTest, PackageQueryServiceImplTest,
+  PackageControllerTest.
+- Request-Bodies als nacktes Array: CreatePackageItemsRequest und PackageItemIdsRequest lesen [...]
+  und {"items"/"packageItemIds": [...]}. Abgedeckt durch CreatePackageItemsRequestTest.
+- In der DB bestätigt: uq_stock_storehouse_sku, uk_reservation_order_item und
+  uk_order_item_order_product existieren, der alte Reservierungs-Index (order_id, sku, storehouse_id)
+  ist weg, package_item.shipment_package_id ist nullable, und es gibt keine Positionen mehr, die nach
+  einem fehlgeschlagenen Pick auf RESERVED über einer CONSUMED-Reservierung stehen.
+
+Erledigt (Stand 2026-09-16)
+
+- Picking scheiterte mit "Record has changed since last read in table 'reservation'": pick schrieb
+  die Reservierung nach consume ein zweites Mal. MariaDB ab 11.6 (innodb_snapshot_isolation) lehnt
+  das Update einer Zeile ab, die sich nach dem Snapshot der Pick-Transaktion geändert hat. pick
+  schreibt die Reservierung nicht mehr. Abgedeckt durch OrderHandlingTransactionServicePickTest.
+- Packing-Fehler kamen als 500 (IllegalStateException/IllegalArgumentException), jetzt 400/404.
+- qty 0, negativ oder fehlend beim Packen: requireValidItems lehnt den ganzen Request vor dem ersten
+  Sperren mit 400 ab; dazu Bean Validation auf PackItem und @Min(1) auf PackageItem.quantity.
+- Packing-Regeln: Mengen vor Status - Überschreitung immer ein Fehler, voll gepackte Position wird
+  übersprungen, nie gekürzt. Wird gar nichts gepackt, nennt der 400 jede übersprungene Position.
+- Lose Package-Items (POST /packing, gemeinsame runNo), Validation Group WithItems für
+  CreatePackageRequest.items, Paketkopf gemeinsam über newShipmentPackage.
+- GET /order-items: Order-Positionen nach FulfillmentStatus als Projektion (OrderItemListDto), mit
+  reservationId über left join auf Reservation.
+- Migration order_date -> created: am 2026-09-16 beim Start gelaufen, Spalte gelöscht.
+- Packing über die bestellte Menge hinaus (gleiche Position zweimal im Request, parallele Aufrufe):
+  packLine zählt den laufenden Aufruf mit und sperrt die Position (findForUpdateById).
+- pick setzte Zeilen auf PICKED, obwohl nichts verbraucht wurde: pick bricht bei leerer
+  consume-Liste mit 400 ab.
+- Reserve/Release antworteten mit Entities aus einer geschlossenen Session: jetzt ReservationDto.
+- Expiry-Sweep lud Orders ohne ihre Zeilen: findWithOrderItemsByIdIn mit EntityGraph.
+- Product.unitPrice/weight und Component.weight auf passende precision/scale.
+
+Erledigt (Stand 2026-09-10)
+
+- GET mit Seiteneffekt (OrderController.getOrderByOrderNo): ACKNOWLEDGED jetzt über POST
+  /orders/{orderNo}/acknowledge, nur aus CREATED, mit bestätigtem Liefertermin.
+- releaseItems matchte nur über die SKU: jetzt über reservation.getOrderItem().getId().
+- Regel "ein Produkt pro Order": Unique (order_id, product_id) auf order_items, doppelte Artikel
+  werden per mergeDuplicateProducts zusammengefasst.
+- Reservierungs-Guard, Lookup in release/consume und RESERVED-Markierung über die order_item_id
+  statt die SKU (Härtung).
+- Catch-all @ExceptionHandler(Exception.class) leitet den Status aus der Exception ab und fällt nur
+  ohne Angabe auf 500 zurück.
+
+--------------------------------------------------------------------------
+Offene Datenpflege (optional)
+
+PFLICHT vor dem nächsten Reservieren - reservation.order_id ist NOT NULL, die Entity schreibt die
+Spalte nicht mehr, jedes neue Reservierungs-Insert scheitert sonst:
+      SHOW INDEX FROM reservation;              -- nachsehen, ob ein Index order_id enthält
+      ALTER TABLE reservation DROP COLUMN order_id;
+
+Alle bisher hier gelisteten Migrationen sind erledigt (siehe oben). Übrig ist Kosmetik:
+
+- shipment_package.weight bestehender Pakete: 0 oder ein früher angegebener Wert, bis das Paket
+  das nächste Mal geändert wird. Einmalig nachrechnen:
+      UPDATE shipment_package sp
+      SET weight = COALESCE((SELECT SUM(pi.quantity * COALESCE(p.weight, 0))
+                             FROM package_item pi
+                             JOIN order_items oi ON oi.id = pi.order_item_id
+                             JOIN products p ON p.id = oi.product_id
+                             WHERE pi.shipment_package_id = sp.id), 0);
+
+- 4 package_item-Zeilen ohne run_no. Jede als eigener Lauf:
+      UPDATE package_item SET run_no = UUID() WHERE run_no IS NULL;
+- 1 shipment_package ohne package_number. Nummer nachtragen, z. B. im Format von
+  generatePackageNumber (PKG-yyyyMMdd-XXXXXXXX):
+      SELECT id, created_at FROM shipment_package WHERE package_number IS NULL;

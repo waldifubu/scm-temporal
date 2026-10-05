@@ -22,7 +22,7 @@ import org.springframework.web.bind.annotation.*;
  * reading them.
  * <p>
  * What the carrier then does with a shipment - accept, in transit, delivered, and their own work
- * list - is {@link DeliveryController}. Assigning a distributor stays here: that is the house
+ * list - is {@link OutboundController}. Assigning a distributor stays here: that is the house
  * choosing a carrier, not the carrier answering.
  */
 @RestController
@@ -116,7 +116,7 @@ public class ShipmentController {
      * packages already travelling in a shipment.
      * <p>
      * The literal segment wins over {@code GET /shipments/{shipmentId}} below, the same way
-     * {@code GET /shipments/distributor} in {@link DeliveryController} does.
+     * {@code GET /shipments/distributor} in {@link OutboundController} does.
      */
     @GetMapping(path = "/shipments/packages", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','LOGISTICS')")

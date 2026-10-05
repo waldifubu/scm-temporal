@@ -155,7 +155,7 @@ Which service owns which stretch — one controller per service, named after wha
 | `PICKED → PACKED`, package contents, completing a package | `PackingService` | `PackingController` (`/packing/**`, plus `/order-items`) |
 | reading packages and package items | `PackageQueryService` | `PackageController` |
 | packages → shipment, ready, cancel, what may still be shipped | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `DeliveryController` (`/shipments/**`, DISTRIBUTOR) |
+| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `OutboundController` (`/shipments/**`, DISTRIBUTOR) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
 | tracking, returns | `DeliveryService` | — (not implemented) |
@@ -479,7 +479,7 @@ travels in another shipment.
 `weight` of all packages and the packages with their contents. The list (`GET /shipments`, optional
 `status`) answers `ShipmentListDto` rows with the package ids only.
 
-**The carrier's endpoints live in `DeliveryController`**, the planning ones in `ShipmentController`.
+**The carrier's endpoints live in `OutboundController`**, the planning ones in `ShipmentController`.
 Both map under `/shipments`, because that is the resource — what separates them is the role and the
 direction. A distributor's own work list is `GET /shipments/distributor` (optional `status`, paged):
 no id in the path, the distributor is read from the authenticated user, and the rows are
@@ -943,7 +943,7 @@ part of them.
 | `ShipmentPackageMappingTest`, `ShipmentPackageWeightTest`, `ShipmentPackageCompleteTest` | no delete cascade on items, computed weight, `OPEN → PACKED` only with items |
 | `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the ready check, cancelling and what it takes back, binding and status codes |
 | `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, and the distributor's work list in two queries |
-| `DeliveryControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
+| `OutboundControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
 | `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
 | `OrderProgressServiceImplTest` | the computed order status: every step from `IN_FULFILLMENT` to `DELIVERED` out of the shipped quantities, `PARTIALLY_DELIVERED` reserved for the delivery, the fallback when a cancellation takes the coverage away, statuses outside the shipment range left alone (`WAIT_SUPPLY` among them), and `changeStatus`/`recordCreated` |
 | `OrderServiceCompleteTest` | closing an order: the quantity check, and the four refusals (already closed, ended, no lines, still short — with the short lines named) |
@@ -995,7 +995,7 @@ Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse select
 - `ShipmentServiceImpl.assignDistributor` reads the shipment without a lock, unlike the other
   shipment changes.
 - Two error response shapes coexist, see [Error responses](#error-responses).
-- The order number range `90000..99999` holds **10000 orders**, and the 10001st is refused. That is
+- The order number range `90000..199999` holds **110000 orders**, and the next one is refused. That is
   the ceiling of `OrderNumberScrambler`, and it can only be widened while no numbers are in use — a
   different range is a different permutation. (It replaced a `Math.random()` loop whose ceiling was
   about the same but which failed far worse: a TOCTOU race against the insert, and an endless loop

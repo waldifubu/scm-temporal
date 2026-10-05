@@ -18,20 +18,35 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class OrderNumberScramblerTest {
 
     /**
-     * Every result is inside the range, starts with 9 and has the width the range has - read off
-     * FIRST rather than written down, so moving the range does not turn this into a false assertion.
+     * Every result is inside the range, and therefore never below 9000 - the requirement the range
+     * was picked for.
+     * <p>
+     * Note what is <strong>not</strong> asserted any more. The range {@value OrderNumberScrambler#FIRST}
+     * ..{@value OrderNumberScrambler#LAST} spans two digit widths, so an order number is five or six
+     * digits long and the ones above 99999 begin with a 1. Checking for a uniform width or a leading
+     * 9 would be checking a property this range does not have; the one that holds, and the one that
+     * was asked for, is the value.
      */
     @ParameterizedTest
     @ValueSource(longs = {1, 2, 3, 17, 1_000, 9_999})
     void staysInTheRange(long counter) {
-        int width = String.valueOf(OrderNumberScrambler.FIRST).length();
-
         long orderNo = OrderNumberScrambler.orderNoFor(counter);
 
         assertThat(orderNo).isBetween(OrderNumberScrambler.FIRST, OrderNumberScrambler.LAST);
-        assertThat(String.valueOf(orderNo)).hasSize(width).startsWith("9");
-        // "at least 9000" on the other reading too: the leading four digits.
-        assertThat(Long.parseLong(String.valueOf(orderNo).substring(0, 4))).isGreaterThanOrEqualTo(9000);
+        assertThat(orderNo).isGreaterThanOrEqualTo(9_000L);
+    }
+
+    /** And it holds for the whole range, not just for the counters picked above. */
+    @Test
+    void noOrderNumberIsEverBelowNineThousand() {
+        for (long counter = 1; counter <= OrderNumberScrambler.COUNT; counter++) {
+            long orderNo = OrderNumberScrambler.orderNoFor(counter);
+            if (orderNo < 9_000L) {
+                throw new AssertionError("counter " + counter + " produced " + orderNo);
+            }
+        }
+
+        assertThat(OrderNumberScrambler.FIRST).isGreaterThanOrEqualTo(9_000L);
     }
 
     /** The last counter the range holds is still a valid one. */

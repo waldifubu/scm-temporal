@@ -36,7 +36,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * alongside on purpose: both map under {@code /shipments}, and only with the two together does the
  * test say which one a path really reaches.
  */
-class DeliveryControllerTest {
+class OutboundControllerTest {
 
     private final DeliveryService deliveryService = mock(DeliveryService.class);
     private final ShipmentService shipmentService = mock(ShipmentService.class);
@@ -47,7 +47,7 @@ class DeliveryControllerTest {
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new DeliveryController(deliveryService, userService),
+                .standaloneSetup(new OutboundController(deliveryService, userService),
                         new ShipmentController(shipmentService, userService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 // @AuthenticationPrincipal has no resolver in a standalone setup - without it every

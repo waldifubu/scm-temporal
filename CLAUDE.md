@@ -148,7 +148,7 @@ responsibilities — read all of them together before changing reservation/fulfi
 
 The chain is split by responsibility, not by entity. Which service owns which stretch - one
 controller per service, named after what it does (`PickingController`, `PackingController`,
-`PackageController`, `ShipmentController`, `DeliveryController`):
+`PackageController`, `ShipmentController`, `OutboundController`):
 
 | Stretch | Service | Controller |
 |---------|---------|------------|
@@ -159,7 +159,7 @@ controller per service, named after what it does (`PickingController`, `PackingC
 | reading packages and package items | `PackageQueryService` | `PackageController` |
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
 | packages → shipment, ready, cancel, what may still be shipped | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
-| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `DeliveryController` (`/shipments/**`, DISTRIBUTOR) |
+| accept → in transit → delivered, the distributor's work list | `DeliveryService` | `OutboundController` (`/shipments/**`, DISTRIBUTOR) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | tracking, returns | `DeliveryService` | — (not implemented) |
 
@@ -187,8 +187,10 @@ controller per service, named after what it does (`PickingController`, `PackingC
   stub returns.
 - **An order number is a permuted counter, never a random draw** (`OrderNumberScrambler`,
   `OrderNoSequenceMigration`, `OrderRepository.nextOrderNoCounter`). `OrderServiceImpl.nextOrderNo`
-  draws `order_no_seq` once and permutes it into the range **90000..99999** - the numbers look
-  arbitrary (99758, 98520, 93352, ...) and never repeat, because a permutation is bijective.
+  draws `order_no_seq` once and permutes it into the range **90000..199999** - the numbers look
+  arbitrary (106324, 182392, 173640, ...) and never repeat, because a permutation is bijective.
+  Note the range spans two digit widths, so an order number is five or six digits and the ones above
+  99999 begin with a 1; what holds for all of them is the value, never below 9000.
   <br>What it replaced: a loop drawing `Math.random() * 9000 + 1000` and asking
   `existsByOrderNo` whether the number was free. The check and the insert are two statements, so two
   requests could pass it with the same number; the chance of a redraw grew with every order; and once
@@ -200,7 +202,7 @@ controller per service, named after what it does (`PickingController`, `PackingC
   costs `BLOCK / COUNT` rounds and a block that no longer fits the range costs a thousand of them.
   `OrderNumberScramblerTest` walks the **whole** range and holds that it is a bijection onto it; a
   sample could only say "no collision found yet".
-  <br>**The range is the ceiling**: 90000..99999 holds **10000 orders**, and the 10001st is refused
+  <br>**The range is the ceiling**: 90000..199999 holds **110000 orders**, and the next one is refused
   with a clear error rather than wrapped onto a number already in use. Widening it means moving
   `FIRST`/`LAST`, and only before numbers are in use - a different range is a different permutation.
   The four round constants are load-bearing in the same way. The `existsByOrderNo` check on create is
@@ -341,14 +343,14 @@ controller per service, named after what it does (`PickingController`, `PackingC
   has parts in another package and is left alone. The order only reaches `READY_FOR_DISPATCH` once
   **every** line of it is in a shipment that has been handed over, so reporting one of three
   shipments ready moves the lines but not the order.
-- **The carrier's side lives in `DeliveryController`**, not in `ShipmentController`. Both map under
+- **The carrier's side lives in `OutboundController`**, not in `ShipmentController`. Both map under
   `/shipments` - that is the resource - and what separates them is the role and the direction:
   LOGISTICS plans a shipment, the DISTRIBUTOR reports on it. Assigning a distributor
   (`PUT /shipments/{id}/distributor/{id}`) is planning and stays with LOGISTICS - the house choosing a
   carrier, not the carrier answering. `GET /shipments/distributor` is the distributor's work list (ADMIN too,
   as everywhere else): their own shipments, optional `status`, paged, read from the authenticated user rather than from a
   path variable, and two queries like every other shipment list. The literal segment wins over
-  `GET /shipments/{shipmentId}` in the other controller - `DeliveryControllerTest` registers both
+  `GET /shipments/{shipmentId}` in the other controller - `OutboundControllerTest` registers both
   controllers to hold that.
 - **The carrier's three steps** (ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
   side lives in `DeliveryService`, not in `ShipmentService`; `RoleEnum.LOGISTICS` is the inside role
