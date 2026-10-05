@@ -194,6 +194,22 @@ class ProductServiceRequestDtoTest {
                 .satisfies(component -> assertThat(component.getName()).isEqualTo("Blech"));
     }
 
+    /**
+     * The recipe quantity of an existing line. applyComponents copies articleNo, name, description,
+     * weight and sku onto a matched line and says nothing about qty - so the question is whether the
+     * value set in componentsFor survives that merge, or whether PUT /products silently ignores it.
+     */
+    @Test
+    void changesTheRecipeQuantityOfAnExistingLine() {
+        Product product = existingWith(11L);
+        product.getComponents().getFirst().setQty(1);
+
+        service.update(PRODUCT_ID, request(line(11L, "Blech")));
+
+        assertThat(product.getComponents()).singleElement()
+                .satisfies(component -> assertThat(component.getQty()).isEqualTo(4));
+    }
+
     // ------------------------------------------------------------------ categories
 
     /** Categories are looked up by id, never taken from the body. */

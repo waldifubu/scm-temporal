@@ -76,25 +76,6 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
                 .toList();
     }
 
-    @Override
-    @Transactional
-    public PickingOrderDto readyForDispatch(Long reservationId) {
-        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.CONSUMED)
-                .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id not found", reservationId));
-
-        var orderItem = reservation.getOrderItem();
-        if (orderItem.getFulfillmentStatus() == FulfillmentStatus.READY_FOR_DISPATCH) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is already in READY_FOR_DISPATCH status, cannot move to READY_FOR_DISPATCH");
-        }
-        if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PACKED) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Order item is not in PACKED status, cannot move to READY_FOR_DISPATCH");
-        }
-        orderItem.setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH);
-        orderItemRepository.save(orderItem);
-
-        return PickingOrderDto.of(orderItem.getOrder(), reservation);
-    }
-
     /**
      * Order lines in the given fulfillment status, across all orders. A projection like
      * {@link #pickingOrders}: the page is one query and carries nothing lazy into the response.

@@ -11,12 +11,14 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.stream.Stream;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The scheduled counterpart to the fulfillment endpoints. {@code @EnableScheduling} is already
@@ -90,7 +92,7 @@ public class AutomaticReservationService {
                 .collect(Collectors.joining(", "));
     }
 
-    //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToReserve() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
 
@@ -121,7 +123,7 @@ public class AutomaticReservationService {
      * Per order, and only the expired reservations of it: an order can hold a fresh reservation
      * next to an expired one when its lines were reserved in separate calls.
      */
-//    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToRelease() {
         fulfillmentService.findOrdersWithExpiredReservations().forEach(order -> {
             try {
@@ -153,7 +155,7 @@ public class AutomaticReservationService {
      * {@code revertOrderStatus} this used to trigger could not fire on a READY_FOR_DISPATCH order
      * anyway.
      */
-    //    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToDelete() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
         var orders = orderService.findAllByStatus(OrderStatus.READY_FOR_DISPATCH, pageable);
@@ -177,5 +179,4 @@ public class AutomaticReservationService {
             });
         });
     }
-
 }

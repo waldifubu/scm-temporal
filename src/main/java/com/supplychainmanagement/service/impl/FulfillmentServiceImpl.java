@@ -200,6 +200,10 @@ public class FulfillmentServiceImpl implements FulfillmentService {
      * would read as "no stock at all" rather than "not enough in any one storehouse".
      */
     private String describeUnavailable(List<AvailableOrderItemDto> unavailableItems) {
+        if (unavailableItems.isEmpty()) {
+            return "No unavailable items to describe";
+        }
+
         String detail = unavailableItems.stream()
                 .map(checkItem -> "article " + checkItem.articleNo() + " (requested " + checkItem.orderQuantity() + ")")
                 .collect(Collectors.joining(", "));

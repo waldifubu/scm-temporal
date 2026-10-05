@@ -16,7 +16,7 @@ import java.util.List;
 
 
 @RestController
-@RequestMapping({"/api/{version}/components"})
+@RequestMapping({"/api/{version}/supplier"})
 @AllArgsConstructor
 public class InboundController {
 
@@ -45,7 +45,7 @@ public class InboundController {
      * The supplier accepts the request: OPEN to APPROVED. Only the supplier it was placed with may
      * answer it - anybody else is a 403, ADMIN excepted - and any other status is a 409.
      */
-    @PostMapping(path = "/supplier/{requestId}/approve", version = "1.0")
+    @PostMapping(path = "/{requestId}/approve", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public RequestComponentResponse approveRequest(@PathVariable Long requestId,
                                                    @AuthenticationPrincipal User authUser) {
@@ -53,7 +53,7 @@ public class InboundController {
     }
 
     /** The supplier has sent the goods: APPROVED to IN_TRANSIT. */
-    @PostMapping(path = "/supplier/{requestId}/in-transit", version = "1.0")
+    @PostMapping(path = "/{requestId}/intransit", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public RequestComponentResponse requestInTransit(@PathVariable Long requestId,
                                                      @AuthenticationPrincipal User authUser) {
@@ -64,7 +64,7 @@ public class InboundController {
      * The supplier reports the goods handed over: IN_TRANSIT to DELIVERED - their last step. Nothing
      * is booked here; the warehouse answers it with the goods receipt.
      */
-    @PostMapping(path = "/supplier/{requestId}/delivered", version = "1.0")
+    @PostMapping(path = "/{requestId}/delivered", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public RequestComponentResponse requestDelivered(@PathVariable Long requestId,
                                                      @AuthenticationPrincipal User authUser) {
@@ -75,7 +75,7 @@ public class InboundController {
      * The supplier declines a request they have not taken on: OPEN to REJECTED. An end state -
      * nothing was promised, so nothing has to be undone.
      */
-    @PostMapping(path = "/supplier/{requestId}/reject", version = "1.0")
+    @PostMapping(path = "/{requestId}/reject", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public RequestComponentResponse rejectRequest(@PathVariable Long requestId,
                                                   @AuthenticationPrincipal User authUser) {
@@ -89,7 +89,7 @@ public class InboundController {
      * No body: there is no column for a reason, and {@code comment} belongs to whoever ordered the
      * part - overwriting it would throw away why it was needed.
      */
-    @PostMapping(path = "/supplier/{requestId}/cancel", version = "1.0")
+    @PostMapping(path = "/{requestId}/cancel", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','SUPPLIER')")
     public RequestComponentResponse cancelRequest(@PathVariable Long requestId,
                                                   @AuthenticationPrincipal User authUser) {

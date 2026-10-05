@@ -22,15 +22,11 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Supplier;
 
 /**
  * Packing - everything under /packing: packing order lines into packages or loose items, changing
@@ -74,20 +70,11 @@ public class PackingController {
      */
     @PostMapping(path = "/packing/{orderNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> createShipmentPackageByOrder(
+    public ShipmentPackageResponse createShipmentPackageByOrder(
             @PathVariable Long orderNo,
             @Validated({Default.class, CreatePackageRequest.WithItems.class})
             @RequestBody CreatePackageRequest createPackageRequest) {
-        ShipmentPackage shipmentPackage;
-        try {
-            shipmentPackage = packingService.createShipmentPackage(orderNo, createPackageRequest);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(toResponse(shipmentPackage));
+        return toResponse(packingService.createShipmentPackage(orderNo, createPackageRequest));
     }
 
     /**
@@ -100,21 +87,13 @@ public class PackingController {
      */
     @PostMapping(path = "/packing", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> createPackageItems(
+    public PageResponse<PackageItemResponse> createPackageItems(
             @Valid @RequestBody CreatePackageItemsRequest createPackageItemsRequest) {
 
-        List<PackageItem> packageItems;
-        try {
-            packageItems = packingService.createPackageItems(createPackageItemsRequest);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
+        List<PackageItem> packageItems = packingService.createPackageItems(createPackageItemsRequest);
         List<PackageItemResponse> responses = packageItemResponseAssembler.toResponses(packageItems);
 
-        return ResponseEntity.ok(PageResponse.of(new PageImpl<>(responses)));
+        return PageResponse.of(new PageImpl<>(responses));
     }
 
     // @TODO: Check if the order lines belong to the same order as the package, and if the quantity is valid. If not, throw an APIException with a message indicating the issue.
@@ -123,17 +102,8 @@ public class PackingController {
      */
     @PostMapping(path = "/packing/shipment", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> createCustomShipment(@Valid @RequestBody CreatePackageRequest createPackageRequest) {
-        ShipmentPackage shipmentPackage;
-        try {
-            shipmentPackage = packingService.createCustomShipment(createPackageRequest);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(toResponse(shipmentPackage));
+    public ShipmentPackageResponse createCustomShipment(@Valid @RequestBody CreatePackageRequest createPackageRequest) {
+        return toResponse(packingService.createCustomShipment(createPackageRequest));
     }
 
     /**
@@ -143,10 +113,10 @@ public class PackingController {
      */
     @PutMapping(path = "/packing/shipment/{shipmentPackageId}/items", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> updateCustomShipment(
+    public ShipmentPackageResponse updateCustomShipment(
             @PathVariable Long shipmentPackageId,
             @Valid @RequestBody PackageItemIdsRequest packageItemIdsRequest) {
-        return packageResponse(() -> packingService.updateCustomShipment(shipmentPackageId, packageItemIdsRequest));
+        return toResponse(packingService.updateCustomShipment(shipmentPackageId, packageItemIdsRequest));
     }
 
     /**
@@ -155,19 +125,19 @@ public class PackingController {
      */
     @PostMapping(path = "/packing/shipment/{shipmentPackageId}/items", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> addPackageItems(
+    public ShipmentPackageResponse addPackageItems(
             @PathVariable Long shipmentPackageId,
             @Valid @RequestBody PackageItemIdsRequest packageItemIdsRequest) {
-        return packageResponse(() -> packingService.addPackageItems(shipmentPackageId, packageItemIdsRequest));
+        return toResponse(packingService.addPackageItems(shipmentPackageId, packageItemIdsRequest));
     }
 
     /** Takes one item out of the package; it goes back to being loose, it is not deleted. */
     @DeleteMapping(path = "/packing/shipment/{shipmentPackageId}/items/{packageItemId}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> removePackageItem(
+    public ShipmentPackageResponse removePackageItem(
             @PathVariable Long shipmentPackageId,
             @PathVariable Long packageItemId) {
-        return packageResponse(() -> packingService.removePackageItem(shipmentPackageId, packageItemId));
+        return toResponse(packingService.removePackageItem(shipmentPackageId, packageItemId));
     }
 
     /**
@@ -176,10 +146,10 @@ public class PackingController {
      */
     @PutMapping(path = "/packing/shipment/{shipmentPackageId}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> updatePackageData(
+    public ShipmentPackageResponse updatePackageData(
             @PathVariable Long shipmentPackageId,
             @Valid @RequestBody UpdatePackageRequest updatePackageRequest) {
-        return packageResponse(() -> packingService.updatePackageData(shipmentPackageId, updatePackageRequest));
+        return toResponse(packingService.updatePackageData(shipmentPackageId, updatePackageRequest));
     }
 
     /**
@@ -188,9 +158,9 @@ public class PackingController {
      */
     @PutMapping(path = "/packing/shipment/{shipmentPackageId}/complete", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> completePackage(
+    public ShipmentPackageResponse completePackage(
             @PathVariable Long shipmentPackageId) {
-        return packageResponse(() -> packingService.completePackage(shipmentPackageId));
+        return toResponse(packingService.completePackage(shipmentPackageId));
     }
 
     /** The package in the response shape, its items with their siblings. */
@@ -199,17 +169,4 @@ public class PackingController {
                 packageItemResponseAssembler.toResponses(shipmentPackage.getItems()));
     }
 
-    /**
-     * The package in the response shape of the packing endpoints, and an APIException as
-     * {"message": ...} at its own status, like the endpoints above answer it.
-     */
-    private ResponseEntity<?> packageResponse(Supplier<ShipmentPackage> action) {
-        try {
-            return ResponseEntity.ok(toResponse(action.get()));
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-    }
 }

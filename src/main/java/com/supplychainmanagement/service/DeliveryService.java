@@ -41,6 +41,5 @@ public interface DeliveryService {
     /** IN_TRANSIT to DELIVERED: stamps {@code deliveredAt} and takes the orders to DELIVERED. */
     DeliveryResponse shipmentDelivered(Long shipmentId, Long userId);
 
-    DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber, Long userId);
-
+    DeliveryResponse assignTrackingNumber(Long shipmentId, String trackingNumber, Long userId);
 }

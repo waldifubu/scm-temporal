@@ -22,7 +22,5 @@ public interface OrderHandlingService {
 
     List<PickingOrderDto> pickingReservationByOrderNo(String orderNo);
 
-    PickingOrderDto readyForDispatch(Long reservationId);
-
     Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable);
 }

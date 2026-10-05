@@ -14,13 +14,19 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * Picking - the reservations waiting to be picked and picking them, one reservation or a whole
  * order. The lines picked here are what PackingController's /order-items lists for packing.
+ * <p>
+ * Errors go to {@code GlobalExceptionHandler} like everywhere else, so an {@code APIException}
+ * answers {@code ErrorDetails} at its own status. These two endpoints used to catch it themselves
+ * and answer a bare {@code {"message": ...}} map, which meant a client had to know two error shapes
+ * and tell them apart by the path. Nothing was lost in the change: {@code ErrorDetails} carries the
+ * same {@code message}, plus the timestamp, the path and an error code. With the catch gone the
+ * return type is the DTO itself rather than {@code ResponseEntity<?>} - the wildcard only existed to
+ * let a map share the signature with it.
  */
 @RestController
 @RequiredArgsConstructor
@@ -57,17 +63,8 @@ public class PickingController {
      */
     @PostMapping(path = "/picking/{reservationId}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> pickingByReservationId(@PathVariable Long reservationId) {
-        PickingOrderDto reservation;
-        try {
-            reservation = orderHandlingService.pickingReservationById(reservationId);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
-
-        return ResponseEntity.ok(reservation);
+    public PickingOrderDto pickingByReservationId(@PathVariable Long reservationId) {
+        return orderHandlingService.pickingReservationById(reservationId);
     }
 
     /**
@@ -78,20 +75,13 @@ public class PickingController {
      */
     @PostMapping(path = "/picking/order/{orderNo}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
-    public ResponseEntity<?> pickingByOrderNo(@PathVariable String orderNo) {
-        List<PickingOrderDto> pickingOrders;
-        try {
-            pickingOrders = orderHandlingService.pickingReservationByOrderNo(orderNo);
-        } catch (APIException e) {
-            Map<String, String> response = new HashMap<>();
-            response.put("message", e.getMessage());
-            return ResponseEntity.status(e.getStatus()).body(response);
-        }
+    public List<PickingOrderDto> pickingByOrderNo(@PathVariable String orderNo) {
+        List<PickingOrderDto> pickingOrders = orderHandlingService.pickingReservationByOrderNo(orderNo);
 
         if (pickingOrders.isEmpty()) {
             throw new ResourceNotFoundException("Picking", "Order", Long.parseLong(orderNo));
         }
 
-        return ResponseEntity.ok(pickingOrders);
+        return pickingOrders;
     }
 }

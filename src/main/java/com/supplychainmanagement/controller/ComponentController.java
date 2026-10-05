@@ -8,7 +8,6 @@ import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
-import com.supplychainmanagement.service.RequestComponentService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
@@ -30,7 +29,6 @@ public class ComponentController {
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;
     private final UserService userService;
-    private final RequestComponentService requestComponentService;
 
     // WAREHOUSE reads as well: it may order components through /request/{supplierId}, and without
     // the catalogue it would have to get the SKU from somewhere else. Reading only - creating and
@@ -45,7 +43,8 @@ public class ComponentController {
      * Component requests, all of them or those in one status - the warehouse's work list.
      * <p>
      * It exists because the goods receipt takes a request id and nothing told the warehouse which
-     * ids there are: {@code GET /my-requests} below is the supplier's own list, filtered by
+     * ids there are: {@code GET /my-requests} in {@link InboundController} is the supplier's own
+     * list, filtered by
      * {@code supplier_id}, so WAREHOUSE could not read it and an ADMIN asking it got their own empty
      * one. {@code ?status=DELIVERED} is the pile waiting at the dock; {@code IN_TRANSIT} is what is
      * coming. Same arrangement as {@code GET /shipments/distributor} and

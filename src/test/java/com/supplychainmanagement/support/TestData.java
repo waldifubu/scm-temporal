@@ -2,11 +2,20 @@ package com.supplychainmanagement.support;
 
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.Storehouse;
+import com.supplychainmanagement.entity.users.Admin;
 import com.supplychainmanagement.entity.users.Customer;
+import com.supplychainmanagement.entity.users.Distributor;
+import com.supplychainmanagement.entity.users.Logistics;
+import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.entity.users.Supplier;
+import com.supplychainmanagement.entity.users.User;
+import com.supplychainmanagement.entity.users.Warehouse;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.ProductRepository;
+import com.supplychainmanagement.repository.RoleRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -14,6 +23,8 @@ import org.springframework.boot.test.context.TestComponent;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -42,6 +53,7 @@ public class TestData {
     private final ProductRepository productRepository;
     private final ComponentRepository componentRepository;
     private final StorehouseRepository storehouseRepository;
+    private final RoleRepository roleRepository;
 
     private static String unique(String prefix) {
         return prefix + "-" + SEQUENCE.incrementAndGet() + "-" + UUID.randomUUID().toString().substring(0, 8);
@@ -65,7 +77,7 @@ public class TestData {
      * {@code createdAt} is written by hand: the column is {@code nullable = false} and there is no
      * lifecycle callback filling it, so an insert without it fails.
      */
-    private void fillUser(com.supplychainmanagement.entity.users.User user, String first, String last) {
+    private void fillUser(User user, String first, String last) {
         user.setFirstName(first);
         user.setLastName(last);
         user.setEmail(unique("test") + "@example.invalid");
@@ -108,6 +120,40 @@ public class TestData {
         component.setQty(1);
         component.setWeight(BigDecimal.ONE);
         return componentRepository.saveAndFlush(component);
+    }
+
+    /**
+     * A user carrying exactly the given roles, for the authorization tests.
+     * <p>
+     * The roles have to be real rows: a JWT only carries the user name, and
+     * {@code JwtAuthenticationFilter} then loads the user and takes the authorities from the
+     * <strong>database</strong>. A missing {@code roles} row is created rather than assumed - the
+     * test schema starts empty, and {@code RoleDataFixer} has its {@code @Component} commented out.
+     */
+    public User userWithRoles(RoleEnum... rolenames) {
+        Set<Role> roles = new LinkedHashSet<>();
+        for (RoleEnum rolename : rolenames) {
+            roles.add(roleRepository.findByRolename(rolename).orElseGet(() -> {
+                Role fresh = new Role();
+                fresh.setRolename(rolename);
+                return roleRepository.saveAndFlush(fresh);
+            }));
+        }
+
+        // The concrete subtype follows the first role, the way UserServiceImpl picks it: a
+        // single-table hierarchy with a user_type discriminator, and a CHECK on that column.
+        User user = switch (rolenames.length == 0 ? RoleEnum.CUSTOMER : rolenames[0]) {
+            case ADMIN -> new Admin();
+            case MANAGER -> new Manager();
+            case SUPPLIER -> new Supplier();
+            case WAREHOUSE -> new Warehouse();
+            case LOGISTICS -> new Logistics();
+            case DISTRIBUTOR -> new Distributor();
+            case CUSTOMER -> new Customer();
+        };
+        fillUser(user, "Role", rolenames.length == 0 ? "None" : rolenames[0].name());
+        user.setRoles(roles);
+        return userRepository.saveAndFlush(user);
     }
 
     /** A storehouse to book stock into. */

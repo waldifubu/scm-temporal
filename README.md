@@ -48,7 +48,7 @@ stateDiagram-v2
 
     IN_FULFILLMENT --> READY_FOR_DISPATCH : PUT /shipments/{id}/ready
     READY_FOR_DISPATCH --> IN_FULFILLMENT : POST /shipments/{id}/cancel
-    READY_FOR_DISPATCH --> IN_TRANSIT : POST /shipments/{id}/in-transit
+    READY_FOR_DISPATCH --> IN_TRANSIT : POST /shipments/{id}/intransit
     IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
     IN_TRANSIT --> PARTIALLY_DELIVERED : POST /shipments/{id}/delivered - part of the order still out
     PARTIALLY_DELIVERED --> DELIVERED : POST /shipments/{id}/delivered - the rest arrives
@@ -332,7 +332,7 @@ stateDiagram-v2
         [*] --> OPEN : POST /packing/{orderNo}, POST /packing/shipment
         OPEN --> OPEN : add / replace / remove items, PUT package data
         OPEN --> PACKED : PUT /packing/shipment/{id}/complete
-        PACKED --> DISPATCHED : POST /shipments/{id}/in-transit
+        PACKED --> DISPATCHED : POST /shipments/{id}/intransit
     }
     state "Shipment" as sh {
         [*] --> CREATED : POST /shipments
@@ -340,7 +340,7 @@ stateDiagram-v2
         CREATED --> READY : PUT /shipments/{id}/ready
         READY --> DISPATCH_REQUESTED : PUT /shipments/{id}/distributor/{id}
         DISPATCH_REQUESTED --> ACCEPTED : POST /shipments/{id}/accept
-        ACCEPTED --> IN_TRANSIT : POST /shipments/{id}/in-transit
+        ACCEPTED --> IN_TRANSIT : POST /shipments/{id}/intransit
         IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
         ACCEPTED --> CANCELLED : POST /shipments/{id}/cancel - up to ACCEPTED
     }
@@ -437,10 +437,15 @@ to `DELIVERED` with no record of who drove them.
 ```
 PUT  /shipments/{id}/ready        CREATED → READY          lines + orders → READY_FOR_DISPATCH
 POST /shipments/{id}/accept       DISPATCH_REQUESTED → ACCEPTED   (orders already there)
-POST /shipments/{id}/in-transit   ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
+POST /shipments/{id}/intransit    ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
+POST /shipments/{id}/trackingnumber  { "trackingNumber": "DHL-123" }  not once DELIVERED/CANCELLED
 POST /shipments/{id}/delivered    IN_TRANSIT → DELIVERED   orders → DELIVERED
 POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
 ```
+
+`intransit` is one word. This file said `/in-transit` for a long time and the endpoint never did —
+a client following it got a 404. The supplier's step of the same name
+(`/components/supplier/{id}/in-transit`) *is* hyphenated, which is how the mistake survived.
 
 **Ready** is checked, not claimed: the shipment is read `FOR UPDATE`, has to be `CREATED`, carry a
 shipping address and at least one package, and every package has to be `PACKED` — each of them a
@@ -478,6 +483,15 @@ travels in another shipment.
 `ShipmentResponse` carries the shipment's data, customer and distributor as id and name, the gross
 `weight` of all packages and the packages with their contents. The list (`GET /shipments`, optional
 `status`) answers `ShipmentListDto` rows with the package ids only.
+
+**`InboundController` and `OutboundController` are the two ends of the house**, named after the
+direction goods travel rather than after an entity: inbound is what a *supplier* reports on a
+component request, outbound what a *carrier* reports on a shipment. Both are the outside answering,
+which is why each has its own controller and its own role. Each is mapped under **the party that
+answers** rather than under the resource it is about: `InboundController` under
+`/api/{version}/supplier`, holding the five supplier steps plus `GET /supplier/my-requests`.
+Everything about components the house itself does — the catalogue, ordering, the warehouse's work
+list and the goods receipt — stayed under `/components` in `ComponentController`.
 
 **The carrier's endpoints live in `OutboundController`**, the planning ones in `ShipmentController`.
 Both map under `/shipments`, because that is the resource — what separates them is the role and the
@@ -677,13 +691,14 @@ package row the items are `ShipmentPackageItemDto` (no package id — the row is
 
 ### Error responses
 
-Two shapes are in use. `PickingController` and `PackingController` catch `APIException` themselves
-and answer `{"message": "..."}` at the exception's status. Everything else — a
-`ResourceNotFoundException` there too, and all of `PackageController`, `ShipmentController` and
-`UserController` — goes through `GlobalExceptionHandler` and answers `ErrorDetails` with an
-`errorCode`; a failed bean validation comes back as **400** with one message per field, e.g.
-`{"items[0].qty": "qty must be at least 1"}`. New endpoints use the global handler; the
-controller-local try/catch is legacy.
+**One shape, everywhere.** Every error goes through `GlobalExceptionHandler` and answers
+`ErrorDetails` — `timestamp`, `message`, `path`, `errorCode` — at the exception's own status. A
+failed bean validation comes back as **400** with one message per field, e.g.
+`{"items[0].qty": "qty must be at least 1"}`. Do not catch `APIException` in a controller.
+
+`PickingController` and `PackingController` used to catch it and answer a bare `{"message": "..."}`
+map, which meant a client had to know two shapes and tell them apart by the path. Removing it broke
+no caller: `ErrorDetails` carries the same `message` under the same name.
 
 ### Synchronous by design
 
@@ -831,16 +846,16 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
 | Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}`, `GET /shipments/packages` *(paged, the `PACKED` packages in no shipment yet)* | ADMIN, LOGISTICS |
-| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/in-transit`, `POST /shipments/{id}/delivered` | ADMIN, DISTRIBUTOR |
+| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/intransit`, `POST /shipments/{id}/trackingnumber` (body `{"trackingNumber": "..."}`), `POST /shipments/{id}/delivered` — `OutboundController` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
 | | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` | ADMIN, MANAGER, WAREHOUSE |
 | | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU**, `qty` at most 1,000,000 | ADMIN, MANAGER, WAREHOUSE |
 | | `GET /components/requests` *(paged, optional `status`, oldest first)* — the warehouse's work list; `?status=DELIVERED` is the pile waiting at the dock | ADMIN, WAREHOUSE |
-| | `GET /components/my-requests` — the supplier's own requests, filtered by `supplier_id`; `qty` is the ordered quantity, `component.qty` the bill-of-materials one | ADMIN, SUPPLIER |
-| | `POST /components/supplier/{requestId}/approve`, `.../in-transit`, `.../delivered` — the supplier answers: `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, only on their own requests | ADMIN, SUPPLIER |
-| | `.../reject` — `OPEN → REJECTED` (declined before anything was promised), `.../cancel` — `APPROVED`/`IN_TRANSIT` → `CANCELLED` (never from `DELIVERED`, that would be a return) | ADMIN, SUPPLIER |
+| | `GET /supplier/my-requests` — the supplier's own requests, filtered by `supplier_id`; `qty` is the ordered quantity, `component.qty` the bill-of-materials one | ADMIN, SUPPLIER |
+| | `POST /supplier/{requestId}/approve`, `.../intransit`, `.../delivered` — the supplier answers: `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, only on their own requests; `InboundController` | ADMIN, SUPPLIER |
+| | `.../reject` — `OPEN → REJECTED` (declined before anything was promised), `.../cancel` — `APPROVED`/`IN_TRANSIT` → `CANCELLED` (never from `DELIVERED`, that would be a return); `InboundController` | ADMIN, SUPPLIER |
 | | `POST /components/warehouse/{requestId}/in-stock/{storehouseId}` — the goods receipt: `DELIVERED → IN_STOCK` and the quantity added to that SKU's stock in that storehouse | ADMIN, WAREHOUSE |
 | Stock | `POST /stock/add` (`{"sku": ..., "storehouseId": ..., "qty": ...}`), `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* — all answer `StockResponse`, never the entity | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
@@ -949,7 +964,8 @@ part of them.
 | `OrderServiceCompleteTest` | closing an order: the quantity check, and the four refusals (already closed, ended, no lines, still short — with the short lines named) |
 | `OrderServiceCancelTest` | cancelling an order: the stock handed back, every line on `CANCELLED`, the status written before the release, and the refusals (goods off the shelf, already in a shipment, ended) |
 | `ComponentServiceReceiveTest` | the goods receipt: the quantity booked onto `(sku, storehouse)`, the recipe quantity left alone, only from `IN_TRANSIT`, unknown storehouse as 404 |
-| `ComponentServiceSupplierStepsTest`, `ComponentControllerTest` | the supplier's two steps: one status at a time, only on their own request, ADMIN exempt, the status not leaking to a stranger, and both bodies of the ordering endpoint |
+| `ComponentServiceSupplierStepsTest`, `InboundControllerTest` | what the supplier reports: one status at a time, only on their own request, ADMIN exempt, the status not leaking to a stranger, and the two ways a request ends without goods |
+| `ComponentControllerTest` | the catalogue, both bodies of the ordering endpoint, the quantity bound, the warehouse's work list and the goods receipt |
 | `RequestComponentIdTest` | that a component request can be inserted at all — its key column was a `uuid` without `AUTO_INCREMENT` (needs a database) |
 | `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
@@ -972,23 +988,25 @@ mvn test -Dtest='!ApplicationTests,!CustomQueryExecutionTest,!ReservationDtoTest
 ```
 
 Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse selection inside
-`produce()`, the loops in `OrderHandlingServiceImpl`, `readyForDispatch()` and the routines in
-`AutomaticReservationService`.
+`produce()`, the loops in `OrderHandlingServiceImpl`, `readyForDispatch()` (which has no caller
+either) and three of the four routines in `AutomaticReservationService` — `tryToDelete()` is covered
+by `AutomaticReservationServiceDeleteTest`. The Vaadin views and `WebController` have no tests at
+all.
 
 ## Known gaps / work in progress
 
-- **Order-level statuses stop at `IN_FULFILLMENT`.** `READY_FOR_DISPATCH`, `IN_TRANSIT`,
-  `DELIVERED`, `COMPLETED` and `CANCELLED` are defined but nothing advances an *order* into them.
-- **`OrderHandlingService.readyForDispatch()`** (per reservation) is left over: its endpoint
-  (`POST /dispatch/{reservationId}`) is commented out, and the lines now reach `READY_FOR_DISPATCH`
-  through `PUT /shipments/{id}/ready`.
-- **`DISPATCH_REQUESTED` is never set** — a shipment goes from `READY` straight to `ACCEPTED`. Either
-  a "transport requested" step is missing or the status should go.
+- **`OrderHandlingService.readyForDispatch()`** (per reservation) has had no caller since
+  2026-09-22: its endpoint `POST /dispatch/{reservationId}` was commented out and then deleted, when
+  `checkShipmentReady` took the step over. It is also wrong in the current model — it finds the line
+  through a `CONSUMED` reservation, which `tryToDelete()` exists to sweep away, and it would move a
+  line without any shipment while the order's status is derived from shipments. The method and its
+  interface declaration are still there.
 - **No way back from `IN_TRANSIT`**: a return or a failed delivery cannot be recorded (`ShipmentStatus`
   has neither `RETURNED` nor `DELIVERY_FAILED`), and cancelling is only possible up to `ACCEPTED`.
 - **No history for shipments** the way `OrderHistory` records orders: who cancelled a shipment and
   why is only the free text in `comment`.
-- **Tracking is not implemented**: `trackingNumber` is never set. It belongs to `DeliveryService`.
+- `trackingNumber` is set through `POST /shipments/{id}/trackingnumber` but nothing reads it: no
+  list or response carries it, so it can be recorded and not found again.
 - **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
   roles from the request as they are — a manager can grant themselves or others `ADMIN`. An update
   without `isActive` also re-activates a disabled user.

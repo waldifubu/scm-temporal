@@ -2,9 +2,11 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
+import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.UserService;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -29,7 +31,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequiredArgsConstructor
-@RequestMapping({"/api/{version}"})
+@RequestMapping({"/api/{version}/shipments"})
 public class OutboundController {
 
     private final DeliveryService deliveryService;
@@ -49,7 +51,7 @@ public class OutboundController {
      * comes from the authenticated user. An ADMIN calling this is not a distributor and gets an empty
      * page - the full list is {@code GET /shipments}.
      */
-    @GetMapping(path = "/shipments/distributor", version = "1.0")
+    @GetMapping(path = "/distributor", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public PageResponse<DeliveryResponse> getMyShipments(
             @RequestParam(defaultValue = "0") int page,
@@ -66,36 +68,47 @@ public class OutboundController {
      * The distributor takes the shipment on: READY or DISPATCH_REQUESTED to ACCEPTED, every order it
      * carries to READY_FOR_DISPATCH. Any other status is a 409.
      */
-    @PostMapping(path = "/shipments/{shipmentId}/accept", version = "1.0")
+    @PostMapping(path = "/{shipmentId}/accept", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public DeliveryResponse acceptShipment(@PathVariable Long shipmentId,
                                            @AuthenticationPrincipal User authUser) {
         return deliveryService.acceptShipment(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
 
-    /** The shipment is on its way: ACCEPTED to IN_TRANSIT, its packages to DISPATCHED, its orders to IN_TRANSIT. */
-    @PostMapping(path = "/shipments/{shipmentId}/intransit", version = "1.0")
+    /**
+     * The shipment is on its way: ACCEPTED to IN_TRANSIT, its packages to DISPATCHED, its orders to IN_TRANSIT.
+     */
+    @PostMapping(path = "/{shipmentId}/intransit", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public DeliveryResponse shipmentInTransit(@PathVariable Long shipmentId,
                                               @AuthenticationPrincipal User authUser) {
         return deliveryService.shipmentInTransit(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
 
-    /** The carrier's own reference for the shipment; not once it is IN_TRANSIT or DELIVERED. */
-    @PostMapping(path = "/shipments/{shipmentId}/tracknumber", version = "1.0")
+    /**
+     * The carrier's own reference for the shipment; not once it is DELIVERED.
+     * <p>
+     * The body is an object, {@code { "trackingNumber": "DHL-123" }} - see
+     * {@link TrackingNumberRequest}. It used to be a bare {@code @RequestBody String}, which is not
+     * JSON at all: a client had to send the number as a raw quoted string, and a blank or over-long
+     * one came back as a message about a value that had no name.
+     */
+    @PostMapping(path = "/{shipmentId}/trackingnumber", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse trackNumber(@PathVariable Long shipmentId,
-                                              @RequestBody String trackingNumber,
-                                              @AuthenticationPrincipal User authUser) {
-        return deliveryService.assignTrackNumber(shipmentId, trackingNumber, userService.getAuthenticatedUserId(authUser));
+    public DeliveryResponse trackingNumber(@PathVariable Long shipmentId,
+                                           @Valid @RequestBody TrackingNumberRequest request,
+                                           @AuthenticationPrincipal User authUser) {
+        return deliveryService.assignTrackingNumber(shipmentId, request.trackingNumber(),
+                userService.getAuthenticatedUserId(authUser));
     }
 
-    /** The shipment has arrived: IN_TRANSIT to DELIVERED, its orders to DELIVERED. */
-    @PostMapping(path = "/shipments/{shipmentId}/delivered", version = "1.0")
+    /**
+     * The shipment has arrived: IN_TRANSIT to DELIVERED, its orders to DELIVERED.
+     */
+    @PostMapping(path = "/{shipmentId}/delivered", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public DeliveryResponse shipmentDelivered(@PathVariable Long shipmentId,
                                               @AuthenticationPrincipal User authUser) {
         return deliveryService.shipmentDelivered(shipmentId, userService.getAuthenticatedUserId(authUser));
     }
-
 }

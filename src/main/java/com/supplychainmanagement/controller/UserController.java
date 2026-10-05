@@ -56,14 +56,14 @@ public class UserController {
 
     @NoCheck
     @PutMapping(path = "/{id}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public UserDto update(@PathVariable Long id, @RequestBody UserRequestDto request) {
         return userMapper.mapToDto(userService.update(id, request));
     }
 
     @NoCheck
     @DeleteMapping(path = "/{id}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public void delete(@PathVariable Long id) {
         userService.deleteById(id);
     }

@@ -1,6 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
+import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
@@ -89,16 +90,20 @@ public class DeliveryServiceImpl implements DeliveryService {
 
     @Override
     @Transactional
-    public DeliveryResponse assignTrackNumber(Long shipmentId, String trackingNumber, Long userId) {
+    public DeliveryResponse assignTrackingNumber(Long shipmentId, String trackingNumber, Long userId) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
         if(trackingNumber == null || trackingNumber.isBlank()) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number cannot be null or blank");
+            throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number must be provided and cannot be blank");
         }
-        if(trackingNumber.length() > 70) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number cannot exceed 70 characters");
+        // The same bound TrackingNumberRequest validates, read from there so the two cannot drift.
+        // Not redundant: the service is reachable from inside the application, where no bean
+        // validation runs, and the rule belongs to the operation rather than to one way of calling it.
+        if(trackingNumber.length() > TrackingNumberRequest.MAX_LENGTH) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "Tracking number cannot exceed " + TrackingNumberRequest.MAX_LENGTH + " characters");
         }
-        if(shipment.getStatus() == ShipmentStatus.IN_TRANSIT || shipment.getStatus() == ShipmentStatus.DELIVERED) {
+        if(shipment.getStatus() == ShipmentStatus.DELIVERED || shipment.getStatus() == ShipmentStatus.CANCELLED) {
             throw new APIException(HttpStatus.CONFLICT, "Cannot assign tracking number to shipment in status " + shipment.getStatus());
         }
         if(!Objects.equals(shipment.getDistributor().getId(), userId) && !roleService.isAdmin(userId)) {

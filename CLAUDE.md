@@ -134,11 +134,21 @@ responsibilities — read all of them together before changing reservation/fulfi
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
   PACKING → PACKED → READY_FOR_DISPATCH`, plus `CANCELLED`), tracked per line item, and implemented end to end: the
   last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
-  `OrderHandlingService.readyForDispatch()`, whose endpoint is commented out in `ShipmentController`
-  and which is left over. Note there is no `RESERVING` — it was removed
+  `OrderHandlingService.readyForDispatch()`, which has had **no caller since 2026-09-22**: its
+  endpoint `POST /dispatch/{reservationId}` was commented out and then deleted outright in the same
+  day's clean-up, when `checkShipmentReady` took the step over.
+  <br>It is not merely redundant but wrong in this model, for two reasons worth keeping. It looks the
+  line up **through its reservation** (`findByIdAndStatus(id, CONSUMED)`) - the very row
+  `tryToDelete()` exists to sweep away for `READY_FOR_DISPATCH` orders, so the method depends on
+  something another routine is designed to remove and answers 404 afterwards. And it would set a line
+  `READY_FOR_DISPATCH` **with no shipment involved**, while the *order* status is derived from the
+  shipments its lines travel in (`recompute`) - so the line would move and its order would not, with
+  nothing to reconcile them. `checkShipmentReady` does all three parts at once: the shipment to
+  `READY`, every `PACKED` line of it onward, and `recompute` for the orders behind them.
+  <br>Note there is no `RESERVING` — it was removed
   because nothing could ever observe it inside the synchronous reserve transaction.
 - **`ShipmentPackage`** has `ShipmentPackageStatus` (`OPEN → PACKED → DISPATCHED`): filled while
-  `OPEN`, closed by `completePackage`, and `DISPATCHED` when its shipment reports `in-transit`.
+  `OPEN`, closed by `completePackage`, and `DISPATCHED` when its shipment reports `intransit`.
   **`Shipment`** has `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT
   → DELIVERED`, plus `CANCELLED`): `CREATED` on insert, `READY` through
   `PUT /shipments/{id}/ready`, then the carrier's three steps, and `CANCELLED` through
@@ -148,7 +158,15 @@ responsibilities — read all of them together before changing reservation/fulfi
 
 The chain is split by responsibility, not by entity. Which service owns which stretch - one
 controller per service, named after what it does (`PickingController`, `PackingController`,
-`PackageController`, `ShipmentController`, `OutboundController`):
+`PackageController`, `ShipmentController`, `OutboundController`, `InboundController`).
+<br>**`InboundController` and `OutboundController` are the two ends of the house**, and they are
+named after the direction goods travel, not after an entity: inbound is what a supplier reports on a
+component request they were given, outbound is what a carrier reports on a shipment they took on.
+Both are the *outside* answering - which is why each keeps its own controller and its own role, and
+why neither sits in the service's own controller. Each is mapped under **the party that answers**
+rather than under the resource it is about: `InboundController` under `/api/{version}/supplier`
+(SUPPLIER), `OutboundController` under `/api/{version}/shipments` (DISTRIBUTOR). The inbound steps
+therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/components`:
 
 | Stretch | Service | Controller |
 |---------|---------|------------|
@@ -160,6 +178,7 @@ controller per service, named after what it does (`PickingController`, `PackingC
 | `PACKED → READY_FOR_DISPATCH` (lines and their orders) | `ShipmentService.checkShipmentReady()` | `ShipmentController` (`PUT /shipments/{id}/ready`) |
 | packages → shipment, ready, cancel, what may still be shipped | `ShipmentService` | `ShipmentController` (`/shipments/**`) |
 | accept → in transit → delivered, the distributor's work list | `DeliveryService` | `OutboundController` (`/shipments/**`, DISTRIBUTOR) |
+| what the supplier reports on a component request, and their own list | `ComponentService`, `RequestComponentService` | `InboundController` (`/components/**`, SUPPLIER) |
 | every order status change (write + audit event) | `OrderProgressService` | — |
 | tracking, returns | `DeliveryService` | — (not implemented) |
 
@@ -358,10 +377,21 @@ controller per service, named after what it does (`PickingController`, `PackingC
   `DeliveryResponse`: address, package count, weight and package numbers, **no package contents** -
   the carrier is not shown the customer's SKUs and quantities. The steps are:
   `POST /shipments/{id}/accept` (`DISPATCH_REQUESTED` → `ACCEPTED`),
-  `POST /shipments/{id}/in-transit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
+  `POST /shipments/{id}/intransit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
   packages from `PACKED` to `DISPATCHED`) and `POST /shipments/{id}/delivered` (`IN_TRANSIT` →
   `DELIVERED`, stamps `deliveredAt`); any other status is a 409, and the shipment is read
   `FOR UPDATE`.
+  <br>**`intransit`, one word.** This page said `/in-transit` for a long time and the endpoint never
+  did - a client following the docs got a 404. The supplier's step of the same name
+  (`POST /supplier/{requestId}/intransit`) is spelled the same way, so there is one spelling to
+  remember now; it used to be hyphenated on that side, which is how the mistake survived.
+  <br>There is a fourth, `POST /shipments/{id}/trackingnumber` (ADMIN, DISTRIBUTOR): the carrier's
+  own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`), refused once the
+  shipment is `DELIVERED` or `CANCELLED` and only from the assigned distributor. It moves no status
+  and takes no order along. The body used to be a bare `@RequestBody String` - not a JSON object at
+  all; the length bound now lives in one place (`TrackingNumberRequest.MAX_LENGTH`) and the service
+  reads it from there, because the service is also reachable from inside, where no bean validation
+  runs.
   <br>**Only the assigned distributor reports** (`requireReportingDistributor`): another carrier is a
   403, a shipment without an assignment a 409, and ADMIN is exempt as the role that has to be able to
   correct things. Checked **before** the status, so a carrier poking at a shipment that is not theirs
@@ -614,11 +644,20 @@ validation applies to either.
 
 ### Error responses
 
-Two shapes are in use. `PickingController` and `PackingController` catch `APIException` themselves
-and answer `{"message": ...}` at its status; everything else - `ResourceNotFoundException` there too,
-and all of `PackageController`, `ShipmentController` and `UserController` - goes through
-`GlobalExceptionHandler` and answers `ErrorDetails`, bean validation as a map of field to message.
-New endpoints use the global handler; a controller-local try/catch is legacy, not the pattern.
+**One shape.** Everything goes through `GlobalExceptionHandler` and answers `ErrorDetails`
+(`timestamp`, `message`, `path`, `errorCode`); a failed bean validation comes back as a map of field
+to message. **Never catch `APIException` in a controller** - throw it and let the handler answer.
+
+`PickingController` and `PackingController` used to catch it and answer a bare `{"message": ...}`
+map, so a client had to know two error shapes and tell them apart by the path. Nothing was lost in
+removing that: `ErrorDetails` carries the same `message` under the same name, which is why the change
+broke no caller - checked rather than assumed, and no Vaadin view or Postman collection read the
+field at all.
+<br>With the catches gone the return types are the DTOs themselves rather than `ResponseEntity<?>`:
+the wildcard only existed so a `Map` could share the signature with the success body. The
+`packageResponse(Supplier<...>)` wrapper in `PackingController` went with them - it was the catch and
+nothing else. `PickingControllerTest` is new, because that controller had no test at all and half of
+this change would otherwise be unverified.
 
 ### Paged list endpoints
 
@@ -683,7 +722,8 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 
 ### Business/aspect utilities
 
-- **The supplier's own list** (`GET /components/my-requests`, ADMIN and SUPPLIER) answers
+- **The supplier's own list** (`GET /supplier/my-requests`, ADMIN and SUPPLIER,
+  `InboundController`) answers
   `RequestComponentResponseDto`, mapped by `RequestComponentMapper` in `RequestComponentServiceImpl`
   **inside the transaction** - the controller used to map afterwards, which only worked because
   open-in-view kept a session around to resolve the references from. The rows arrive with their
@@ -722,7 +762,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 - **The warehouse's work list** (`GET /components/requests`, paged, optional `status`, ADMIN and
   WAREHOUSE - a method-level `@PreAuthorize`; `ComponentService.findRequests`): why it exists is the
   point. The goods receipt takes a *request id*, and the only way to read requests was
-  `GET /components/my-requests`, which is the supplier's own list (`findBySupplierId`) - so the role
+  `GET /supplier/my-requests`, which is the supplier's own list (`findBySupplierId`) - so the role
   that has to call the receipt had no way to learn which request is `DELIVERED`, and an ADMIN asking
   that list got their own, empty one. Same arrangement as `GET /shipments/distributor` and
   `GET /shipments/packages`: a role gets its own view rather than read access to another's. Oldest
@@ -755,9 +795,12 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   current type from `information_schema`, leaves a `bigint` alone and keeps the nullability, which
   `MODIFY COLUMN` would otherwise drop. `RequestComponentQtyTest` holds both the type and that a value
   beyond the `int` range survives a round trip.
-- **The supplier answers** (`POST /components/supplier/{requestId}/approve`, `.../in-transit` and
-  `.../delivered`, ADMIN and SUPPLIER - a method-level `@PreAuthorize` replacing the controller's
-  ADMIN/MANAGER): `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, one step at a time, any other status a 409. The
+- **The supplier answers** (`POST /supplier/{requestId}/approve`, `.../intransit` and
+  `.../delivered`, ADMIN and SUPPLIER - in **`InboundController`** under
+  `/api/{version}/supplier`; the five supplier steps and `GET /supplier/my-requests` moved out of
+  `ComponentController`, and `InboundControllerTest` moved with them. Note `intransit` is one word
+  here too, the same spelling the shipment side uses):
+  `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, one step at a time, any other status a 409. The
   request is read `FOR UPDATE` (`findForUpdateById`), because the status is checked and then written.
   `DELIVERED` is the supplier's last step and books nothing - it is what they *claim*, namely that
   the goods are at our dock. `IN_STOCK` is what we found when we unpacked it, and that one belongs to
@@ -770,8 +813,8 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   <br>The ADMIN exemption on both sides goes through `RoleService.isAdmin(Long userId)`, which reads
   the stored roles rather than anything a request carried. One implementation for the carrier and the
   supplier side; `DeliveryServiceImpl` had a private copy until this was added.
-- **The supplier says no** (`POST /components/supplier/{requestId}/reject` and `.../cancel`, ADMIN
-  and SUPPLIER): `OPEN → REJECTED` is declining a request before anything was promised, so there is
+- **The supplier says no** (`POST /supplier/{requestId}/reject` and `.../cancel`, ADMIN
+  and SUPPLIER, `InboundController`): `OPEN → REJECTED` is declining a request before anything was promised, so there is
   nothing to undo; `APPROVED`/`IN_TRANSIT` → `CANCELLED` is calling off one that had been taken on.
   Two statuses rather than one because they say different things. **Not from `DELIVERED`** - the
   pallet is at our dock then and calling it off would be a return, the same line the shipment side

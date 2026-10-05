@@ -235,7 +235,7 @@ public class UserServiceImpl implements UserService {
         prepared.setEmail(user.getEmail());
         prepared.setPassword(passwordEncoder.encode(user.getPassword()));
         prepared.setColor(user.getColor());
-        prepared.setIsActive(user.getIsActive() != null ? user.getIsActive() : true);
+        prepared.setIsActive(user.getIsActive() == null || user.getIsActive());
 
         Set<Role> roles = user.getRoles() == null ? new HashSet<>() : new HashSet<>(user.getRoles());
         if (roles.isEmpty()) {

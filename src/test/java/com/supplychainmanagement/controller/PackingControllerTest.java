@@ -222,7 +222,11 @@ class PackingControllerTest {
         verify(packingService).completePackage(5L);
     }
 
-    /** Completing a package that is not OPEN is a 409, in the {"message": ...} shape of these endpoints. */
+    /**
+     * Completing a package that is not OPEN is a 409 - answered as ErrorDetails through the global
+     * handler, like every other endpoint. These two used to catch the exception themselves and
+     * answer a bare {"message": ...} map; the message survives, the rest comes with it.
+     */
     @Test
     void answersCompletingAPackedPackageWith409() throws Exception {
         when(packingService.completePackage(5L)).thenThrow(new APIException(HttpStatus.CONFLICT,
@@ -230,7 +234,9 @@ class PackingControllerTest {
 
         mockMvc.perform(put("/api/1.0/packing/shipment/5/complete"))
                 .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("ShipmentPackage 5 is PACKED, only an OPEN package can be changed"));
+                .andExpect(jsonPath("$.message").value("ShipmentPackage 5 is PACKED, only an OPEN package can be changed"))
+                .andExpect(jsonPath("$.errorCode").value("API_ERROR"))
+                .andExpect(jsonPath("$.path").exists());
     }
 
     /** The packing work list: PICKED lines by default, sorted by updatedAt, paged as sent. */

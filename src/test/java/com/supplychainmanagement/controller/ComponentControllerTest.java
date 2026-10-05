@@ -12,7 +12,6 @@ import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
-import com.supplychainmanagement.service.RequestComponentService;
 import com.supplychainmanagement.service.UserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,14 +50,13 @@ class ComponentControllerTest {
     private final ComponentService componentService = mock(ComponentService.class);
     private final ComponentMapper componentMapper = mock(ComponentMapper.class);
     private final UserService userService = mock(UserService.class);
-    private final RequestComponentService requestComponentService = mock(RequestComponentService.class);
 
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new ComponentController(
-                        componentService, componentMapper, userService, requestComponentService))
+                        componentService, componentMapper, userService))
                 .setControllerAdvice(new GlobalExceptionHandler())
                 // @AuthenticationPrincipal has no resolver in a standalone setup - without it the two
                 // supplier steps fail before they reach the controller method.

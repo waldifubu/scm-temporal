@@ -31,10 +31,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * The inbound side of a component request as a client calls it: the supplier's own list and the five
  * steps they report.
  * <p>
- * These endpoints live in {@link InboundController} and keep the {@code /api/&#123;version&#125;/components}
- * base path, so the URLs are the ones clients already know - only the class they sit in changed.
- * The tests moved with them out of {@code ComponentControllerTest}, which now covers the catalogue,
- * the ordering endpoint and the warehouse's side.
+ * {@link InboundController} maps them under {@code /api/&#123;version&#125;/supplier} - the role that
+ * answers, rather than the resource they are about. The request id is the whole path variable
+ * ({@code POST /supplier/&#123;requestId&#125;/approve}), and the step is {@code intransit}, one word,
+ * the same spelling the shipment side uses.
+ * <p>
+ * The tests moved here out of {@code ComponentControllerTest}, which now covers the catalogue, the
+ * ordering endpoint and the warehouse's side.
  */
 class InboundControllerTest {
 
@@ -68,10 +71,10 @@ class InboundControllerTest {
         when(componentService.requestInTransit(any(), any()))
                 .thenReturn(answered(RequestStatus.IN_TRANSIT));
 
-        mockMvc.perform(post("/api/1.0/components/supplier/5/approve"))
+        mockMvc.perform(post("/api/1.0/supplier/5/approve"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestStatus").value("APPROVED"));
-        mockMvc.perform(post("/api/1.0/components/supplier/5/in-transit"))
+        mockMvc.perform(post("/api/1.0/supplier/5/intransit"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestStatus").value("IN_TRANSIT"));
 
@@ -87,7 +90,7 @@ class InboundControllerTest {
         when(componentService.requestDelivered(any(), any()))
                 .thenReturn(answered(RequestStatus.DELIVERED));
 
-        mockMvc.perform(post("/api/1.0/components/supplier/5/delivered"))
+        mockMvc.perform(post("/api/1.0/supplier/5/delivered"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestStatus").value("DELIVERED"));
 
@@ -105,7 +108,7 @@ class InboundControllerTest {
         when(userService.getAuthenticatedUserId(any())).thenReturn(315L);
         when(requestComponentService.findMyRequests(315L)).thenReturn(List.of(myRequest(12L)));
 
-        mockMvc.perform(get("/api/1.0/components/my-requests"))
+        mockMvc.perform(get("/api/1.0/supplier/my-requests"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].requestStatus").value("APPROVED"))
                 .andExpect(jsonPath("$[0].qty").value(12))
@@ -130,7 +133,7 @@ class InboundControllerTest {
         when(requestComponentService.findMyRequests(315L))
                 .thenReturn(List.of(myRequest(3_000_000_000L)));
 
-        mockMvc.perform(get("/api/1.0/components/my-requests"))
+        mockMvc.perform(get("/api/1.0/supplier/my-requests"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].qty").value(3_000_000_000L))
                 // The nested qty is the recipe quantity and stays what it is - the two are not one.
@@ -145,10 +148,10 @@ class InboundControllerTest {
         when(componentService.rejectRequest(any(), any())).thenReturn(answered(RequestStatus.REJECTED));
         when(componentService.cancelRequest(any(), any())).thenReturn(answered(RequestStatus.CANCELLED));
 
-        mockMvc.perform(post("/api/1.0/components/supplier/5/reject"))
+        mockMvc.perform(post("/api/1.0/supplier/5/reject"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestStatus").value("REJECTED"));
-        mockMvc.perform(post("/api/1.0/components/supplier/5/cancel"))
+        mockMvc.perform(post("/api/1.0/supplier/5/cancel"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.requestStatus").value("CANCELLED"));
 
@@ -162,7 +165,7 @@ class InboundControllerTest {
     void cancelsWithoutABody() throws Exception {
         when(componentService.cancelRequest(any(), any())).thenReturn(answered(RequestStatus.CANCELLED));
 
-        mockMvc.perform(post("/api/1.0/components/supplier/5/cancel"))
+        mockMvc.perform(post("/api/1.0/supplier/5/cancel"))
                 .andExpect(status().isOk());
     }
 
