@@ -36,6 +36,19 @@ import java.util.*;
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
+
+    /**
+     * What a login answers when it fails on the credentials - an unknown user and a wrong password
+     * alike, with the same status and the same words.
+     * <p>
+     * They used to differ: an unknown user got "Invalid username or email!" and a wrong password
+     * "Invalid username/email or password!", both as 400. Two messages tell anybody which user names
+     * exist, and the status was wrong as well - 400 says the request was malformed, 401 says the
+     * credentials were not accepted, which is what a client has to be able to tell apart from a real
+     * bad request. One text keeps the answer from saying more than "no".
+     */
+    static final String INVALID_CREDENTIALS = "Invalid username/email or password!";
+
     private static final Map<RoleEnum, Class<? extends User>> USER_TYPE_CLASS_BY_ROLE = Map.of(
             RoleEnum.CUSTOMER, Customer.class,
             RoleEnum.MANAGER, Manager.class,
@@ -107,8 +120,8 @@ public class AuthServiceImpl implements AuthService {
     public JwtAuthResponse login(LoginDto loginDto) {
         var dbUser = userRepository.findByUsernameOrEmail(loginDto.getUsernameOrEmail(), loginDto.getUsernameOrEmail())
                 .orElseThrow(() -> new APIException(
-                        HttpStatus.BAD_REQUEST,
-                        "Invalid username or email!"
+                        HttpStatus.UNAUTHORIZED,
+                        INVALID_CREDENTIALS
                 ));
 
         if(!dbUser.getIsActive()) {
@@ -132,8 +145,8 @@ public class AuthServiceImpl implements AuthService {
         } catch (BadCredentialsException badCredentialsException) {
             loginAttemptService.loginFailed(dbUserUsername);
             throw new APIException(
-                    HttpStatus.BAD_REQUEST,
-                    "Invalid username/email or password!"
+                    HttpStatus.UNAUTHORIZED,
+                    INVALID_CREDENTIALS
             );
         } catch (Exception ex) {
             throw new APIException(

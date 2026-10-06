@@ -94,6 +94,10 @@ class ApiAuthorizationTest {
         return new Endpoint(HttpMethod.POST, path, body, EnumSet.copyOf(List.of(allowed)));
     }
 
+    private static Endpoint patch(String path, String body, RoleEnum... allowed) {
+        return new Endpoint(HttpMethod.PATCH, path, body, EnumSet.copyOf(List.of(allowed)));
+    }
+
     /**
      * The endpoints whose role rules were decided deliberately - the ones worth a regression test.
      * Not every endpoint in the application: a table nobody maintains is worse than a short one that
@@ -112,7 +116,8 @@ class ApiAuthorizationTest {
                 post("/api/1.0/shipments/1/accept", null, RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/intransit", null, RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/delivered", null, RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
-                post("/api/1.0/shipments/1/trackingnumber", "{\"trackingNumber\": \"DHL-123\"}",
+                // PATCH: it changes one field of an existing shipment, which is what the verb is for.
+                patch("/api/1.0/shipments/1/trackingnumber", "{\"trackingNumber\": \"DHL-123\"}",
                         RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 // One cancel for both sides, which was two endpoints on one path before.
                 post("/api/1.0/shipments/1/cancel", "{\"reason\": \"no truck\"}",
@@ -121,6 +126,9 @@ class ApiAuthorizationTest {
                 get("/api/1.0/components", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // The warehouse's work list and the supplier's own - two views of the same rows.
                 get("/api/1.0/components/requests", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
+                // Whom a request can be placed with - the same three roles that may place one. The warehouse
+                // is among them and may not read /users, which is why the list exists.
+                get("/api/1.0/components/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 get("/api/1.0/supplier/my-requests", RoleEnum.ADMIN, RoleEnum.SUPPLIER),
                 post("/api/1.0/components/request/1",
                         "[{\"componentId\": \"706a99c3-944b-11f1-9b51-001e064520d8\", \"qty\": 1}]",
@@ -142,7 +150,15 @@ class ApiAuthorizationTest {
                 // Reading one order is wide, including LOGISTICS, which needs the dates.
                 get("/api/1.0/orders/1", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
                         RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
-                get("/api/1.0/users", RoleEnum.ADMIN, RoleEnum.MANAGER)
+                // The history of that order: the same roles as the order itself, by the same rule.
+                get("/api/1.0/orders/history/1", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
+                get("/api/1.0/users", RoleEnum.ADMIN, RoleEnum.MANAGER),
+                // The storehouses a client can name - what the goods receipt and stock booking take.
+                get("/api/1.0/storehouses", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
+                // Open to every authenticated role: it is the user asking about themselves. All seven
+                // are named, so the "refuses every other role" half has nobody left to refuse.
+                get("/api/1.0/me", RoleEnum.values())
         );
     }
 

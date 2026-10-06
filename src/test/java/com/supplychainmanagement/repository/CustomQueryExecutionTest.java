@@ -60,6 +60,8 @@ class CustomQueryExecutionTest {
     private RequestComponentRepository requestComponentRepository;
     @Autowired
     private OrderRepository orderRepository;
+    @Autowired
+    private OrderHistoryRepository orderHistoryRepository;
 
     /** The one that broke: two named parameters, and the second was bound under a different name. */
     @Test
@@ -275,6 +277,15 @@ class CustomQueryExecutionTest {
 
         assertThat(orderNo).isBetween(OrderNumberScrambler.FIRST, OrderNumberScrambler.LAST);
         assertThat(orderNo).isGreaterThanOrEqualTo(9_000L);
+    }
+
+    /**
+     * The history of one order, newest first - a derived query with two sort keys. Unknown id: nothing,
+     * and no error from a property path that does not resolve.
+     */
+    @Test
+    void findByOrderIdOrderByChangedAtDescIdDescRuns() {
+        assertThat(orderHistoryRepository.findByOrderIdOrderByChangedAtDescIdDesc(UNKNOWN_ID)).isEmpty();
     }
 
     /** The two detail finders with their entity graphs. */

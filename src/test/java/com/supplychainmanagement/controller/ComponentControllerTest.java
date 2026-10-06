@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.component.ProductRefDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.exception.APIException;
@@ -289,5 +290,53 @@ class ComponentControllerTest {
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(componentService);
+    }
+
+    // ------------------------------------------------------------------ the supplier list
+
+    /** Id and name - what a request is placed with - in the paged shape of every list. */
+    @Test
+    void listsTheSuppliersForTheOrderingSide() throws Exception {
+        when(componentService.findSuppliers(any())).thenAnswer(call -> new PageImpl<>(
+                List.of(new SupplierResponse(12L, "Sam Supply"), new SupplierResponse(13L, "Tina Teile")),
+                call.<Pageable>getArgument(0), 2));
+
+        mockMvc.perform(get("/api/1.0/components/suppliers"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.total").value(2))
+                .andExpect(jsonPath("$.content[0].id").value(12))
+                .andExpect(jsonPath("$.content[0].name").value("Sam Supply"))
+                // Nothing the ordering side has no business with.
+                .andExpect(jsonPath("$.content[0].email").doesNotExist())
+                .andExpect(jsonPath("$.content[0].username").doesNotExist())
+                .andExpect(jsonPath("$.content[0].roles").doesNotExist());
+
+        // By last name, ascending: the order a person looks a supplier up in.
+        verify(componentService).findSuppliers(argThat((Pageable pageable) ->
+                pageable.getPageNumber() == 0 && pageable.getPageSize() == 25
+                        && Sort.by(Sort.Direction.ASC, "lastName").equals(pageable.getSort())));
+    }
+
+    /**
+     * The literal segment wins over GET /components/{sku}. Without that, "suppliers" would be bound as a
+     * UUID and answered with a 400 - the same arrangement as /requests.
+     */
+    @Test
+    void readsSuppliersAsTheListAndNotAsASku() throws Exception {
+        when(componentService.findSuppliers(any())).thenAnswer(call -> new PageImpl<>(
+                List.of(), call.<Pageable>getArgument(0), 0));
+
+        mockMvc.perform(get("/api/1.0/components/suppliers")).andExpect(status().isOk());
+
+        verify(componentService, never()).findBySku(any());
+    }
+
+    /** A sort field that is none of the allowed ones is a 400, and the service is never reached. */
+    @Test
+    void refusesToSortSuppliersByAnythingElse() throws Exception {
+        mockMvc.perform(get("/api/1.0/components/suppliers").param("sort", "password"))
+                .andExpect(status().isBadRequest());
+
+        verify(componentService, never()).findSuppliers(any());
     }
 }

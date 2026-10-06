@@ -48,6 +48,11 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    public boolean canReadAnyOrder(User authUser) {
+        return hasAnyAuthority(authUser, RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE, RoleEnum.LOGISTICS);
+    }
+
+    @Override
     public boolean hasAnyAuthority(User authUser, RoleEnum... roles) {
         if (authUser == null || authUser.getAuthorities() == null) {
             return false;

@@ -1,5 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.mapper.UserMapper;
+import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.*;
@@ -41,6 +43,7 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final UserMapper userMapper;
 
     @Override
     public List<User> findAll() {
@@ -265,5 +268,11 @@ public class UserServiceImpl implements UserService {
 
     public Long getAuthenticatedUserId(org.springframework.security.core.userdetails.User authUser) {
         return findByUsernameOrEmail(authUser.getUsername()).getId();
+    }
+
+    @Override
+    public UserDto findCurrentUser(String usernameOrEmail) {
+        // The class is @Transactional(readOnly = true), so the lazy roles load inside the mapping.
+        return userMapper.mapToDto(findByUsernameOrEmail(usernameOrEmail));
     }
 }

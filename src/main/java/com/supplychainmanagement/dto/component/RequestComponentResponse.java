@@ -1,14 +1,13 @@
 package com.supplychainmanagement.dto.component;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.supplychainmanagement.dto.common.DisplayNames;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RequestStatus;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * One placed component request, as the API answers it.
@@ -69,12 +68,8 @@ public record RequestComponentResponse(
         );
     }
 
-    /** First and last name where there is one, the user name otherwise - never an empty string. */
-    private static String nameOf(User user) {
-        String full = Stream.of(user.getFirstName(), user.getLastName())
-                .filter(part -> part != null && !part.isBlank())
-                .map(String::trim)
-                .collect(Collectors.joining(" "));
-        return full.isBlank() ? user.getUsername() : full;
+    /** The same name everywhere a person is shown - see {@link DisplayNames}. */
+    static String nameOf(User user) {
+        return DisplayNames.of(user);
     }
 }

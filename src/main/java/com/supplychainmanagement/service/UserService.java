@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
 import org.springframework.data.domain.Page;
@@ -38,4 +39,14 @@ public interface UserService {
     User findByUsernameOrEmail(String usernameOrEmail);
 
     Long getAuthenticatedUserId(org.springframework.security.core.userdetails.User authUser);
+
+    /**
+     * The user behind a token, as the API shows them: the same {@link UserDto} {@code GET /users/{id}}
+     * answers, with <strong>every</strong> role the user holds.
+     * <p>
+     * Mapped here, while the session is open, rather than by the caller afterwards: the roles are LAZY.
+     *
+     * @param usernameOrEmail what the authenticated principal is called - the token carries the user name
+     */
+    UserDto findCurrentUser(String usernameOrEmail);
 }

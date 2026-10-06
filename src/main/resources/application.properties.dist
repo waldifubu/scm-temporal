@@ -49,5 +49,10 @@ app.jwtExpirationMs=1800000
 
 # Cookie carrying the JWT. secure=false for local http development; set it to true
 # wherever the app is served over https, otherwise the browser drops the cookie.
+# Which other origins a browser may call the API from, comma separated. Empty (the default in code)
+# means none: right when the frontend is served from the same origin as the API, or through a dev
+# proxy. Set it per deployment - CORS_ALLOWED_ORIGINS in the environment wins over the value here.
+# Never "*": the session is a cookie, and a wildcard cannot go with credentials.
+app.cors.allowedOrigins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 app.cookie.name=scmcookie
 app.cookie.secure=false

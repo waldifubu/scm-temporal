@@ -68,7 +68,7 @@ class OrderServiceAccessTest {
         caller.setId(id);
         caller.setUsername(username);
 
-        when(roleService.isPrivilegedUser(org.mockito.ArgumentMatchers.any())).thenReturn(false);
+        when(roleService.canReadAnyOrder(org.mockito.ArgumentMatchers.any())).thenReturn(false);
         when(userRepository.findByUsernameOrEmail(username, username)).thenReturn(Optional.of(caller));
     }
 
@@ -101,11 +101,15 @@ class OrderServiceAccessTest {
                 .isInstanceOf(APIException.class);
     }
 
-    /** Admin, manager and warehouse look at orders that are never "theirs" - no ownership check. */
+    /**
+     * Admin, manager, warehouse and logistics look at orders that are never "theirs" - no ownership
+     * check. Which roles those are is RoleService.canReadAnyOrder's business, held in
+     * RoleServiceCanReadAnyOrderTest and, against a real order, in OrderReadAccessTest.
+     */
     @Test
-    void letsAPrivilegedCallerReadAnyOrder() {
+    void letsACallerWhoMayReadAnyOrderReadAnyOrder() {
         Order order = orderOfCustomer(3L);
-        when(roleService.isPrivilegedUser(org.mockito.ArgumentMatchers.any())).thenReturn(true);
+        when(roleService.canReadAnyOrder(org.mockito.ArgumentMatchers.any())).thenReturn(true);
 
         assertThat(service.findByOrderNoForUser(ORDER_NO, principal("manager"))).isSameAs(order);
     }

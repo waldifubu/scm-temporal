@@ -2,6 +2,8 @@ package com.supplychainmanagement.support;
 
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.entity.users.Admin;
@@ -12,8 +14,11 @@ import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.entity.users.Supplier;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.entity.users.Warehouse;
+import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.ComponentRepository;
+import com.supplychainmanagement.repository.OrderHistoryRepository;
+import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.RoleRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
@@ -54,6 +59,8 @@ public class TestData {
     private final ComponentRepository componentRepository;
     private final StorehouseRepository storehouseRepository;
     private final RoleRepository roleRepository;
+    private final OrderRepository orderRepository;
+    private final OrderHistoryRepository orderHistoryRepository;
 
     private static String unique(String prefix) {
         return prefix + "-" + SEQUENCE.incrementAndGet() + "-" + UUID.randomUUID().toString().substring(0, 8);
@@ -154,6 +161,33 @@ public class TestData {
         fillUser(user, "Role", rolenames.length == 0 ? "None" : rolenames[0].name());
         user.setRoles(roles);
         return userRepository.saveAndFlush(user);
+    }
+
+    /**
+     * An order of the given customer, status CREATED and no lines. The number is counted up from a
+     * value no real order has - the scrambled range starts at 90000 - and is unique for the run.
+     */
+    public Order order(User customer) {
+        Order order = new Order();
+        order.setOrderNo(900_000_000L + SEQUENCE.incrementAndGet());
+        order.setCustomer(customer);
+        order.setStatus(OrderStatus.CREATED);
+        // Empty rather than null: the mapping of an order walks its lines.
+        order.setOrderItems(new LinkedHashSet<>());
+        return orderRepository.saveAndFlush(order);
+    }
+
+    /**
+     * One row of an order's history. {@code changedAt} is stamped by Hibernate ({@code @CreationTimestamp}),
+     * so rows made in a row differ by their id, not necessarily by their time.
+     */
+    public OrderHistory historyRow(Order order, OrderStatus previous, OrderStatus next, Long userId) {
+        return orderHistoryRepository.saveAndFlush(OrderHistory.builder()
+                .order(order)
+                .previousStatus(previous)
+                .newStatus(next)
+                .userId(userId)
+                .build());
     }
 
     /** A storehouse to book stock into. */

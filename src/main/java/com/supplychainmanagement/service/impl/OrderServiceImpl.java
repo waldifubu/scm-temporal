@@ -118,8 +118,13 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * Mirrors the branch in a privileged caller sees every order, everyone
-     * else only their own.
+     * Who may read an order: every role that works from orders without being their customer - see
+     * {@link RoleService#canReadAnyOrder} - sees every one, a customer only their own.
+     * <p>
+     * This asked {@code isPrivilegedUser}, which is ADMIN and MANAGER only, so WAREHOUSE and LOGISTICS -
+     * both named in the endpoint's {@code @PreAuthorize} - were treated as customers and refused
+     * "This order belongs to another customer" for every order. A test with a real order caught it
+     * ({@code OrderReadAccessTest}); the one with a mocked role service could not.
      * <p>
      * Answered with 403 and not 404 on purpose - inside this application an order number is not a
      * secret, and "you may not see this one" is a more useful answer than pretending it does not
@@ -129,7 +134,7 @@ public class OrderServiceImpl implements OrderService {
     public Order findByOrderNoForUser(Long orderNo, org.springframework.security.core.userdetails.User authUser) {
         Order order = findByOrderNo(orderNo);
 
-        if (roleService.isPrivilegedUser(authUser)) {
+        if (roleService.canReadAnyOrder(authUser)) {
             return order;
         }
 
