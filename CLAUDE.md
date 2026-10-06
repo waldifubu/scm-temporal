@@ -69,17 +69,19 @@ login view rendered in a browser). Vaadin does write `src/main/frontend/index.ht
 (`/src/main/frontend/`), never edit or commit them. `vaadin.launch-browser=true` opens a browser
 automatically in dev mode.
 <br>**Bootstrap reaches the Vaadin pages through `styles.css`**, which starts with
-`@import url('bootstrap.min.css')` - a local copy (5.3.8) next to it. It used to come from
+`@import url('bootstrap.min.css')` - a local copy (5.3.8) next to it, in `src/main/resources/static/`. It used to come from
 `import 'bootstrap/...'` in `src/main/frontend/index.tsx`, bundled by Vite; without that import the
 Vaadin pages fell back to the browser's serif font. A stylesheet needs no build, so it survives the
 removal of the JavaScript project and needs no network.
-<br>**Why there is a `resources` folder inside `resources`:** `src/main/resources/resources/` is one of
-the four places Spring Boot serves static files from by default (`classpath:/META-INF/resources/`,
-`/resources/`, `/static/` and `/public/`), and the inner folder name is **not** part of the URL:
-`resources/styles.css` is `/styles.css`, `resources/icons/favicon.ico` is `/icons/favicon.ico` (named
-that way by `Application.configurePage` and the Thymeleaf pages). `src/main/resources/static/` does the
-same for the Thymeleaf site (`/css/style.css`) - two static roots side by side, harmless as long as no
-path exists in both (the first location in the list wins). Nothing configures this; it is Boot's default.
+<br>**All static files live in `src/main/resources/static/`**, for the Vaadin pages and the Thymeleaf
+site alike: `styles.css`, `bootstrap.min.css`, `view-title.css`, `icons/` and `css/style.css`. The
+folder name is not part of the URL (`static/styles.css` is `/styles.css`, `static/icons/favicon.ico` is
+`/icons/favicon.ico` - named that way by `Application.configurePage` and the Thymeleaf pages). They used
+to sit in a second root, `src/main/resources/resources/`, which Spring Boot also serves by default
+(its four locations are `classpath:/META-INF/resources/`, `/resources/`, `/static/` and `/public/`);
+two roots side by side worked, but for no reason, and if the same path had ever existed in both the first
+location of that list would have won. Moved with the URLs unchanged - checked by requesting each file and
+by loading the Vaadin login in a browser. Nothing configures any of this; it is Boot's default.
 <br>**A stale `target/dev-bundle` makes Vaadin rebuild.** Removing `index.tsx` made the next start
 report "Detected deleted index.tsx file" and run `npm install` plus a bundle build (about 90 seconds,
 "Building front-end development bundle" in the browser), and that build wrote `package.json`,
