@@ -93,7 +93,7 @@ public class OutboundController {
      * JSON at all: a client had to send the number as a raw quoted string, and a blank or over-long
      * one came back as a message about a value that had no name.
      */
-    @PostMapping(path = "/{shipmentId}/trackingnumber", version = "1.0")
+    @PatchMapping(path = "/{shipmentId}/trackingnumber", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
     public DeliveryResponse trackingNumber(@PathVariable Long shipmentId,
                                            @Valid @RequestBody TrackingNumberRequest request,

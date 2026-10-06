@@ -3,6 +3,7 @@ package com.supplychainmanagement.service;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import org.springframework.data.domain.Page;
@@ -72,6 +73,16 @@ public interface ComponentService {
      * @param status the status to narrow to, or null for every request
      */
     Page<RequestComponentResponse> findRequests(RequestStatus status, Pageable pageable);
+
+    /**
+     * The suppliers a request can be placed with - the answer to "which id goes into
+     * {@code POST /components/request/{supplierId}}".
+     * <p>
+     * The warehouse may order components but cannot read {@code /users}, so until this existed it had
+     * no way to learn a supplier's id. Active suppliers only, and id and name only: nothing about them
+     * that the ordering side has no business with.
+     */
+    Page<SupplierResponse> findSuppliers(Pageable pageable);
 
     /**
      * The supplier accepts the request: OPEN to APPROVED. Any other status is a 409.

@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
@@ -26,6 +27,9 @@ import java.util.UUID;
 @RequestMapping({"/api/{version}/components"})
 @AllArgsConstructor
 public class ComponentController {
+
+    /** What the supplier list may be sorted by - see {@link PageRequests}. */
+    private static final java.util.Set<String> SUPPLIER_SORTABLE = java.util.Set.of("id", "firstName", "lastName");
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;
     private final UserService userService;
@@ -58,6 +62,25 @@ public class ComponentController {
      * Plural, next to the singular {@code POST /request/{supplierId}} that creates one: the path of
      * the existing endpoint is left as clients know it.
      */
+    /**
+     * The suppliers a component request can be placed with: id and name, active ones, paged. The
+     * answer to "which id goes into {@code POST /request/{supplierId}}".
+     * <p>
+     * The same three roles that may place a request. WAREHOUSE is among them but may not read
+     * {@code /users}, so without this it could order and not say from whom. The path is literal and
+     * wins over {@code GET /{sku}}, like {@code /requests} does.
+     */
+    @GetMapping(path = "/suppliers", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    public PageResponse<SupplierResponse> getSuppliers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "lastName") String sort,
+            @RequestParam(defaultValue = "ASC") String order) {
+        return PageResponse.of(componentService.findSuppliers(
+                PageRequests.of(page, size, sort, order, SUPPLIER_SORTABLE)));
+    }
+
     @GetMapping(path = "/requests", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<RequestComponentResponse> getRequests(

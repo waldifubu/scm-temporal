@@ -20,6 +20,19 @@ public interface RoleService {
     boolean isPrivilegedUser(org.springframework.security.core.userdetails.User authUser);
 
     /**
+     * Whether the caller may read orders that are not their own: ADMIN and MANAGER, and the two
+     * roles that work from an order without being its customer - WAREHOUSE, which picks and packs it,
+     * and LOGISTICS, which plans its shipment and needs its due date.
+     * <p>
+     * Deliberately not {@link #isPrivilegedUser}, which is ADMIN and MANAGER and answers other
+     * questions too (which product fields a caller sees, whose orders a list shows). Reading orders
+     * used to ask <em>that</em>, so WAREHOUSE and LOGISTICS passed {@code @PreAuthorize} on
+     * {@code GET /orders/{orderNo}} and were then refused by the service as "another customer" for every
+     * order there is. A rule that two layers must agree on belongs in one named place.
+     */
+    boolean canReadAnyOrder(org.springframework.security.core.userdetails.User authUser);
+
+    /**
      * Checks whether the caller holds at least one of the given roles.
      * A {@code null} principal (unauthenticated) yields {@code false} instead of an NPE.
      */

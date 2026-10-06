@@ -3,6 +3,7 @@ package com.supplychainmanagement.service.impl;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.Product;
@@ -15,6 +16,7 @@ import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
+import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RoleService;
@@ -48,6 +50,7 @@ public class ComponentServiceImpl implements ComponentService {
     private final RoleService roleService;
     private final StorehouseRepository storehouseRepository;
     private final StockService stockService;
+    private final SupplierRepository supplierRepository;
 
     /**
      * While the supplier can still call a request off: they have taken it on, but the goods are not
@@ -124,6 +127,13 @@ public class ComponentServiceImpl implements ComponentService {
                 : requestComponentRepository.findAllByRequestStatus(status, pageable);
 
         return page.map(RequestComponentResponse::from);
+    }
+
+    /** One query: a supplier has no lazy association the response reads. */
+    @Override
+    @Transactional(readOnly = true)
+    public Page<SupplierResponse> findSuppliers(Pageable pageable) {
+        return supplierRepository.findAllByIsActiveTrue(pageable).map(SupplierResponse::from);
     }
 
     @Override

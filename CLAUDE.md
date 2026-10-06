@@ -59,9 +59,32 @@ Default port is 8080 (`server.port` in `application.properties`). Logs are writt
 `logs/app-${server.port}.log` in addition to stdout — tail that file to check startup status
 (look for `Started Application` vs `APPLICATION FAILED TO START`).
 
-Frontend (Vaadin/React, `src/main/frontend`) is built automatically by the
-`vaadin-spring-boot-starter` as part of the Maven build/dev server; there is normally no need to
-run `npm`/`vite` directly. `vaadin.launch-browser=true` opens a browser automatically in dev mode.
+**There is no JavaScript project in this repository.** No `package.json`, no `vite.config.ts`, no
+`src/main/frontend`, no `src/main/bundles`: they were removed on purpose, a React frontend is to live
+in a project of its own next to this one. The Vaadin views are plain Java (`vaadin/views`) and need
+none of it - the starter serves its prebuilt development bundle from its own jars, so the application
+starts in seconds and **needs neither Node nor `npm`** (measured: startup without any of those files,
+login view rendered in a browser). Vaadin does write `src/main/frontend/index.html` and
+`src/main/frontend/generated/` again while it starts; both are build output and are in `.gitignore`
+(`/src/main/frontend/`), never edit or commit them. `vaadin.launch-browser=true` opens a browser
+automatically in dev mode.
+<br>**Bootstrap reaches the Vaadin pages through `styles.css`**, which starts with
+`@import url('bootstrap.min.css')` - a local copy (5.3.8) next to it. It used to come from
+`import 'bootstrap/...'` in `src/main/frontend/index.tsx`, bundled by Vite; without that import the
+Vaadin pages fell back to the browser's serif font. A stylesheet needs no build, so it survives the
+removal of the JavaScript project and needs no network.
+<br>**Why there is a `resources` folder inside `resources`:** `src/main/resources/resources/` is one of
+the four places Spring Boot serves static files from by default (`classpath:/META-INF/resources/`,
+`/resources/`, `/static/` and `/public/`), and the inner folder name is **not** part of the URL:
+`resources/styles.css` is `/styles.css`, `resources/icons/favicon.ico` is `/icons/favicon.ico` (named
+that way by `Application.configurePage` and the Thymeleaf pages). `src/main/resources/static/` does the
+same for the Thymeleaf site (`/css/style.css`) - two static roots side by side, harmless as long as no
+path exists in both (the first location in the list wins). Nothing configures this; it is Boot's default.
+<br>**A stale `target/dev-bundle` makes Vaadin rebuild.** Removing `index.tsx` made the next start
+report "Detected deleted index.tsx file" and run `npm install` plus a bundle build (about 90 seconds,
+"Building front-end development bundle" in the browser), and that build wrote `package.json`,
+`node_modules` and the rest back. A checkout without a `target/dev-bundle` does not do it. If it
+happens: stop the application, delete `target/dev-bundle` and the regenerated files, start again.
 
 ## Architecture
 
@@ -75,9 +98,8 @@ scoped with `.securityMatcher(...)` so their rules never interact:
 
 Vaadin is deliberately mounted under `/app/*` (`vaadin.url-mapping=/app/*`) so it doesn't compete
 with the Thymeleaf `/` route in `WebController`. Vaadin views live in
-`service...vaadin/views` (actually `com.supplychainmanagement.vaadin.views`); the newer React-based
-UI lives in `src/main/frontend` (Vaadin+React via `@vaadin/react-components`, routes generated into
-`src/main/frontend/generated`).
+`service...vaadin/views` (actually `com.supplychainmanagement.vaadin.views`). A React client for the
+API is not part of this repository.
 
 **The signing key comes from the environment**: `app.jwtSecret=${JWT_SECRET:...}`. The default in
 `application.properties` exists only so the application starts and can sign - it is not a production
@@ -89,6 +111,74 @@ holds the real datasource and secret) - the template `application.properties.dis
 what a fresh checkout copies, and `JwtSecretTest` therefore reads **the template**, not the live
 file. It also signs a token with that value rather than only measuring its length, because the
 question was never the length.
+
+**Authentication failures are 401 - one rule for a client: log in again.** An expired token, an
+unparseable one, a forged one, a missing one and a wrong password all answer 401. It used to be three
+codes for one class of failure: an expired token was **410** ("gone for good", which a session is not)
+and both an unparseable token and a wrong password were **400** ("malformed request", which they are
+not). `AuthStatusCodesTest` runs them against the real filter chain.
+<br>**A failed login says only "no".** An unknown user and a wrong password give the same status *and
+the same text* (`AuthServiceImpl.INVALID_CREDENTIALS`) - they used to differ ("Invalid username or
+email!" against "Invalid username/email or password!"), which told anybody which user names exist, and
+the test asserts the two answers equal rather than merely both 401.
+<br>**A disabled or locked account stays 403**, on purpose: it is a state of an account that is known,
+not a failure of the credentials, and the one signal a client can show instead of "try again". Note it
+is answered *before* the password is checked, so it does say that the account exists.
+<br>For a client: a 401 from any endpoint except the login call means the session is over; a 401 *from*
+the login call means the credentials were wrong. The status does not tell them apart, the endpoint does.
+
+**The CORS origin is configuration, and empty means none.** `app.cors.allowedOrigins` is a comma
+separated list (`SecurityBeanConfig.parseOrigins`: trimmed, blanks dropped, a trailing slash removed -
+the `Origin` header never has one, so an origin written with it would never match and fail without
+saying why). It was `List.of("http://localhost:3000")` in the code, so any other origin - Vite's
+default port 5173 among them - was refused at the preflight and the only fix was a rebuild. The default
+in code is **empty**: a deployment that serves the frontend from the same origin needs none, and one
+that forgets to say fails closed. `application.properties.dist` carries the development values
+(`${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}`, the environment variable wins).
+A wildcard is refused **at startup**: the session is a cookie, credentials are on, and a browser
+rejects `*` with them - allowing every site would also defeat `SameSite`. `PATCH` is allowed next to
+the other methods (`PATCH /shipments/{id}/trackingnumber` is one; a preflight for an unlisted method is
+refused before the call is made). `CorsPreflightTest` uses an origin that is none of the development
+ones, so it tells "configured" from "hard-coded".
+<br>**A dev proxy does not make CORS disappear - it depends on the Host.** The browser sees one origin,
+but the *server* still compares `Origin` with the request's own host. A proxy that keeps the original
+Host (Vite's default, `changeOrigin` off) makes them equal and there is nothing to check; one that
+rewrites it to the backend's (`changeOrigin: true`, common in tutorials) makes the same request look
+cross-origin, and it is refused unless the origin is listed. Both are held in `CorsPreflightTest`.
+
+**The JWT filter writes into the `SecurityContextHolderStrategy` of its own context**, not the static
+holder (`setSecurityContextHolderStrategy`, the idiom Spring Security uses for its own filters). The
+static `SecurityContextHolder` is JVM-wide, and the Vaadin integration installs a
+`VaadinAwareSecurityContextHolderStrategy` into it **per application context** - so a second context
+started in the same JVM replaces it, and the first context's `AuthorizationFilter` (which reads its own
+strategy) then no longer sees what this filter wrote: a valid token ended as an unauthenticated 401
+with an *empty* body (`sendError`, not the filter's own `ErrorDetails`). Production has one context and
+never saw it; the tests have several. Found because `MeEndpointTest` passed or failed depending on
+whether `CorsPreflightTest` - which starts another context - ran in between; measured by printing the
+global strategy against the context's bean (`@636036483` against `@316882043`).
+`JwtAuthenticationFilterStrategyTest` holds it without any Spring context, because a result that
+depends on the order of unrelated tests is not something to rely on to catch it again.
+
+**`GET /me` answers who is logged in, with every role** (`MeController`; `UserDto`, the same shape as
+`GET /users/{id}`; roles as the enum names `@PreAuthorize` compares against). It exists for a browser
+client: the token lives in an `HttpOnly` cookie that JavaScript cannot read, so after a reload asking
+the server is the only way to learn whether there is a session. The login response cannot stand in for
+it - its `role` is *one* authority picked with `iterator().next()`, so a user holding WAREHOUSE and
+LOGISTICS got `logistics` and a menu built from it showed half their workplace. Roles are read from the
+database on every request, not frozen into the token.
+<br>**It is not under `/auth`, on purpose.** It started as `/auth/me` and that was the wrong place:
+everything under `/auth` (register, login, logout) must work without a token, so
+`JwtAuthenticationFilter.shouldNotFilter` skips the whole space and `SpringSecurityConfig` permits it -
+which would have called `/me` with no principal at all. It had to be carved out of both
+(an exception in the filter, and an `authenticated()` rule before the `permitAll`), and a carve-out like
+that fails quietly in either direction: too wide and `/me` has no user, too narrow and login stops
+working. As `/me` it is an ordinary protected resource - the filter runs, `anyRequest().authenticated()`
+applies, nothing special anywhere, and the carve-out is removed. The rule that follows: **nothing that
+answers for the logged-in user may live under `/auth`**. The unversioned `/api/me` works as everywhere
+else (`ApiVersionDefaultFilter`).
+<br>The old path is gone, not aliased: `/api/1.0/auth/me` answers 404 (`MeEndpointTest`). That test
+also holds the `HttpOnly`-cookie case, that the filter really reads a token on `/me`, and that login and
+logout stayed public.
 
 Auth for the API is JWT-based: `JwtAuthenticationFilter` + `JwtTokenProvider` +
 `JwtAuthenticationEntryPoint` (`security/`). Roles are `RoleEnum` (`CUSTOMER`, `MANAGER`,
@@ -396,7 +486,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   did - a client following the docs got a 404. The supplier's step of the same name
   (`POST /supplier/{requestId}/intransit`) is spelled the same way, so there is one spelling to
   remember now; it used to be hyphenated on that side, which is how the mistake survived.
-  <br>There is a fourth, `POST /shipments/{id}/trackingnumber` (ADMIN, DISTRIBUTOR): the carrier's
+  <br>There is a fourth, `PATCH /shipments/{id}/trackingnumber` (ADMIN, DISTRIBUTOR): the carrier's
   own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`), refused once the
   shipment is `DELIVERED` or `CANCELLED` and only from the assigned distributor. It moves no status
   and takes no order along. The body used to be a bare `@RequestBody String` - not a JSON object at
@@ -433,6 +523,36 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   spot), and something still short - that last message names every line with ordered against
   delivered. `OrderStatus.DELIVERED` is deliberately **not** a precondition: it is set by whichever
   shipment arrives first and says less than the quantities do.
+- **An order's history** (`GET /orders/history/{orderNo}`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS and
+  CUSTOMER; `OrderHistoryService`, `OrderHistoryResponse`): every status the order went through, **newest
+  first** (`changedAt` descending, then `id` descending), each with the status it came from, the one it
+  went to and when. **Both keys run the same way, and the second one matters**: rows written within one
+  transaction carry the *same* timestamp (measured: 251 of 300 three-row histories, although the column
+  is `datetime(6)`), and for them the id is the whole order. With the id ascending under a descending
+  time, those rows came back in the opposite order to the rest - and the endpoint tests failed now and
+  then, because most of their rows tie. `previousStatus` is `null` on the **last** row - the creation
+  comes from nowhere, and that stays in the JSON as a null. The path takes the **order number**, like every other order endpoint; not paged,
+  because an order has as many rows as it has had status changes.
+  <br>**The access rule is not written a second time**: the order is fetched through
+  `findByOrderNoForUser`, the call `GET /orders/{orderNo}` makes, so a history can never be reachable
+  where its order is not (404 unknown, 403 for a customer asking about somebody else's) - a history says
+  more than the order does.
+  <br>**Staff see who made each change, a customer does not.** `changedById` and `changedByName` are
+  left out for a caller who may not read any order: a customer reads what happened and when, and a name
+  there is the name of an employee. Their lookup is not merely hidden, it is never made. For staff both
+  are absent where the row has no acting user (`OrderHistory.user_id` is nullable - an automatic step has
+  nobody to name). The names come from **one** query for all rows (`userId` is a plain column, not an
+  association, so there is nothing to fetch-join), and use `DisplayNames`, the one rule for what a person
+  is called that the supplier list and the component requests share.
+- **Who may read an order that is not their own is `RoleService.canReadAnyOrder`**: ADMIN, MANAGER,
+  WAREHOUSE and LOGISTICS. It is **not** `isPrivilegedUser`, which is ADMIN and MANAGER and answers other
+  questions too (which product fields a caller sees, whose orders a list shows). Reading an order asked
+  *that* one, so WAREHOUSE and LOGISTICS - both named in `@PreAuthorize` on `GET /orders/{orderNo}`, and
+  LOGISTICS added on purpose for the due date - passed the annotation and were then refused by the
+  service as "another customer" for **every** order there is. Neither `ApiAuthorizationTest` (it asks an
+  order number that does not exist, so the answer is a 404 whatever the service would say) nor
+  `OrderServiceAccessTest` (it mocks the role service) could see it; `OrderReadAccessTest` can, because it
+  reads a real order. Measured before the fix: two cases red, five green.
 - **Cancelling an order** (`POST /orders/{orderNo}/cancel`, ADMIN and MANAGER - deliberately not the
   customer, since it frees stock and ends the order; `OrderService.cancel`): only **while nothing has
   physically moved**. A line past `RESERVED` has its goods off the shelf and its reservation
@@ -672,6 +792,13 @@ this change would otherwise be unverified.
 
 ### Paged list endpoints
 
+New list endpoints take their parameters through **`PageRequests.of`** (package-private in
+`controller`): it refuses a `sort` that is not on a list the endpoint names, a negative `page` and a
+`size` below one, all as a **400** that says which parameter and what is allowed. Those three used to
+end as a 500 - nothing handles `PropertyReferenceException`, and `PageRequest.of` throws
+`IllegalArgumentException` - for what is a typo in a query string. `/storehouses` and
+`/components/suppliers` use it; the older lists still have the weakness.
+
 Every list endpoint follows `OrderController.list`: request parameters `page` / `size` / `sort` /
 `order`, assembled into a `PageRequest`, answered with `PageResponse.of(page)` —
 `{content, total, page, size}`. Defaults are `page=0`, `size=25`, `order=ASC`; the `sort` default
@@ -877,6 +1004,26 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 - `@NoCheck` (`annotation/NoCheck.java`) + `NoCheckAspect` — a marker annotation logged via AOP
   `@After` advice; check existing usages before assuming it changes authorization/validation
   behavior (currently logging-only).
+- **The suppliers a request can be placed with** (`GET /components/suppliers`, ADMIN, MANAGER and
+  WAREHOUSE - the roles that may place one; `SupplierResponse`, `SupplierRepository`): the warehouse
+  may order components but cannot read `/users`, so it had no way to learn a supplier's id. **Id and
+  name only** - the e-mail address, the login and the roles are the business of whoever reads
+  `/users`. **Active suppliers only**: a disabled account cannot log in, so it could never approve,
+  send or deliver, and a request placed with it would sit in `OPEN` for good. The repository is typed
+  `Supplier`, so the `user_type` discriminator is added by Hibernate and cannot be forgotten; the name
+  is the one `RequestComponentResponse` uses for the same person (first and last name, the login only
+  when there is neither). Paged, sorted by `lastName` by default. Note `POST /components/request/...`
+  does **not** itself refuse a disabled supplier - the list hides them, the endpoint does not check.
+- **Storehouses are listed, read-only** (`GET /storehouses`, ADMIN and WAREHOUSE,
+  `StorehouseController`/`StorehouseService`, `StorehouseResponse`): two warehouse operations take a
+  `storehouseId` - the goods receipt and `POST /stock/add` - and nothing said which ids exist, so a
+  client had to be told them out of band. Paged like every list, sorted by `name` by default; a
+  dropdown is `?size=100`. `sort` is checked against `id`, `name`, `city`, `country` and anything else
+  is a **400** naming it: it is applied as a property path, and an unknown one ended in a
+  `PropertyReferenceException` that nothing handles - a 500 for a typo in a query parameter. (The other
+  list endpoints still have that weakness.) The entity's `stocks` collection is never read, so the list
+  is one query; what a storehouse holds is `GET /stock/storehouse/{id}`. No create or change: they are
+  set up with the system.
 - **Booking stock is `@Transactional` and reads `FOR UPDATE`** (`StockService.add`,
   `findForUpdateByStorehouseIdAndSku`) - like everywhere else here that reads a value, checks it and
   writes it back. It was neither: from `POST /stock/add` no transaction came along at all, so the read

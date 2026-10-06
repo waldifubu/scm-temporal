@@ -8,8 +8,7 @@ import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-//@StyleSheet(Aura.STYLESHEET)
-//@StyleSheet("styles.css") // Your custom styles
+@StyleSheet("styles.css")
 public class Application implements AppShellConfigurator {
 
     static void main(String[] args) {
@@ -21,5 +20,4 @@ public class Application implements AppShellConfigurator {
         // Absolute path: Vaadin is mounted under /app/*, a relative href would resolve against /app/
         settings.addFavIcon("icon", "/icons/favicon.ico", "32x32");
     }
-
 }

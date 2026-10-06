@@ -7,8 +7,9 @@ distributor. It exposes a versioned JSON REST API secured with JWT, plus a class
 Thymeleaf site.
 
 > This document covers the **backend/REST API**. The project also ships a Vaadin-based admin UI
-> (`src/main/java/com/supplychainmanagement/vaadin`) and a React frontend (`src/main/frontend`),
-> both intentionally left out of this document for now.
+> (`src/main/java/com/supplychainmanagement/vaadin`), intentionally left out of this document for
+> now. There is no React frontend in this repository; a client for the API is meant to live in a
+> project of its own.
 
 ## Table of contents
 
@@ -438,7 +439,7 @@ to `DELIVERED` with no record of who drove them.
 PUT  /shipments/{id}/ready        CREATED → READY          lines + orders → READY_FOR_DISPATCH
 POST /shipments/{id}/accept       DISPATCH_REQUESTED → ACCEPTED   (orders already there)
 POST /shipments/{id}/intransit    ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
-POST /shipments/{id}/trackingnumber  { "trackingNumber": "DHL-123" }  not once DELIVERED/CANCELLED
+PATCH /shipments/{id}/trackingnumber { "trackingNumber": "DHL-123" }  not once DELIVERED/CANCELLED
 POST /shipments/{id}/delivered    IN_TRANSIT → DELIVERED   orders → DELIVERED
 POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
 ```
@@ -568,6 +569,12 @@ Configuration is split across Spring profiles:
 - `application-prod.properties` — production overrides.
 - `application.properties.dist` — a template to copy from for local/untracked overrides.
 
+> **CORS**: `app.cors.allowedOrigins` is a comma separated list of the origins a browser may call the
+> API from. Empty (the default in code) means none - right when the frontend is served from the same
+> origin or through a dev proxy that keeps the Host. `application.properties.dist` carries the
+> development values `http://localhost:5173` and `http://localhost:3000`; `CORS_ALLOWED_ORIGINS` in the
+> environment wins. A wildcard is refused at startup (the session is a cookie).
+>
 > The three live `application*.properties` files are **git-ignored**: they hold the datasource
 > credentials and `app.jwtSecret`. Start from `application.properties.dist` - it carries a working
 > default for every placeholder the code requires without one (`app.jwtSecret`,
@@ -836,7 +843,8 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge`, `/reject`, `/complete` and `/cancel` ADMIN and MANAGER only, `GET /{orderNo}` additionally WAREHOUSE |
+| | `GET /me` — who is logged in, **every** role (`UserDto`, role names as the enum: `WAREHOUSE`, ...). Works with the `HttpOnly` session cookie alone, which is what a browser has after a reload | any authenticated role |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change)*, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, CUSTOMER; `/new`, `/acknowledge`, `/reject`, `/complete` and `/cancel` ADMIN and MANAGER only, `GET /{orderNo}` and `GET /history/{orderNo}` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
@@ -846,17 +854,19 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
 | Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}`, `GET /shipments/packages` *(paged, the `PACKED` packages in no shipment yet)* | ADMIN, LOGISTICS |
-| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/intransit`, `POST /shipments/{id}/trackingnumber` (body `{"trackingNumber": "..."}`), `POST /shipments/{id}/delivered` — `OutboundController` | ADMIN, DISTRIBUTOR |
+| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/intransit`, `PATCH /shipments/{id}/trackingnumber` (body `{"trackingNumber": "..."}`), `POST /shipments/{id}/delivered` — `OutboundController` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
 | | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` | ADMIN, MANAGER, WAREHOUSE |
 | | `POST /components/request/{supplierId}` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU**, `qty` at most 1,000,000 | ADMIN, MANAGER, WAREHOUSE |
+| | `GET /components/suppliers` *(paged, default sort `lastName`; `sort` one of `id`, `firstName`, `lastName`, else 400)* — whom a request can be placed with: **id and name only**, active suppliers only. The warehouse may order but may not read `/users` | ADMIN, MANAGER, WAREHOUSE |
 | | `GET /components/requests` *(paged, optional `status`, oldest first)* — the warehouse's work list; `?status=DELIVERED` is the pile waiting at the dock | ADMIN, WAREHOUSE |
 | | `GET /supplier/my-requests` — the supplier's own requests, filtered by `supplier_id`; `qty` is the ordered quantity, `component.qty` the bill-of-materials one | ADMIN, SUPPLIER |
 | | `POST /supplier/{requestId}/approve`, `.../intransit`, `.../delivered` — the supplier answers: `OPEN → APPROVED → IN_TRANSIT → DELIVERED`, only on their own requests; `InboundController` | ADMIN, SUPPLIER |
 | | `.../reject` — `OPEN → REJECTED` (declined before anything was promised), `.../cancel` — `APPROVED`/`IN_TRANSIT` → `CANCELLED` (never from `DELIVERED`, that would be a return); `InboundController` | ADMIN, SUPPLIER |
 | | `POST /components/warehouse/{requestId}/in-stock/{storehouseId}` — the goods receipt: `DELIVERED → IN_STOCK` and the quantity added to that SKU's stock in that storehouse | ADMIN, WAREHOUSE |
+| Storehouses | `GET /storehouses` *(paged, default sort `name`, `?size=100` for a dropdown; `sort` one of `id`, `name`, `city`, `country`, else 400)* — the ids that the goods receipt and `POST /stock/add` take | ADMIN, WAREHOUSE |
 | Stock | `POST /stock/add` (`{"sku": ..., "storehouseId": ..., "qty": ...}`), `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* — all answer `StockResponse`, never the entity | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
 
@@ -947,7 +957,8 @@ part of them.
 | `InventoryReservationTransactionServiceTest` | the idempotency guard per order line; that `consume` returns only what it consumed |
 | `OrderHandlingTransactionServicePickTest` | that `pick` aborts when nothing was consumed and does not write the reservation itself |
 | `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, the customer's `dueDate` |
-| `OrderServiceAccessTest` | that a customer reaches only their own order and a privileged caller reaches any |
+| `OrderServiceAccessTest`, `RoleServiceCanReadAnyOrderTest`, `OrderReadAccessTest` | that a customer reaches only their own order and ADMIN, MANAGER, WAREHOUSE and LOGISTICS reach any - the last one against a real order, because the first two cannot see a role the service refuses after `@PreAuthorize` let it through |
+| `OrderHistoryServiceImplTest`, `OrderHistoryEndpointTest`, `DisplayNamesTest` | the history as a timeline, who may read it, and that a customer is not told which employee made a change |
 | `OrderServiceLineQuantityTest` | the line limit after merging repeated articles |
 | `PackingServiceCreatePackageTest` | packages, loose items and custom packages: splitting a line, the over-packing guard, skipping, quantities before status, folding one line per run, the 400/404 answers |
 | `PackingServicePackageContentsTest` | adding, replacing and removing items, package data, completing a package, the weight following the contents |
@@ -1005,8 +1016,6 @@ all.
   has neither `RETURNED` nor `DELIVERY_FAILED`), and cancelling is only possible up to `ACCEPTED`.
 - **No history for shipments** the way `OrderHistory` records orders: who cancelled a shipment and
   why is only the free text in `comment`.
-- `trackingNumber` is set through `POST /shipments/{id}/trackingnumber` but nothing reads it: no
-  list or response carries it, so it can be recorded and not found again.
 - **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
   roles from the request as they are — a manager can grant themselves or others `ADMIN`. An update
   without `isActive` also re-activates a disabled user.

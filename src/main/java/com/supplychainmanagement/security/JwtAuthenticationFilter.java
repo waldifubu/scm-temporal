@@ -11,12 +11,14 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextHolderStrategy;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
@@ -43,6 +45,32 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
     @Value("${app.cookie.name}")
     private String cookieName;
+
+    /**
+     * Where the authentication is written - the strategy of <strong>this application context</strong>,
+     * which is the one the authorization filters of the same context read from.
+     * <p>
+     * It used to be the static {@code SecurityContextHolder.getContext()}, and that is a JVM-wide
+     * variable. The Vaadin integration installs a {@code VaadinAwareSecurityContextHolderStrategy}
+     * into it <em>per context</em>, so a second Spring context started in the same JVM replaces it:
+     * this filter then wrote into the new holder while the first context's {@code AuthorizationFilter}
+     * kept reading from its own - two different stores, and a valid token ended as an unauthenticated
+     * 401 with an empty body. Measured, not assumed: two test classes sharing one context passed or
+     * failed depending on whether a third class had started another one in between.
+     * <p>
+     * Production runs one context and never saw it. It still is the wrong way round: Spring Security
+     * has recommended a {@code SecurityContextHolderStrategy} bean over the static holder since 5.8,
+     * and takes it for all of its own filters through {@code setSecurityContextHolderStrategy}.
+     * <p>
+     * Without such a bean the default is the static holder, as before.
+     */
+    private SecurityContextHolderStrategy securityContextHolderStrategy =
+            SecurityContextHolder.getContextHolderStrategy();
+
+    @Autowired(required = false)
+    public void setSecurityContextHolderStrategy(SecurityContextHolderStrategy securityContextHolderStrategy) {
+        this.securityContextHolderStrategy = securityContextHolderStrategy;
+    }
 
     public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider, UserDetailsService userDetailsService,
                                    @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
@@ -103,7 +131,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         } catch (Exception ex) {
             // A servlet filter runs before the DispatcherServlet, so throwing here would
             // bypass the GlobalExceptionHandler — delegate to it explicitly instead.
-            SecurityContextHolder.clearContext();
+            securityContextHolderStrategy.clearContext();
             handlerExceptionResolver.resolveException(request, response, null, ex);
             return;
         }
@@ -122,7 +150,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             username = jwtTokenProvider.getUsername(token); // parses and verifies the token, throws on expired/invalid
         } catch (ExpiredJwtException ex) {
             logger.warn(ex.getMessage());
-            throw new APIException(HttpStatus.GONE, "JWT token expired: "+ex.getMessage());
+            // 401, not 410. Every other way a token can fail is a 401 here, and a client has exactly one
+            // rule for it - log in again. 410 means "this resource used to exist and is gone for good",
+            // which a session is not; a client following the rule would treat an expired session as a
+            // different kind of error from an invalid one, though the remedy is identical.
+            throw new APIException(HttpStatus.UNAUTHORIZED, "JWT token expired: "+ex.getMessage());
         } catch (IllegalArgumentException ex) {
             logger.warn(ex.getMessage());
             throw new BadCredentialsException("Invalid JWT token", ex);
@@ -131,7 +163,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             throw new APIException(HttpStatus.UNAUTHORIZED, "Signature Error");
         } catch (MalformedJwtException ex) {
             logger.warn(ex.getMessage());
-            throw new APIException(HttpStatus.BAD_REQUEST, "Invalid JWT token");
+            // 401 like the other token failures. It was the one 400 among them: a token that cannot be
+            // parsed is not a malformed request, it is credentials that do not authenticate.
+            throw new APIException(HttpStatus.UNAUTHORIZED, "Invalid JWT token");
         } catch (UnsupportedJwtException ex) {
             logger.warn(ex.getMessage());
             throw new APIException(HttpStatus.UNAUTHORIZED, "Unsupported JWT token");
@@ -149,7 +183,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // Set the authentication details
         authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
 
-        SecurityContextHolder.getContext().setAuthentication(authenticationToken); // Set the auth
+        securityContextHolderStrategy.getContext().setAuthentication(authenticationToken); // Set the auth
     }
 
     public String getTokenFromCookie(HttpServletRequest request) {

@@ -8,6 +8,8 @@ import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.event.OrderCreatedEvent;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.dto.order.OrderHistoryResponse;
+import com.supplychainmanagement.service.OrderHistoryService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.UserService;
 import lombok.AllArgsConstructor;
@@ -22,12 +24,14 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 
 @RestController
 @RequestMapping({"/api/{version}/orders"})
 @AllArgsConstructor
 public class OrderController {
     private final OrderService orderService;
+    private final OrderHistoryService orderHistoryService;
     private final UserService userService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -132,6 +136,21 @@ public class OrderController {
     }
 
 
+    /**
+     * The history of one order: every status it went through, newest first, one row each with the
+     * status it came from, the one it went to and when.
+     * <p>
+     * The same roles and the same access rule as {@code GET /orders/{orderNo}} - a customer reads the
+     * history of their own order only (403 otherwise), and the order number is what identifies it, as
+     * everywhere else in this controller. Staff also see who made each change; a customer does not,
+     * see {@link OrderHistoryResponse}.
+     */
+    @GetMapping(path = "/history/{orderNo}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER','LOGISTICS')")
+    public List<OrderHistoryResponse> getOrderHistory(@PathVariable Long orderNo,
+                                                      @AuthenticationPrincipal User authUser) {
+        return orderHistoryService.findHistory(orderNo, authUser);
+    }
 
     @PostMapping(path = "/", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
