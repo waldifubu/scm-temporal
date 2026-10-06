@@ -3,12 +3,11 @@ package com.supplychainmanagement;
 import com.vaadin.flow.component.dependency.StyleSheet;
 import com.vaadin.flow.component.page.AppShellConfigurator;
 import com.vaadin.flow.server.AppShellSettings;
-import com.vaadin.flow.theme.aura.Aura;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@StyleSheet("styles.css")
+@StyleSheet("css/styles.css")
 public class Application implements AppShellConfigurator {
 
     static void main(String[] args) {
