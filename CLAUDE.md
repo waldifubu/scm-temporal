@@ -182,6 +182,35 @@ else (`ApiVersionDefaultFilter`).
 also holds the `HttpOnly`-cookie case, that the filter really reads a token on `/me`, and that login and
 logout stayed public.
 
+**The API describes itself in OpenAPI** (springdoc 3.1.1, `OpenApiConfig`): `/v3/api-docs` and, to try it
+from, `/swagger-ui.html`. It is **off unless somebody turned it on** - springdoc is on by default, and what
+it serves is every endpoint with the roles that may call it, without a login (both paths sit outside
+`/api`, in the Thymeleaf chain, which has no JWT). `openapi-defaults.properties` sets both switches to
+false through `@PropertySource`, which ranks *below* `application.properties`, so a properties file that
+says nothing gets nothing; `application-dev.properties` switches them on, the template carries
+`springdoc.api-docs.enabled=${OPENAPI_ENABLED:false}`. `OpenApiDisabledTest` holds the default.
+<br>**springdoc reads the controllers faithfully, and that is not what a client needs**, so two customizers
+correct it (each rule has a unit test and a mutation that turns it red):
+- `ApiDocumentCustomizer`: `{version}` becomes the literal default version (`/api/1.0/...` - the
+  placeholder was an undeclared path variable, which generators reject), the unversioned alias
+  `/api/auth/*` is dropped where its versioned twin is described, paths are sorted, `*/*` becomes
+  `application/json`, and every operation gets the answers no controller declares: 401 (not for the
+  public `/auth/*`), 403 (only where roles are demanded), 429, and a `default` that is `ErrorDetails` or
+  `ValidationErrors` (the field-to-message map of a failed bean validation). 401 and 403 declare **no
+  body**, because the entry point answers some of them with `sendError`. Register, login and logout carry
+  an *empty* security requirement - absent would inherit the global one.
+- `ApiOperationCustomizer`: **a method mapped for another version is left out** (returning `null` removes
+  the operation) - `POST /auth/login` in 1.0 and 2.0 had merged into one operation made of mixed halves;
+  and `@PreAuthorize` is read into `x-roles` and the description, which is how a client builds its menu.
+  "Any logged-in user" is the *absence* of `x-roles`, not an empty list.
+<br>The description is of **one** version, `spring.mvc.apiversion.default`. Authentication is the session
+cookie (`cookieAuth`, name from `app.cookie.name`) or the same token as a bearer header.
+<br>**It is also an audit.** `OpenApiDocumentTest.everyOperationBehindALoginNamesItsRolesExceptTheKnownOnes`
+lists every operation behind a login that names no role. Two: `GET /me` (meant for anyone) and
+`GET /components/{id}` - no annotation, no `version`, and **unreachable**: the versioned `/{sku}` beside
+it wins every request and answers 400 for a numeric id (measured as a customer under 1.0, 1.1, 2.0 and
+9.9). Dead, not open. The list is exact, so a new unguarded endpoint turns the test red.
+
 Auth for the API is JWT-based: `JwtAuthenticationFilter` + `JwtTokenProvider` +
 `JwtAuthenticationEntryPoint` (`security/`). Roles are `RoleEnum` (`CUSTOMER`, `MANAGER`,
 `SUPPLIER`, `WAREHOUSE`, `LOGISTICS`, `DISTRIBUTOR`, `ADMIN`); controllers authorize with

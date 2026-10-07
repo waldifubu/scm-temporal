@@ -10,7 +10,7 @@ public enum PricingPlan {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
-                    .capacity(2)
+                    .capacity(30)
                     .refillGreedy(20, Duration.ofMinutes(2))
                     .build();
         }

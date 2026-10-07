@@ -94,12 +94,13 @@ public class ComponentController {
                 status, PageRequest.of(page, size, Sort.by(direction, sort))));
     }
 
-
+/*
     @GetMapping("/{id}")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
     public ComponentResponseDto getComponent(@PathVariable Long id) {
         return componentMapper.mapToDto(componentService.findById(id));
     }
-
+*/
 
     @GetMapping(path = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
