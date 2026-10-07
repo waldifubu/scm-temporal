@@ -12,7 +12,7 @@ import org.jspecify.annotations.Nullable;
 
 class ComponentForm extends Composite<FormLayout> {
 
-    private Binder<Component> binder;
+    private final Binder<Component> binder;
 
     ComponentForm() {
         // Create components

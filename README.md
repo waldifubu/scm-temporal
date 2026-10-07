@@ -836,6 +836,14 @@ erDiagram
 
 ## REST API overview
 
+The API describes itself in **OpenAPI** (`/v3/api-docs`, and Swagger UI at `/swagger-ui.html` to try it
+from). It is **off unless switched on**: set `springdoc.api-docs.enabled=true` and
+`springdoc.swagger-ui.enabled=true` (the dev profile does; in the environment `OPENAPI_ENABLED=true` with
+the shipped template), because it lists every endpoint and the roles that may call it and is served
+without a login. It describes version `1.0` with literal paths (`/api/1.0/...`), the session cookie or a
+bearer token as security, the shared error answers, and for every operation the roles it demands as
+`x-roles`. A TypeScript client can be generated from it, e.g. `openapi-typescript http://localhost:8080/v3/api-docs`.
+
 All endpoints are under `/api/{version}/...` (version can be omitted; see
 [versioning](#native-spring-mvc-api-versioning)). Authorization is enforced with
 `@PreAuthorize("hasAnyAuthority(...)")` using `RoleEnum` values.
@@ -959,6 +967,7 @@ part of them.
 | `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, the customer's `dueDate` |
 | `OrderServiceAccessTest`, `RoleServiceCanReadAnyOrderTest`, `OrderReadAccessTest` | that a customer reaches only their own order and ADMIN, MANAGER, WAREHOUSE and LOGISTICS reach any - the last one against a real order, because the first two cannot see a role the service refuses after `@PreAuthorize` let it through |
 | `OrderHistoryServiceImplTest`, `OrderHistoryEndpointTest`, `DisplayNamesTest` | the history as a timeline, who may read it, and that a customer is not told which employee made a change |
+| `OpenApiDocumentTest`, `OpenApiDisabledTest`, `ApiDocumentCustomizerTest`, `ApiOperationCustomizerTest` | the OpenAPI description from the real application (literal versioned paths, one operation per path, roles as `x-roles`, error answers, public `/auth`, every `$ref` resolved), that it is off by default, and each customizer rule on its own |
 | `OrderServiceLineQuantityTest` | the line limit after merging repeated articles |
 | `PackingServiceCreatePackageTest` | packages, loose items and custom packages: splitting a line, the over-packing guard, skipping, quantities before status, folding one line per run, the 400/404 answers |
 | `PackingServicePackageContentsTest` | adding, replacing and removing items, package data, completing a package, the weight following the contents |

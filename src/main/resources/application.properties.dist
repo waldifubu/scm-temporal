@@ -56,3 +56,10 @@ app.jwtExpirationMs=1800000
 app.cors.allowedOrigins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 app.cookie.name=scmcookie
 app.cookie.secure=false
+
+# OpenAPI description of the REST API (/v3/api-docs) and Swagger UI (/swagger-ui.html).
+# Off unless switched on (openapi-defaults.properties): it lists every endpoint and the roles that may
+# call it, and is served without a login. Switch both on for development - leave them off where the
+# application is reachable by people who are not developers. OPENAPI_ENABLED in the environment wins.
+springdoc.api-docs.enabled=${OPENAPI_ENABLED:false}
+springdoc.swagger-ui.enabled=${OPENAPI_ENABLED:false}

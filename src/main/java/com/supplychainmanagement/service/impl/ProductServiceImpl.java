@@ -167,7 +167,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     @Transactional
     public Product update(Long id, ProductRequestDto request) {
-        Product existingProduct = productRepository.findWithComponentsById(id)
+        Product existingProduct = productRepository.findByArticleNo(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
 
         long newArticleNo = request.articleNo();
