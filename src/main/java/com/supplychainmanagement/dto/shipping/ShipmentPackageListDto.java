@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
@@ -9,6 +10,7 @@ import com.supplychainmanagement.model.enums.ShipmentPackageType;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Objects;
 
@@ -17,8 +19,25 @@ public record ShipmentPackageListDto(
         String packageNumber,
         ShipmentPackageStatus status,
         ShipmentPackageType type,
+        /*
+         * When the package was made, and when it was completed (OPEN to PACKED) - null until then, and
+         * null for a package completed before the column existed. The same pattern as the items in the
+         * same row, so one document does not format its timestamps two ways.
+         */
+        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+        LocalDateTime createdAt,
+        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
+        LocalDateTime packedAt,
         BigDecimal weight,
         BigDecimal packageWeight,
+        /*
+         * The dimensions as the package has them, in the order they are written down and sent
+         * (length, width, height). Null where none were given - a new package fills them with 0 on
+         * insert, so null is only an older row. volume is worked out from them.
+         */
+        BigDecimal length,
+        BigDecimal width,
+        BigDecimal height,
         BigDecimal volume,
         LocalDate dueDate,
         int packages,
@@ -36,8 +55,13 @@ public record ShipmentPackageListDto(
                 shipmentPackage.getPackageNumber(),
                 shipmentPackage.getShipmentPackageStatus(),
                 shipmentPackage.getShipmentPackageType(),
+                shipmentPackage.getCreatedAt(),
+                shipmentPackage.getPackedAt(),
                 shipmentPackage.getWeight(),
                 shipmentPackage.getPackageWeight(),
+                shipmentPackage.getLength(),
+                shipmentPackage.getWidth(),
+                shipmentPackage.getHeight(),
                 shipmentPackage.getVolume(),
                 resolveDueDate(shipmentPackage.getItems()),
                 shipmentPackage.getItems().size(),

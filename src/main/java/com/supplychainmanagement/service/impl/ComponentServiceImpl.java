@@ -20,7 +20,6 @@ import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RoleService;
-import com.supplychainmanagement.service.impl.StockService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
@@ -73,6 +72,15 @@ public class ComponentServiceImpl implements ComponentService {
         // shape as the distributor check when a shipment is handed over.
         if (!(Hibernate.unproxy(user) instanceof Supplier supplier)) {
             throw new APIException(HttpStatus.BAD_REQUEST, "User " + supplierId + " is not a supplier");
+        }
+
+        // A disabled account cannot log in, so it could never approve, send or deliver: a request placed
+        // with it would sit in OPEN for good. The supplier list already hides such accounts; this is the
+        // same rule at the one place that writes, for an id that was kept from before it was disabled.
+        // 409 and not 400: the request is well formed, it is the supplier's state that refuses it.
+        if (!Boolean.TRUE.equals(supplier.getIsActive())) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Supplier " + supplierId + " is deactivated and cannot take a request");
         }
 
         List<RequestComponentsRequest.Item> items = request.items();

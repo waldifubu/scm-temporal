@@ -59,7 +59,9 @@ class PackageControllerTest {
                 .build();
 
         ShipmentPackageListDto row = new ShipmentPackageListDto(5L, "PKG-1", ShipmentPackageStatus.PACKED,
-                ShipmentPackageType.CARTON, BigDecimal.ONE, new BigDecimal("1.5"), BigDecimal.ZERO, null, 2, List.of());
+                ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
+                java.time.LocalDateTime.of(2026, 10, 8, 14, 5, 0), BigDecimal.ONE, new BigDecimal("1.5"),
+                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, 2, List.of());
         when(packageQueryService.findShipmentPackages(any(), any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(row), call.<Pageable>getArgument(2), 37));
     }
@@ -76,6 +78,11 @@ class PackageControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].id").value(5))
                 .andExpect(jsonPath("$.content[0].status").value("PACKED"))
+                .andExpect(jsonPath("$.content[0].createdAt").value("2026-10-07 09:15:30"))
+                .andExpect(jsonPath("$.content[0].packedAt").value("2026-10-08 14:05:00"))
+                .andExpect(jsonPath("$.content[0].length").value(40))
+                .andExpect(jsonPath("$.content[0].width").value(30))
+                .andExpect(jsonPath("$.content[0].height").value(20))
                 .andExpect(jsonPath("$.total").value(37))
                 .andExpect(jsonPath("$.page").value(1))
                 .andExpect(jsonPath("$.size").value(10));
@@ -157,13 +164,20 @@ class PackageControllerTest {
     @Test
     void showsOneShipmentPackageWithItsItems() throws Exception {
         when(packageQueryService.findShipmentPackage(5L)).thenReturn(new ShipmentPackageListDto(5L, "PKG-1",
-                ShipmentPackageStatus.OPEN, ShipmentPackageType.CARTON, BigDecimal.ONE, new BigDecimal("1.5"),
-                BigDecimal.ZERO, null, 1, List.of()));
+                ShipmentPackageStatus.OPEN, ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
+                null, BigDecimal.ONE, new BigDecimal("1.5"),
+                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, 1, List.of()));
 
         mockMvc.perform(get("/api/1.0/shipment-packages/5"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(5))
                 .andExpect(jsonPath("$.packageNumber").value("PKG-1"))
+                .andExpect(jsonPath("$.createdAt").value("2026-10-07 09:15:30"))
+                // Still OPEN: made, not packed - the key is there and says so.
+                .andExpect(jsonPath("$.packedAt").value(nullValue()))
+                .andExpect(jsonPath("$.length").value(40))
+                .andExpect(jsonPath("$.width").value(30))
+                .andExpect(jsonPath("$.height").value(20))
                 .andExpect(jsonPath("$.items").isArray());
     }
 

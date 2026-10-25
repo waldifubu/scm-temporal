@@ -6,15 +6,14 @@ import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.service.PackageQueryService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import java.util.Set;
 
 /**
  * Reading packages and package items - the lists and single entries. Changing them is
@@ -43,7 +42,7 @@ public class PackageController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findPackageItems(pageRequest(page, size, sort, order)));
+        return PageResponse.of(packageQueryService.findPackageItems(pageRequest(page, size, sort, order, PACKAGE_ITEM_SORTABLE)));
     }
 
     /**
@@ -64,7 +63,7 @@ public class PackageController {
             @RequestParam(defaultValue = "OPEN") ShipmentPackageStatus status,
             @RequestParam(defaultValue = "") String packageNumber,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findShipmentPackages(status, packageNumber, pageRequest(page, size, sort, order)));
+        return PageResponse.of(packageQueryService.findShipmentPackages(status, packageNumber, pageRequest(page, size, sort, order, SHIPMENT_PACKAGE_SORTABLE)));
     }
 
     /**
@@ -78,7 +77,7 @@ public class PackageController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findLoosePackageItems(pageRequest(page, size, sort, order)));
+        return PageResponse.of(packageQueryService.findLoosePackageItems(pageRequest(page, size, sort, order, PACKAGE_ITEM_SORTABLE)));
     }
 
     /** One package item, in the same shape as the /packages list. Unknown id: 404. */
@@ -95,8 +94,18 @@ public class PackageController {
         return packageQueryService.findShipmentPackage(shipmentPackageId);
     }
 
-    private static Pageable pageRequest(int page, int size, String sort, String order) {
-        Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        return PageRequest.of(page, size, Sort.by(direction, sort));
+    /**
+     * What {@code sort} may name on the two package item lists: the columns of the item itself. Anything
+     * else is a 400 naming these - it used to be a 500 for what is a typo in a query string. Package
+     * private, so a test can walk every entry against the real query.
+     */
+    static final Set<String> PACKAGE_ITEM_SORTABLE = Set.of("id", "runNo", "quantity", "created");
+
+    /** The same for the package list: the package's own columns, under the entity's names. */
+    static final Set<String> SHIPMENT_PACKAGE_SORTABLE = Set.of("id", "packageNumber", "createdAt", "packedAt",
+            "weight", "length", "width", "height", "shipmentPackageStatus", "shipmentPackageType");
+
+    private static Pageable pageRequest(int page, int size, String sort, String order, Set<String> sortable) {
+        return PageRequests.of(page, size, sort, order, sortable);
     }
 }

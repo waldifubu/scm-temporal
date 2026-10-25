@@ -5,6 +5,7 @@ import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.ProductCategory;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.repository.ProductCategoryRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import org.junit.jupiter.api.Test;
@@ -82,6 +83,8 @@ class ProductServiceRequestDtoTest {
         }
         product.setComponents(components);
 
+        // update() takes the ARTICLE number and finds the product by it; the id is only read back after the save.
+        when(productRepository.findByArticleNo(ARTICLE_NO)).thenReturn(Optional.of(product));
         when(productRepository.findWithComponentsById(PRODUCT_ID)).thenReturn(Optional.of(product));
         when(productRepository.save(any(Product.class))).thenAnswer(call -> call.getArgument(0));
         return product;
@@ -143,12 +146,48 @@ class ProductServiceRequestDtoTest {
 
     // ------------------------------------------------------------------ updating
 
+    /** The number in the path is the article number, not the id: the product has id 7 and article number 900. */
+    @Test
+    void findsTheProductToUpdateByItsArticleNumber() {
+        Product product = existingWith(null);
+
+        Product updated = service.update(ARTICLE_NO, request());
+
+        assertThat(updated).isSameAs(product);
+        verify(productRepository).findByArticleNo(ARTICLE_NO);
+        verify(productRepository, never()).findById(any());
+    }
+
+    /** An id is no article number: asking with the product's id finds nothing, whatever it is called elsewhere. */
+    @Test
+    void doesNotTakeTheIdForAnArticleNumber() {
+        existingWith(null);
+
+        Throwable thrown = catchThrowable(() -> service.update(PRODUCT_ID, request()));
+
+        assertThat(thrown).isInstanceOf(ResourceNotFoundException.class);
+        verify(productRepository, never()).save(any());
+    }
+
+    /** Renaming a product to an article number another one has is a 409, and nothing is written. */
+    @Test
+    void refusesChangingTheArticleNumberToOneInUse() {
+        existingWith(null);
+        when(productRepository.existsByArticleNo(901L)).thenReturn(true);
+        ProductRequestDto renumbered = new ProductRequestDto(901L, "Regal", "ein Regal", BigDecimal.TEN,
+                BigDecimal.ONE, null, null, null, null);
+
+        assertStatus(catchThrowable(() -> service.update(ARTICLE_NO, renumbered)), HttpStatus.CONFLICT);
+
+        verify(productRepository, never()).save(any());
+    }
+
     /** An id that is one of the product's own lines changes that line instead of adding one. */
     @Test
     void updatesTheProductsOwnComponentLine() {
         Product product = existingWith(11L);
 
-        service.update(PRODUCT_ID, request(line(11L, "Blech verzinkt")));
+        service.update(ARTICLE_NO, request(line(11L, "Blech verzinkt")));
 
         assertThat(product.getComponents()).singleElement().satisfies(component -> {
             assertThat(component.getId()).isEqualTo(11L);
@@ -164,7 +203,7 @@ class ProductServiceRequestDtoTest {
     void refusesAComponentOfAnotherProduct() {
         Product product = existingWith(11L);
 
-        assertStatus(catchThrowable(() -> service.update(PRODUCT_ID, request(line(99L, "geklaut")))),
+        assertStatus(catchThrowable(() -> service.update(ARTICLE_NO, request(line(99L, "geklaut")))),
                 HttpStatus.BAD_REQUEST);
 
         assertThat(product.getComponents()).singleElement()
@@ -177,7 +216,7 @@ class ProductServiceRequestDtoTest {
     void addsALineWithoutAnId() {
         Product product = existingWith(11L);
 
-        service.update(PRODUCT_ID, request(line(11L, "Blech"), line(null, "Schraube")));
+        service.update(ARTICLE_NO, request(line(11L, "Blech"), line(null, "Schraube")));
 
         assertThat(product.getComponents()).hasSize(2)
                 .allSatisfy(component -> assertThat(component.getProduct()).isSameAs(product));
@@ -188,7 +227,7 @@ class ProductServiceRequestDtoTest {
     void leavesTheComponentsAloneWhenNoneAreSent() {
         Product product = existingWith(11L);
 
-        service.update(PRODUCT_ID, request());
+        service.update(ARTICLE_NO, request());
 
         assertThat(product.getComponents()).singleElement()
                 .satisfies(component -> assertThat(component.getName()).isEqualTo("Blech"));
@@ -204,7 +243,7 @@ class ProductServiceRequestDtoTest {
         Product product = existingWith(11L);
         product.getComponents().getFirst().setQty(1);
 
-        service.update(PRODUCT_ID, request(line(11L, "Blech")));
+        service.update(ARTICLE_NO, request(line(11L, "Blech")));
 
         assertThat(product.getComponents()).singleElement()
                 .satisfies(component -> assertThat(component.getQty()).isEqualTo(4));
@@ -220,7 +259,7 @@ class ProductServiceRequestDtoTest {
         category.setId(3L);
         when(productCategoryRepository.findAllById(Set.of(3L))).thenReturn(List.of(category));
 
-        service.update(PRODUCT_ID, new ProductRequestDto(ARTICLE_NO, "Regal", null, null, null,
+        service.update(ARTICLE_NO, new ProductRequestDto(ARTICLE_NO, "Regal", null, null, null,
                 null, null, Set.of(3L), null));
 
         assertThat(product.getCategories()).containsExactly(category);
@@ -232,7 +271,7 @@ class ProductServiceRequestDtoTest {
         existingWith(null);
         when(productCategoryRepository.findAllById(Set.of(3L))).thenReturn(List.of());
 
-        Throwable thrown = catchThrowable(() -> service.update(PRODUCT_ID,
+        Throwable thrown = catchThrowable(() -> service.update(ARTICLE_NO,
                 new ProductRequestDto(ARTICLE_NO, "Regal", null, null, null, null, null,
                         Set.of(3L), null)));
 

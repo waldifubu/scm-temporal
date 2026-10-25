@@ -77,7 +77,9 @@ class ShipmentControllerTest {
         when(shipmentService.findShipments(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(1), 0));
         ShipmentPackageListDto shippable = new ShipmentPackageListDto(7L, "PKG-7", ShipmentPackageStatus.PACKED,
-                ShipmentPackageType.CARTON, BigDecimal.ONE, BigDecimal.TEN, BigDecimal.ONE,
+                ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
+                java.time.LocalDateTime.of(2026, 10, 8, 14, 5, 0), BigDecimal.ONE, BigDecimal.TEN,
+                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ONE,
                 LocalDate.of(2026, 10, 1), 1, List.of());
         when(shipmentService.findShippablePackages(any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(shippable), call.<Pageable>getArgument(0), 1));
@@ -179,7 +181,14 @@ class ShipmentControllerTest {
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.size").value(25))
                 .andExpect(jsonPath("$.content[0].id").value(7))
-                .andExpect(jsonPath("$.content[0].status").value("PACKED"));
+                .andExpect(jsonPath("$.content[0].status").value("PACKED"))
+                // What the planning side reads off a package it can still ship: made, then packed.
+                .andExpect(jsonPath("$.content[0].createdAt").value("2026-10-07 09:15:30"))
+                .andExpect(jsonPath("$.content[0].packedAt").value("2026-10-08 14:05:00"))
+                // The planning side sizes a shipment from these.
+                .andExpect(jsonPath("$.content[0].length").value(40))
+                .andExpect(jsonPath("$.content[0].width").value(30))
+                .andExpect(jsonPath("$.content[0].height").value(20));
 
         verify(shipmentService).findShippablePackages(argThat((Pageable pageable) ->
                 pageable.getPageNumber() == 0 && pageable.getPageSize() == 25

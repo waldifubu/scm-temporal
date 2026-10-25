@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project
 
 Supply Chain Management demo app: Spring Boot 4.1.0 (Java 25) backend with two parallel UIs —
-a Vaadin/React admin UI and a classic Thymeleaf server-rendered site — plus a JSON REST API.
+a Vaadin (plain Java) admin UI and a classic Thymeleaf server-rendered site — plus a JSON REST API.
 Database is MariaDB, accessed via Spring Data JPA/Hibernate.
 
 ## Commands
@@ -36,7 +36,8 @@ migration logic in `config/` exists because of this server's behaviour (inline c
 `innodb_snapshot_isolation`), and H2 would pass what MariaDB fails.
 
 **A context test creates the rows it needs** through `support/TestData` (`@Import(TestData.class)`):
-`customer()`, `supplier()`, `product()`, `component()`, `storehouse()`. They used to be taken from
+`customer()`, `supplier()`, `product()`, `component()`, `storehouse()`, and for the order side `userWithRoles(...)`,
+`order(...)`, `orderItem(...)`, `consumedReservation(...)`, `packedQuantity(...)` and `historyRow(...)`. They used to be taken from
 the database with `findAll().getFirst()`, which only worked against a populated development schema.
 Everything `TestData` makes is created inside the test's transaction and rolls back with it, so two
 runs see the same thing - unique columns (`users.email`, `users.username`, `products.article_no`,
@@ -206,10 +207,11 @@ correct it (each rule has a unit test and a mutation that turns it red):
 <br>The description is of **one** version, `spring.mvc.apiversion.default`. Authentication is the session
 cookie (`cookieAuth`, name from `app.cookie.name`) or the same token as a bearer header.
 <br>**It is also an audit.** `OpenApiDocumentTest.everyOperationBehindALoginNamesItsRolesExceptTheKnownOnes`
-lists every operation behind a login that names no role. Two: `GET /me` (meant for anyone) and
-`GET /components/{id}` - no annotation, no `version`, and **unreachable**: the versioned `/{sku}` beside
-it wins every request and answers 400 for a numeric id (measured as a customer under 1.0, 1.1, 2.0 and
-9.9). Dead, not open. The list is exact, so a new unguarded endpoint turns the test red.
+lists every operation behind a login that names no role: **one**, `GET /me` (meant for anyone). There used to
+be a second, `GET /components/{id}` - no annotation, no `version`, and **unreachable**: the versioned `/{sku}`
+beside it won every request and answered 400 for a numeric id (measured as a customer under 1.0, 1.1, 2.0 and
+9.9), so dead rather than open. It was commented out on 2026-10-07 and the list shrank by it. The list is
+exact, so a new unguarded endpoint turns the test red.
 
 Auth for the API is JWT-based: `JwtAuthenticationFilter` + `JwtTokenProvider` +
 `JwtAuthenticationEntryPoint` (`security/`). Roles are `RoleEnum` (`CUSTOMER`, `MANAGER`,
@@ -266,9 +268,10 @@ responsibilities — read all of them together before changing reservation/fulfi
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
   PACKING → PACKED → READY_FOR_DISPATCH`, plus `CANCELLED`), tracked per line item, and implemented end to end: the
   last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
-  `OrderHandlingService.readyForDispatch()`, which has had **no caller since 2026-09-22**: its
-  endpoint `POST /dispatch/{reservationId}` was commented out and then deleted outright in the same
-  day's clean-up, when `checkShipmentReady` took the step over.
+  `OrderHandlingService.readyForDispatch()`, which **no longer exists**: it had no caller after
+  2026-09-22 - its endpoint `POST /dispatch/{reservationId}` was commented out and then deleted outright in
+  the same day's clean-up, when `checkShipmentReady` took the step over - and the method itself went in the
+  clean-up of 2026-10-05.
   <br>It is not merely redundant but wrong in this model, for two reasons worth keeping. It looks the
   line up **through its reservation** (`findByIdAndStatus(id, CONSUMED)`) - the very row
   `tryToDelete()` exists to sweep away for `READY_FOR_DISPATCH` orders, so the method depends on
@@ -440,6 +443,47 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   goes through `ShipmentPackage.removeItem` (the item's package set to `null`); deleting it would
   drop the packed quantity while the line still reads `PACKING`/`PACKED`.
   `validateOrderItemPacking` is unused and kept on purpose - `completePackage` does not call it.
+- **What can be packed is listed, with what is left** (`GET /order-items/packable`, ADMIN, MANAGER and
+  WAREHOUSE - the manager only reads; `PackingService.findPackableItems`, `PackableItemDto`). Why it exists:
+  a picked line holds a `CONSUMED` reservation and is `PICKED`, and the only lists were `GET /order-items`
+  (one status per call, default `PICKED`) and `GET /picking-orders?status=CONSUMED` - neither says how much
+  of the line is **already packed**, which is what a `PackItem` has to name (`packLine` refuses more than
+  remains with a 400, never clips), and a half packed line is `PACKING`, a different status from the default.
+  So the view takes `PICKED` and `PACKING` together (`PACKABLE_STATUSES`) and answers `quantity`, `packed`,
+  `remaining` and the reservation behind the pick (id, storehouse, `pickedAt`).
+  <br>**`packed` is the sum over every `package_item` of the line**, in a package or loose - exactly what
+  `packLine` counts, as a scalar sub-select inside the projection, so a page is one query. `remaining` is
+  worked out in the DTO (`quantity - packed`) rather than selected, which would repeat the sub-select. There
+  is **no filter on the remaining quantity**: a line is `PICKED`/`PACKING` exactly while there is room, `packLine`
+  sets it `PACKED` the moment it is full. The reservation and the storehouse are **left** joins (a pick from
+  before the reservation was linked still has to be listed), and the count query leaves them out.
+  <br>`?orderNo=` narrows it to one order - a package holds the items of one order only. `sort` takes the
+  line's own columns (`id`, `updatedAt`, `quantity`, `fulfillmentStatus`) through `PageRequests.of`, anything
+  else a 400; the service adds the **id as the tie-break**, because lines picked together share their sort
+  value and a database may order ties differently on the next page.
+  <br>`GET /order-items` and `GET /picking-orders` are open to MANAGER as well now (read only; picking and
+  packing stay ADMIN/WAREHOUSE). `PackableItemsEndpointTest` holds it with real rows (picked, half packed 3+1,
+  fully packed, reserved, waiting, a pick without a reservation); ten mutations - a status dropped or added, the
+  filter ignored, the sum counted as rows, an inner join, no tie-break, a role added or removed - each turn it red.
+- **A package from items that exist** (`POST /packing/shipment/from-items`, ADMIN and WAREHOUSE - the
+  manager reads the packable list but does not write; `PackingService.createPackageFromItems`,
+  `CreatePackageFromItemsRequest`). Body `{shipmentPackageType, packageItems: [ids], packageNumber, length,
+  width, height}`; `packageItems` are **package item ids**, the loose items `POST /packing` leaves behind,
+  and **not** `CreatePackageRequest.items`, which are order lines packed *now* (`orderItemId` + `qty`).
+  A record of its own with its own key, so the two cannot be mistaken - and a shared one would have had
+  `POST /packing/{orderNo}` accept and silently ignore the other. `weight` is not a field: a key sent
+  anyway is ignored like any unknown property, the package computes it.
+  <br>It does in one transaction what `createCustomShipment` + `addPackageItems` do in two calls, **all or
+  nothing**: the items are locked (`findPackageItemsForUpdate`, ascending, 404 naming every missing id), then
+  the same three rules as for an existing package run **before anything is saved** - `requireLooseOrIn`
+  (409; the new package has no id, so whatever sits in a package sits in another one),
+  `requireOneOrder` (400) and `requireOneItemPerLineAndRun` (409) - and only then are the items attached and
+  the package saved. Two calls could leave an empty package behind when the second failed. The "twice" message
+  said `ShipmentPackage null` for a package that does not exist yet; it says "the new package" now.
+  A repeated id is the same item once (the lookup is a `TreeSet`). `PackableItemsEndpointTest` and
+  `PackageFromItemsEndpointTest` use the caller's JSON key for key; nine mutations - a rule dropped, the
+  package saved before the checks, items not attached, a role added or removed, validation off - each turn
+  it red.
 - **Changing what a package holds** (`PackingServiceImpl`): `addPackageItems`
   (`POST /packing/shipment/{id}/items`), `updateCustomShipment` (`PUT .../items`, replaces the
   contents; `[]` empties the package), `removePackageItem` (`DELETE .../items/{itemId}`) and
@@ -474,7 +518,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   (`DATA_CHANGEABLE_IN`, 409 from `IN_TRANSIT` on). Shipment first, then its packages in ascending id
   order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
   `@PrePersist`. `shippingAddress` is optional when creating (blank is stored as `null` and left out
-  of the JSON) but required for `GET /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
+  of the JSON) but required for `PUT /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
   also requires every package `PACKED`). A distributor is assigned with
   `PUT /shipments/{id}/distributor/{distributorId}` only while `READY` or `DISPATCH_REQUESTED`; the
   user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. Read
@@ -544,8 +588,8 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
 - **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN and MANAGER,
   `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. Checked on
   **quantities**, not on statuses: every line has to be covered by `PackageItem`s that travelled in
-  shipments reporting `DELIVERED` (`OrderItemRepository.findDeliveredQuantities`,
-  `OrderProgressService.undeliveredLines`). Counting lines would not do - a line may be packed in
+  shipments reporting `DELIVERED` (`OrderItemRepository.findShippedQuantities`, whose `DELIVERED` rows
+  `OrderProgressService.undeliveredLines` reads off). Counting lines would not do - a line may be packed in
   several runs and travel in several shipments, so 5 of 10 delivered is not a delivered line. Every
   join of that query is an inner one, so a line nothing has arrived for is **missing from the
   result**: coverage is counted from the order's own lines, never from the query alone. Four 409s:
@@ -655,10 +699,13 @@ reconciliation the latter.
 ### Scheduled routines
 
 `AutomaticReservationService` holds what runs without a request; `@EnableScheduling` comes from
-`AutomaticProductionService`. During development the `@Scheduled` annotations of all four routines
-are commented out; the intervals below are the ones they carry. Each works the first 100 orders of
-its status. `AutomaticProductionService.assemble()` on the other hand is active and runs `produce()`
-every 150 s.
+`AutomaticProductionService`. **`tryToReserve()`, `tryToRelease()` and `tryToDelete()` are active**
+(`@Scheduled`, every 150 s - a decision, not an oversight: the sweeps are meant to run); only
+`checkCreatedOrders()` is still commented out. The intervals below are the ones they carry. Each works the
+first 100 orders of its status. `AutomaticProductionService.assemble()` is active as well and runs
+`produce()` every 150 s. Note what that means for `tryToRelease()`: the first expired reservation of an order
+releases **all** of that order's active reservations (see its bullet) - the "Expiry-Sweep" finding in
+`issues.txt` is live, not a risk for when it is switched on.
 
 - `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and acknowledges the ones
   whose every line is coverable (`orderService.acknowledge(order, null)`). It writes.
@@ -681,7 +728,7 @@ every 150 s.
   works on `READY_FOR_DISPATCH` orders - so it never did anything, and had it fired it would have been
   wrong: the order follows the shipments its lines travel in, not a bookkeeping row. Reaching the
   order for that call, *after* the delete, was the `LazyInitializationException` the sweep died on.
-  The `systemUser` parameter went with it. The `@Scheduled` is still commented out.
+  The `systemUser` parameter went with it. The `@Scheduled` is active.
 
 There is no open-in-view session out here, so every order reaching these routines has to arrive with
 its `orderItems` already fetched, or it turns into a `LazyInitializationException`.
@@ -783,6 +830,17 @@ The package read side lives in `PackageQueryService` (`PackageController`): `GET
 list page is two queries - the page, then `findWithItemsByIdIn` with the items, lines, products and
 orders - because a collection fetch in a paged query makes Hibernate page in memory. An empty
 `packageNumber` must not reach the `...Containing` finder: `LIKE '%%'` never matches a `NULL` number.
+A package row (`ShipmentPackageListDto`) carries its **dimensions** - `length`, `width`, `height`, each under its own
+name and null where the package has none - next to `weight`, `packageWeight` and the `volume` computed from them; the same
+rows come back from `GET /shipment-packages`, `GET /shipment-packages/{id}`, `GET /shipments/packages` and inside
+`ShipmentResponse.packages`, so the planning side can size a shipment without a second call. The row also says **when**:
+`createdAt` (the package was made) and `packedAt` (it was completed, `OPEN` to `PACKED` - `null` until then, so the key is
+always there and a client reads "not packed yet" off the null), both as `yyyy-MM-dd HH:mm:ss` like the items in the same row
+(`ShipmentResponse`'s own timestamps are ISO; one package document formats its moments one way). Both columns existed
+already - `createdAt` is `@CreationTimestamp`, `packedAt` is stamped by `ShipmentPackage.complete()` - only the output
+was missing. Held by
+`ShipmentPackageListDtoTest` (three different numbers, so a swap shows), `PackageFromItemsEndpointTest` (what was sent
+is what the lists answer) and three mutations - swapped, misread, dropped.
 The items inside a package row are `ShipmentPackageItemDto` (no package id - the row is the package);
 everywhere else a package item is a `PackageItemResponse`. Its `siblings` are computed, not stored:
 build it through `PackageItemResponseAssembler`, which looks the ids up for all items of a response
@@ -823,12 +881,23 @@ this change would otherwise be unverified.
 
 ### Paged list endpoints
 
-New list endpoints take their parameters through **`PageRequests.of`** (package-private in
+Every paged list takes its parameters through **`PageRequests.of`** (package-private in
 `controller`): it refuses a `sort` that is not on a list the endpoint names, a negative `page` and a
 `size` below one, all as a **400** that says which parameter and what is allowed. Those three used to
 end as a 500 - nothing handles `PropertyReferenceException`, and `PageRequest.of` throws
-`IllegalArgumentException` - for what is a typo in a query string. `/storehouses` and
-`/components/suppliers` use it; the older lists still have the weakness.
+`IllegalArgumentException` - for what is a typo in a query string. The older lists used to have that
+weakness and have none now (14 endpoints are walked by `ListParametersTest`); each controller keeps its whitelist as a package-private constant
+(`OrderController.ORDER_SORTABLE`, `PackingController.ORDER_ITEM_SORTABLE`, `PickingController.PICKING_SORTABLE`,
+`ShipmentController.SHIPMENT_SORTABLE` - shared with `OutboundController` -, `PackageController.PACKAGE_ITEM_SORTABLE` /
+`SHIPMENT_PACKAGE_SORTABLE`, `UserController.USER_SORTABLE`, `StockController.STOCK_SORTABLE`,
+`ComponentController.REQUEST_SORTABLE`).
+<br>**A whitelist entry has to be something the query can resolve**: the entity's property name (`created`,
+not `createdAt`, on an order) or, on a projection, a column of the root alias. A `@Transient` field is not
+one - `Order.amountOfItems` was on the first draft of the order list and ended in a 500 for every sort by it.
+`ListParametersTest` therefore runs **every entry of every whitelist, ascending and descending**, against
+the real queries, not only the typo. `password` is deliberately not on the user list.
+<br>`GET /orders?status=` is text and parsed by hand (`OrderController.parseStatus`): an unknown status is a 400
+naming the valid ones, no longer the 500 of `valueOf`.
 
 Every list endpoint follows `OrderController.list`: request parameters `page` / `size` / `sort` /
 `order`, assembled into a `PageRequest`, answered with `PageResponse.of(page)` —
@@ -938,7 +1007,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   first by default (`sort=requestDate`) - a pile at the dock is worked off in the order it arrived.
   One query per page: `component` and `assignedBy` come along through an `@EntityGraph`, both to-one,
   so it stays paged in SQL; `supplier` is left out because only its id is read and a proxy answers
-  `getId()` unloaded. Plural next to the singular `POST /request/{supplierId}`, whose path is left as
+  `getId()` unloaded. Plural next to the singular `POST /components/request/{supplierId}`, whose path is left as
   clients know it.
 - **Who moved a request** is `RequestComponent.assignedBy` - a nullable `@ManyToOne User`, written by
   every step next to `updated`, which `@UpdateTimestamp` stamps itself. Not a history, one line of
@@ -1043,16 +1112,18 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   send or deliver, and a request placed with it would sit in `OPEN` for good. The repository is typed
   `Supplier`, so the `user_type` discriminator is added by Hibernate and cannot be forgotten; the name
   is the one `RequestComponentResponse` uses for the same person (first and last name, the login only
-  when there is neither). Paged, sorted by `lastName` by default. Note `POST /components/request/...`
-  does **not** itself refuse a disabled supplier - the list hides them, the endpoint does not check.
+  when there is neither). Paged, sorted by `lastName` by default. `POST /components/request/...` refuses a
+  disabled supplier too (409 `Supplier N is deactivated ...`, checked right after the "is a supplier" test and
+  before the components are looked up, nothing saved): the list hid them, but an id noted earlier still worked.
+  A missing flag counts as not active.
 - **Storehouses are listed, read-only** (`GET /storehouses`, ADMIN and WAREHOUSE,
   `StorehouseController`/`StorehouseService`, `StorehouseResponse`): two warehouse operations take a
   `storehouseId` - the goods receipt and `POST /stock/add` - and nothing said which ids exist, so a
   client had to be told them out of band. Paged like every list, sorted by `name` by default; a
   dropdown is `?size=100`. `sort` is checked against `id`, `name`, `city`, `country` and anything else
   is a **400** naming it: it is applied as a property path, and an unknown one ended in a
-  `PropertyReferenceException` that nothing handles - a 500 for a typo in a query parameter. (The other
-  list endpoints still have that weakness.) The entity's `stocks` collection is never read, so the list
+  `PropertyReferenceException` that nothing handles - a 500 for a typo in a query parameter. (Every other
+  list is checked the same way now, see "Paged list endpoints".) The entity's `stocks` collection is never read, so the list
   is one query; what a storehouse holds is `GET /stock/storehouse/{id}`. No create or change: they are
   set up with the system.
 - **Booking stock is `@Transactional` and reads `FOR UPDATE`** (`StockService.add`,
@@ -1067,4 +1138,21 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   says so, instead of a 500 at an outer commit; a retry would need its own transaction, which the
   receipt must not have.
 - `service/ratelimiting` — `RateLimitingFilter` + `PricingPlanService`, backed by `bucket4j`
-  (`PricingPlan` enum), gates request rate by plan.
+  (`PricingPlan` enum), gates request rate by plan. **Which bucket a request draws from**
+  (`PricingPlanService.resolveBucket(apiKey, username, remoteAddr)`), in this order: a key of a paid plan
+  (`BX001-`, `PX001-`, `NL001-...`) - its own bucket on that plan; otherwise a **logged-in user** - a bucket per user
+  name on `PricingPlan.USER` (capacity 120, 60 per minute); otherwise any other key - its own `FREE` bucket; otherwise the
+  remote address on `FREE` (capacity 30, 20 per 2 minutes), which is also what stands in front of the login.
+  The families are prefixed (`key:`, `user:`, `ip:`), so an `X-API-KEY: user:admin` cannot drain the admin's bucket.
+  <br>Why per user: the bucket was per address, so everyone behind one reverse proxy or office NAT shared 30 requests,
+  and a single page that fires a dozen calls used a third of it. The user comes from `request.getUserPrincipal()`:
+  the filter is registered at `LOWEST_PRECEDENCE`, after Spring Security, so a request Security refused (401) never
+  reaches it and is not counted - which is also why a probe of the limit has to be authenticated.
+  <br>**Behind a proxy the address is the proxy's** unless the container reads `X-Forwarded-For`
+  (`server.forward-headers-strategy=native` or `framework`, commented in `application.properties.dist`); it is not on
+  by default, because without a proxy in front the header is the caller's to forge.
+  <br>**Not closed, on purpose left as it was:** for a caller who is *not* logged in, any invented `X-API-KEY` is still a
+  `FREE` bucket of its own - so `POST /auth/login` can be tried far more often than 30 times by changing the header
+  each time. For a logged-in caller the invented key is ignored now (it falls into the user's bucket).
+  `RateLimitPerUserTest` (real chain) and `PricingPlanServiceTest` hold the order above; four mutations turn them red.
+  A test that makes more calls than 120 with one user hits the limit - `ListParametersTest` takes a user per list.

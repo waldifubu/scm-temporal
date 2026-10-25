@@ -124,6 +124,26 @@ class CustomQueryExecutionTest {
     }
 
     /**
+     * The packable projection: a sub-select inside the constructor arguments, three joins of which two
+     * are left joins, an {@code in} over an enum collection and an optional order filter - once without
+     * the filter, once with it, because {@code :orderNo is null} is the part that fails on a type
+     * Hibernate cannot infer. The count query repeats the inner joins and the filter.
+     */
+    @Test
+    void findPackableRunsWithAndWithoutAnOrderNumber() {
+        var all = orderItemRepository.findPackable(
+                java.util.List.of(FulfillmentStatus.PICKED, FulfillmentStatus.PACKING), null,
+                PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "updatedAt")));
+        var one = orderItemRepository.findPackable(
+                java.util.List.of(FulfillmentStatus.PICKED, FulfillmentStatus.PACKING), UNKNOWN_ID,
+                PageRequest.of(0, 5, Sort.by(Sort.Direction.DESC, "id")));
+
+        assertThat(all.getTotalElements()).isNotNegative();
+        assertThat(one).isEmpty();
+        assertThat(one.getTotalElements()).isZero();
+    }
+
+    /**
      * The projection: eleven constructor arguments across five joined entities, plus a count query
      * repeating the joins. Executed rather than just parsed, and sorted by a real field so the
      * Pageable's order clause is appended to the JPQL as well.

@@ -156,6 +156,16 @@ class ApiAuthorizationTest {
                 get("/api/1.0/users", RoleEnum.ADMIN, RoleEnum.MANAGER),
                 // The storehouses a client can name - what the goods receipt and stock booking take.
                 get("/api/1.0/storehouses", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
+                // The picked stage, as the warehouse packs from it and the manager watches it: the lists of
+                // consumed reservations and of picked lines (with what is left to pack). Reading only -
+                // picking and packing themselves stay with ADMIN and WAREHOUSE.
+                get("/api/1.0/picking-orders", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                get("/api/1.0/order-items", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                get("/api/1.0/order-items/packable", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                // Making a package from existing package items is packing, which the manager does not do -
+                // he reads the lists above, he does not write.
+                post("/api/1.0/packing/shipment/from-items", "{\"packageItems\": [987654321]}",
+                        RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // Open to every authenticated role: it is the user asking about themselves. All seven
                 // are named, so the "refuses every other role" half has nobody left to refuse.
                 get("/api/1.0/me", RoleEnum.values())
