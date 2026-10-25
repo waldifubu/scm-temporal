@@ -8,7 +8,9 @@ import com.supplychainmanagement.entity.users.*;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.RoleEnum;
+import com.supplychainmanagement.repository.DistributorRepository;
 import com.supplychainmanagement.repository.RoleRepository;
+import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +44,8 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final DistributorRepository distributorRepository;
+    private final SupplierRepository supplierRepository;
     private final PasswordEncoder passwordEncoder;
     private final UserMapper userMapper;
 
@@ -274,5 +278,27 @@ public class UserServiceImpl implements UserService {
     public UserDto findCurrentUser(String usernameOrEmail) {
         // The class is @Transactional(readOnly = true), so the lazy roles load inside the mapping.
         return userMapper.mapToDto(findByUsernameOrEmail(usernameOrEmail));
+    }
+
+    /**
+     * The carriers a shipment can be handed to, active accounts only: a disabled account cannot log in,
+     * so it could never accept, report in transit or deliver, and a shipment handed to it would sit in
+     * DISPATCH_REQUESTED for good. Typed on {@code Distributor}, so the {@code user_type} discriminator
+     * comes from Hibernate and cannot be forgotten - same arrangement as the supplier list.
+     */
+    @Override
+    public Page<User> findDistributors(Pageable pageable) {
+        return distributorRepository.findAllByIsActiveTrue(pageable).map(distributor -> (User) distributor);
+    }
+
+    /**
+     * Active suppliers only, for the same reason as the carriers: a disabled account cannot log in, so
+     * it could never approve, send or deliver, and a request placed with it would sit in OPEN for good.
+     * {@code ComponentServiceImpl.requestComponents} refuses such a supplier too; this list is what keeps
+     * a client from offering one.
+     */
+    @Override
+    public Page<User> findSuppliers(Pageable pageable) {
+        return supplierRepository.findAllByIsActiveTrue(pageable).map(supplier -> (User) supplier);
     }
 }

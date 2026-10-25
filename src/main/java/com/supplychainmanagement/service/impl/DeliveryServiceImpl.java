@@ -1,36 +1,33 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
+import com.supplychainmanagement.dto.outbound.RejectShipmentRequest;
 import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Distributor;
-import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
-import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
-import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.OrderProgressService;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
+import com.supplychainmanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -48,9 +45,15 @@ public class DeliveryServiceImpl implements DeliveryService {
     @Transactional(readOnly = true)
     public Page<DeliveryResponse> findShipmentsForDistributor(Long distributorId, ShipmentStatus status,
                                                               Pageable pageable) {
+        // Shipments created together share a status, a date, a carrier - and with ties the database may
+        // order the same rows differently on the next page: one shipment twice, another never. The id settles it.
+        Sort sort = pageable.getSort().getOrderFor("id") == null
+                ? pageable.getSort().and(Sort.by("id"))
+                : pageable.getSort();
+        Pageable ordered = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort);
         Page<Shipment> page = status == null
-                ? shipmentRepository.findAllWithCustomerByDistributorId(distributorId, pageable)
-                : shipmentRepository.findAllWithCustomerByDistributorIdAndStatus(distributorId, status, pageable);
+                ? shipmentRepository.findAllWithCustomerByDistributorId(distributorId, ordered)
+                : shipmentRepository.findAllWithCustomerByDistributorIdAndStatus(distributorId, status, ordered);
         if (page.isEmpty()) {
             return page.map(DeliveryResponse::from);
         }
@@ -65,13 +68,20 @@ public class DeliveryServiceImpl implements DeliveryService {
 
     @Override
     @Transactional
-    public DeliveryResponse acceptShipment(Long shipmentId, Long userId) {
+    public DeliveryResponse acceptShipment(Long shipmentId, String reason, Long userId) {
+        // Checked before anything is locked or read, and here as well as on the request: the service is
+        // reachable from inside the application, where no bean validation runs.
+        if (reason != null && reason.trim().length() > RejectShipmentRequest.MAX_REASON_LENGTH) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "reason cannot exceed " + RejectShipmentRequest.MAX_REASON_LENGTH + " characters");
+        }
+
         // DISPATCH_REQUESTED only, not READY: that status is set by assignDistributor and nothing
         // else, so requiring it makes the handover a step that has to happen. Before this, a carrier
         // could take on any ready shipment, nobody had to be assigned, and the distributor's work
         // list - which filters on distributor_id - stayed empty for everyone.
         return advance(shipmentId, EnumSet.of(ShipmentStatus.DISPATCH_REQUESTED),
-                ShipmentStatus.ACCEPTED, userId);
+                ShipmentStatus.ACCEPTED, userId, reason == null || reason.isBlank() ? null : reason.trim());
     }
 
     @Override
@@ -88,30 +98,75 @@ public class DeliveryServiceImpl implements DeliveryService {
                 ShipmentStatus.DELIVERED, userId);
     }
 
+    /**
+     * While the carrier may still set or change the tracking number: from the moment the shipment is handed
+     * to them until they report it on its way. From IN_TRANSIT on it is fixed.
+     */
+    private static final Set<ShipmentStatus> TRACKING_NUMBER_CHANGEABLE_IN = EnumSet.of(
+            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+
     @Override
     @Transactional
     public DeliveryResponse assignTrackingNumber(Long shipmentId, String trackingNumber, Long userId) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
-        if(trackingNumber == null || trackingNumber.isBlank()) {
+        if (trackingNumber == null || trackingNumber.isBlank()) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Tracking number must be provided and cannot be blank");
         }
         // The same bound TrackingNumberRequest validates, read from there so the two cannot drift.
         // Not redundant: the service is reachable from inside the application, where no bean
         // validation runs, and the rule belongs to the operation rather than to one way of calling it.
-        if(trackingNumber.length() > TrackingNumberRequest.MAX_LENGTH) {
+        if (trackingNumber.length() > TrackingNumberRequest.MAX_LENGTH) {
             throw new APIException(HttpStatus.BAD_REQUEST,
                     "Tracking number cannot exceed " + TrackingNumberRequest.MAX_LENGTH + " characters");
         }
-        if(shipment.getStatus() == ShipmentStatus.DELIVERED || shipment.getStatus() == ShipmentStatus.CANCELLED) {
-            throw new APIException(HttpStatus.CONFLICT, "Cannot assign tracking number to shipment in status " + shipment.getStatus());
+        // A positive list rather than the statuses that are over: once the shipment is on the road the number is
+        // fixed - it is what the customer is told to follow - and before it is handed over there is no carrier to
+        // have one (which is also why the ownership check below can rely on an assignment being there).
+        if (!TRACKING_NUMBER_CHANGEABLE_IN.contains(shipment.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Cannot assign tracking number to shipment in status "
+                    + shipment.getStatus() + ", only " + TRACKING_NUMBER_CHANGEABLE_IN + " can have it set or changed");
         }
-        if(!Objects.equals(shipment.getDistributor().getId(), userId) && !roleService.isAdmin(userId)) {
+        if (!Objects.equals(shipment.getDistributor().getId(), userId) && !roleService.isAdmin(userId)) {
             throw new APIException(HttpStatus.FORBIDDEN, "Shipment " + shipmentId + " is assigned to another distributor");
         }
         shipment.setTrackingNumber(trackingNumber);
 
         shipmentRepository.save(shipment);
+        return DeliveryResponse.from(shipment);
+    }
+
+    @Override
+    @Transactional
+    public DeliveryResponse rejectShipment(Long shipmentId, String reason, Long userId) {
+        // Checked here as well as on the request: the service is reachable from inside the application,
+        // where no bean validation runs, and the rule belongs to the operation, not to one way of calling it.
+        if (reason == null || reason.isBlank()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "reason is required");
+        }
+        if (reason.trim().length() > RejectShipmentRequest.MAX_REASON_LENGTH) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "reason cannot exceed " + RejectShipmentRequest.MAX_REASON_LENGTH + " characters");
+        }
+
+        Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
+                .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
+
+        // Asked before the status, like the carrier's other steps.
+        requireReportingDistributor(shipment, userId);
+
+        if (shipment.getStatus() != ShipmentStatus.DISPATCH_REQUESTED) {
+            throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
+                    + shipment.getStatus() + ", only " + ShipmentStatus.DISPATCH_REQUESTED + " can be rejected");
+        }
+
+        // The status and the reason, and nothing besides: no package is detached, no line or order moves, and
+        // OrderProgressService is not asked - what a rejected shipment means for its orders is the
+        // planner's to settle, not a side effect of the carrier's answer.
+        shipment.setStatus(ShipmentStatus.REJECTED);
+        shipment.setDistributorComment(reason.trim());
+        shipmentRepository.save(shipment);
+
         return DeliveryResponse.from(shipment);
     }
 
@@ -124,6 +179,15 @@ public class DeliveryServiceImpl implements DeliveryService {
      */
     private DeliveryResponse advance(Long shipmentId, Set<ShipmentStatus> allowedFrom,
                                      ShipmentStatus target, Long userId) {
+        return advance(shipmentId, allowedFrom, target, userId, null);
+    }
+
+    /**
+     * @param distributorComment what the carrier said to this step, or {@code null} for nothing - the comment
+     *                           already on the shipment is then left as it was
+     */
+    private DeliveryResponse advance(Long shipmentId, Set<ShipmentStatus> allowedFrom,
+                                     ShipmentStatus target, Long userId, String distributorComment) {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
@@ -137,6 +201,9 @@ public class DeliveryServiceImpl implements DeliveryService {
         }
 
         shipment.setStatus(target);
+        if (distributorComment != null) {
+            shipment.setDistributorComment(distributorComment);
+        }
         if (target == ShipmentStatus.IN_TRANSIT) {
             shipment.setShippedAt(LocalDateTime.now());
             dispatchPackages(shipment);
@@ -191,7 +258,9 @@ public class DeliveryServiceImpl implements DeliveryService {
         shipmentPackageRepository.saveAll(dispatched);
     }
 
-    /** The orders this shipment carries - which of them actually move is OrderProgressService's call. */
+    /**
+     * The orders this shipment carries - which of them actually move is OrderProgressService's call.
+     */
     private List<Long> orderIdsOf(Long shipmentId) {
         return orderRepository.findByShipmentId(shipmentId).stream().map(Order::getId).toList();
     }

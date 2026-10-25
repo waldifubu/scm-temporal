@@ -62,6 +62,8 @@ class ListParametersTest {
                 new Listing("/shipments", ShipmentController.SHIPMENT_SORTABLE),
                 new Listing("/shipments/distributor", ShipmentController.SHIPMENT_SORTABLE),
                 new Listing("/shipments/packages", PackageController.SHIPMENT_PACKAGE_SORTABLE),
+                new Listing("/users/distributors", UserController.USER_SORTABLE),
+                new Listing("/users/suppliers", UserController.USER_SORTABLE),
                 new Listing("/shipment-packages", PackageController.SHIPMENT_PACKAGE_SORTABLE),
                 new Listing("/packages", PackageController.PACKAGE_ITEM_SORTABLE),
                 new Listing("/lonely-packages", PackageController.PACKAGE_ITEM_SORTABLE),

@@ -55,6 +55,11 @@ app.jwtExpirationMs=1800000
 # Never "*": the session is a cookie, and a wildcard cannot go with credentials.
 app.cors.allowedOrigins=${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}
 app.cookie.name=scmcookie
+
+# Behind a reverse proxy (nginx, a load balancer) the caller's address is the proxy's, and the rate limit
+# of callers who are not logged in is per address. Let the container read X-Forwarded-For / -Proto / -Host
+# - but only when a proxy really is in front and overwrites those headers: otherwise the caller writes them.
+#server.forward-headers-strategy=native
 app.cookie.secure=false
 
 # OpenAPI description of the REST API (/v3/api-docs) and Swagger UI (/swagger-ui.html).

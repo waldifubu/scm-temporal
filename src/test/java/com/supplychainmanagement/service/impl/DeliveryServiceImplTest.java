@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import static org.mockito.Mockito.verifyNoInteractions;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Role;
@@ -32,6 +33,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 
 import java.util.List;
@@ -281,6 +283,12 @@ class DeliveryServiceImplTest {
     /** Somebody else's carrier, for the ownership checks. */
     private static final Long OTHER_DISTRIBUTOR_ID = 7L;
     private static final Pageable FIRST_PAGE = PageRequest.of(0, 25);
+    /**
+     * What the repository is asked: the caller's page with the id as the tie-break. Shipments handed to
+     * one carrier together share their status and dates, and a database may order ties differently on
+     * the next page.
+     */
+    private static final Pageable FIRST_PAGE_BY_ID = PageRequest.of(0, 25, Sort.by("id"));
 
     /** A shipment as the page query returns it: its customer, but not yet its packages. */
     private static Shipment listRow(Long id) {
@@ -305,7 +313,7 @@ class DeliveryServiceImplTest {
         Shipment row = listRow(SHIPMENT_ID);
         Shipment withPackages = listRow(SHIPMENT_ID);
         withPackages.addPackage(shipmentPackage(5L, ShipmentPackageStatus.DISPATCHED));
-        when(shipmentRepository.findAllWithCustomerByDistributorId(DISTRIBUTOR_ID, FIRST_PAGE))
+        when(shipmentRepository.findAllWithCustomerByDistributorId(DISTRIBUTOR_ID, FIRST_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(row), FIRST_PAGE, 1));
         when(shipmentRepository.findWithPackagesByIdIn(List.of(SHIPMENT_ID))).thenReturn(List.of(withPackages));
 
@@ -324,17 +332,32 @@ class DeliveryServiceImplTest {
     @Test
     void asksTheNarrowedQueryWhenAStatusIsGiven() {
         when(shipmentRepository.findAllWithCustomerByDistributorIdAndStatus(
-                DISTRIBUTOR_ID, ShipmentStatus.IN_TRANSIT, FIRST_PAGE)).thenReturn(Page.empty(FIRST_PAGE));
+                DISTRIBUTOR_ID, ShipmentStatus.IN_TRANSIT, FIRST_PAGE_BY_ID)).thenReturn(Page.empty(FIRST_PAGE));
 
         service.findShipmentsForDistributor(DISTRIBUTOR_ID, ShipmentStatus.IN_TRANSIT, FIRST_PAGE);
 
         verify(shipmentRepository, never()).findAllWithCustomerByDistributorId(any(), any());
     }
 
+    /** The caller's sort stays, the id comes after it; a sort by id is not given a second id. */
+    @Test
+    void addsTheIdAsTheLastSortKeyWithoutRepeatingIt() {
+        PageRequest byDate = PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "requestedDeliveryDate"));
+        PageRequest byId = PageRequest.of(1, 5, Sort.by(Sort.Direction.DESC, "id"));
+        when(shipmentRepository.findAllWithCustomerByDistributorId(any(), any())).thenReturn(Page.empty(FIRST_PAGE));
+
+        service.findShipmentsForDistributor(DISTRIBUTOR_ID, null, byDate);
+        service.findShipmentsForDistributor(DISTRIBUTOR_ID, null, byId);
+
+        verify(shipmentRepository).findAllWithCustomerByDistributorId(DISTRIBUTOR_ID,
+                PageRequest.of(0, 25, Sort.by(Sort.Order.desc("requestedDeliveryDate"), Sort.Order.asc("id"))));
+        verify(shipmentRepository).findAllWithCustomerByDistributorId(DISTRIBUTOR_ID, byId);
+    }
+
     /** Nothing on the page, nothing to load packages for - the second query is not asked at all. */
     @Test
     void asksForNoPackagesWhenTheDistributorHasNoShipments() {
-        when(shipmentRepository.findAllWithCustomerByDistributorId(DISTRIBUTOR_ID, FIRST_PAGE))
+        when(shipmentRepository.findAllWithCustomerByDistributorId(DISTRIBUTOR_ID, FIRST_PAGE_BY_ID))
                 .thenReturn(Page.empty(FIRST_PAGE));
 
         assertThat(service.findShipmentsForDistributor(DISTRIBUTOR_ID, null, FIRST_PAGE)).isEmpty();
@@ -347,5 +370,242 @@ class DeliveryServiceImplTest {
         when(shipmentRepository.findForUpdateById(99L)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.acceptShipment(99L, 1L)).isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    // ------------------------------------------------------------------ reject
+
+    /**
+     * The status and the reason, <strong>and nothing besides</strong>: the packages stay in the shipment, none of
+     * them changes, no order line is touched and the order progress is not even asked.
+     */
+    @Test
+    void rejectSetsTheStatusAndTheReasonAndNothingElse() {
+        ShipmentPackage shipmentPackage = shipmentPackage(5L, ShipmentPackageStatus.PACKED);
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage);
+        shipment.setComment("call first");
+
+        DeliveryResponse response = service.rejectShipment(SHIPMENT_ID, " no truck free ", DISTRIBUTOR_ID);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(shipment.getDistributorComment()).isEqualTo("no truck free");
+        assertThat(response.status()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(response.distributorComment()).isEqualTo("no truck free");
+        // Nothing else moved: the planner's note, the distributor, the packages and their status.
+        assertThat(shipment.getComment()).isEqualTo("call first");
+        assertThat(shipment.getDistributor().getId()).isEqualTo(DISTRIBUTOR_ID);
+        assertThat(shipment.getPackages()).containsExactly(shipmentPackage);
+        assertThat(shipmentPackage.getShipment()).isSameAs(shipment);
+        assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.PACKED);
+        assertThat(shipment.getShippedAt()).isNull();
+        verify(orderProgress, never()).recompute(any(), any());
+        verifyNoInteractions(orderRepository);
+        verify(shipmentRepository).save(shipment);
+    }
+
+    /** Declining what was offered - from DISPATCH_REQUESTED only. Once it is accepted, backing out is a cancellation. */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "ACCEPTED", "REJECTED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void rejectsAnOfferedShipmentOnly(ShipmentStatus status) {
+        Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        Throwable thrown = catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "no", DISTRIBUTOR_ID));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("only DISPATCH_REQUESTED can be rejected");
+        assertThat(shipment.getStatus()).isEqualTo(status);
+        assertThat(shipment.getDistributorComment()).isNull();
+        verify(shipmentRepository, never()).save(any());
+    }
+
+    /** The reason is the one thing a rejection says - a blank one is refused, and nothing is written. */
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"", "   "})
+    void rejectNeedsAReason(String reason) {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, reason, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, null, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(shipment.getDistributorComment()).isNull();
+    }
+
+    /** The column is a varchar(255); a longer reason is a 400 that says so, not a 500 from the database. */
+    @Test
+    void rejectRefusesAReasonLongerThanTheColumn() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        Throwable thrown = catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "x".repeat(256), DISTRIBUTOR_ID));
+        service.rejectShipment(SHIPMENT_ID, "y".repeat(255), DISTRIBUTOR_ID);
+
+        assertStatus(thrown, HttpStatus.BAD_REQUEST);
+        assertThat(thrown).hasMessageContaining("255");
+        assertThat(shipment.getDistributorComment()).hasSize(255);
+    }
+
+    /** Only the carrier the shipment was handed to answers for it. */
+    @Test
+    void anotherCarrierMayNotRejectIt() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "not mine", OTHER_DISTRIBUTOR_ID)),
+                HttpStatus.FORBIDDEN);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(shipment.getDistributorComment()).isNull();
+    }
+
+    /** Asked before the status, so a carrier poking at somebody else's shipment learns nothing about where it stands. */
+    @Test
+    void doesNotTellAnotherCarrierTheStatusOnReject() {
+        shipment(ShipmentStatus.ACCEPTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "no", OTHER_DISTRIBUTOR_ID)),
+                HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void letsAnAdminRejectOnBehalfOfTheCarrier() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        when(roleService.isAdmin(1L)).thenReturn(true);
+
+        service.rejectShipment(SHIPMENT_ID, "carrier unreachable", 1L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+    }
+
+    @Test
+    void rejectAnswersAnUnknownShipmentWith404() {
+        when(shipmentRepository.findForUpdateById(404L)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.rejectShipment(404L, "no", DISTRIBUTOR_ID))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    // ------------------------------------------------------------------ accept with a note
+
+    /** The note lands where a rejection puts its reason - and the planner's own comment is not touched. */
+    @Test
+    void acceptKeepsTheNoteInTheDistributorComment() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        shipment.setComment("call first");
+
+        DeliveryResponse response = service.acceptShipment(SHIPMENT_ID, " pick-up on Monday ", DISTRIBUTOR_ID);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
+        assertThat(shipment.getDistributorComment()).isEqualTo("pick-up on Monday");
+        assertThat(response.distributorComment()).isEqualTo("pick-up on Monday");
+        assertThat(shipment.getComment()).isEqualTo("call first");
+        // An acceptance is still a step that moves the orders along.
+        verify(orderProgress).recompute(List.of(ORDER_ID), DISTRIBUTOR_ID);
+    }
+
+    /** Optional: without a note - none given, or only blanks - the comment stays what it was. */
+    @Test
+    void acceptWithoutANoteLeavesTheDistributorCommentAlone() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        shipment.setDistributorComment("earlier note");
+
+        service.acceptShipment(SHIPMENT_ID, DISTRIBUTOR_ID);
+        assertThat(shipment.getDistributorComment()).isEqualTo("earlier note");
+
+        shipment.setStatus(ShipmentStatus.DISPATCH_REQUESTED);
+        service.acceptShipment(SHIPMENT_ID, "   ", DISTRIBUTOR_ID);
+        assertThat(shipment.getDistributorComment()).isEqualTo("earlier note");
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
+    }
+
+    /** Longer than the column: a 400 before anything is read, and the shipment is not moved. */
+    @Test
+    void acceptRefusesANoteLongerThanTheColumn() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, "x".repeat(256), DISTRIBUTOR_ID)),
+                HttpStatus.BAD_REQUEST);
+        service.acceptShipment(SHIPMENT_ID, "y".repeat(255), DISTRIBUTOR_ID);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
+        assertThat(shipment.getDistributorComment()).hasSize(255);
+    }
+
+    /** A note does not buy a way past the rules: another carrier is still a 403 and nothing is written. */
+    @Test
+    void aNoteDoesNotChangeWhoMayAccept() {
+        Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.acceptShipment(SHIPMENT_ID, "mine now", OTHER_DISTRIBUTOR_ID)),
+                HttpStatus.FORBIDDEN);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(shipment.getDistributorComment()).isNull();
+    }
+
+    // ------------------------------------------------------------------ tracking number
+
+    /** Handed over and not yet on the road: the carrier sets it, and may change it. */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"DISPATCH_REQUESTED", "ACCEPTED"})
+    void setsTheTrackingNumberWhileTheShipmentIsNotOnTheRoad(ShipmentStatus status) {
+        Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        DeliveryResponse response = service.assignTrackingNumber(SHIPMENT_ID, "DHL-123", DISTRIBUTOR_ID);
+        service.assignTrackingNumber(SHIPMENT_ID, "DHL-456", DISTRIBUTOR_ID);
+
+        assertThat(response.trackingNumber()).isEqualTo("DHL-123");
+        assertThat(shipment.getTrackingNumber()).isEqualTo("DHL-456");
+        assertThat(shipment.getStatus()).isEqualTo(status);
+        verify(orderProgress, never()).recompute(any(), any());
+    }
+
+    /**
+     * From IN_TRANSIT on the number is fixed - and in every other status there is no carrier with one to set:
+     * not handed over yet (CREATED, READY, which used to be a NullPointerException on the missing
+     * assignment), turned down, delivered, called off.
+     */
+    @ParameterizedTest
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "REJECTED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void leavesTheTrackingNumberAloneOutsideTheStatusesItMayChangeIn(ShipmentStatus status) {
+        Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        shipment.setTrackingNumber("DHL-123");
+
+        Throwable thrown = catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, "DHL-999", DISTRIBUTOR_ID));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("only [DISPATCH_REQUESTED, ACCEPTED]");
+        assertThat(shipment.getTrackingNumber()).isEqualTo("DHL-123");
+        verify(shipmentRepository, never()).save(any());
+    }
+
+    @Test
+    void anotherCarrierMayNotSetTheTrackingNumber() {
+        Shipment shipment = shipment(ShipmentStatus.ACCEPTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, "DHL-1", OTHER_DISTRIBUTOR_ID)),
+                HttpStatus.FORBIDDEN);
+
+        assertThat(shipment.getTrackingNumber()).isNull();
+    }
+
+    @Test
+    void anAdminMaySetTheTrackingNumberForTheCarrier() {
+        Shipment shipment = shipment(ShipmentStatus.ACCEPTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+        when(roleService.isAdmin(1L)).thenReturn(true);
+
+        service.assignTrackingNumber(SHIPMENT_ID, "DHL-1", 1L);
+
+        assertThat(shipment.getTrackingNumber()).isEqualTo("DHL-1");
+    }
+
+    /** At most 70 characters, as the request says; blank is refused as well. */
+    @Test
+    void refusesABlankOrTooLongTrackingNumber() {
+        Shipment shipment = shipment(ShipmentStatus.ACCEPTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
+
+        assertStatus(catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, "   ", DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        assertStatus(catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, null, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        assertStatus(catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, "x".repeat(71), DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        service.assignTrackingNumber(SHIPMENT_ID, "y".repeat(70), DISTRIBUTOR_ID);
+
+        assertThat(shipment.getTrackingNumber()).hasSize(70);
     }
 }

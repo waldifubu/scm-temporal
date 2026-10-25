@@ -53,6 +53,37 @@ public class UserController {
     }
 
     @NoCheck
+    @GetMapping(path = "/distributors", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'LOGISTICS')")
+    public PageResponse<UserDto> getDistributors(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(defaultValue = "ASC") String order) {
+        Pageable pageable = PageRequests.of(page, size, sort, order, USER_SORTABLE);
+        return toPageResponse(userService.findDistributors(pageable));
+    }
+
+    /**
+     * The suppliers a component request can be placed with. Not the roles of the carrier list: it is the
+     * ones that may place a request ({@code POST /components/request/{supplierId}}) - ADMIN, MANAGER and
+     * WAREHOUSE. WAREHOUSE may order but may not read the rest of {@code /users}, so without this it
+     * could order and not say from whom; LOGISTICS has no business with suppliers at all, and a
+     * SUPPLIER is the one being asked.
+     */
+    @NoCheck
+    @GetMapping(path = "/suppliers", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    public PageResponse<UserDto> getSuppliers(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(defaultValue = "ASC") String order) {
+        Pageable pageable = PageRequests.of(page, size, sort, order, USER_SORTABLE);
+        return toPageResponse(userService.findSuppliers(pageable));
+    }
+
+    @NoCheck
     @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ResponseEntity<UserDto> create(@RequestBody UserRequestDto request) {

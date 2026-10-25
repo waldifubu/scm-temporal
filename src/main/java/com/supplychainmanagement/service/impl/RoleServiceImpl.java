@@ -43,6 +43,19 @@ public class RoleServiceImpl implements RoleService {
     }
 
     @Override
+    public boolean hasAnyRole(Long userId, RoleEnum... roles) {
+        if (userId == null || roles == null || roles.length == 0) {
+            return false;
+        }
+
+        Set<RoleEnum> wanted = Set.copyOf(Arrays.asList(roles));
+        return userRepository.findById(userId)
+                .map(com.supplychainmanagement.entity.users.User::getRoles)
+                .map(held -> held.stream().anyMatch(role -> wanted.contains(role.getRolename())))
+                .orElse(false);
+    }
+
+    @Override
     public boolean isPrivilegedUser(User authUser) {
         return hasAnyAuthority(authUser, RoleEnum.ADMIN, RoleEnum.MANAGER);
     }

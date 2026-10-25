@@ -49,4 +49,17 @@ public interface UserService {
      * @param usernameOrEmail what the authenticated principal is called - the token carries the user name
      */
     UserDto findCurrentUser(String usernameOrEmail);
+
+    /**
+     * The distributors a shipment can be handed to, active accounts only: the answer to "which
+     * id goes into {@code POST /shipments/assign/{distributorId}}". See {@link #findSuppliers} for the counterpart on the component request side.
+     */
+    Page<User> findDistributors(Pageable pageable);
+
+    /**
+     * The suppliers a component request can be placed with, active accounts only: the answer to "which
+     * id goes into {@code POST /components/request/{supplierId}}". See {@link #findDistributors} for the
+     * counterpart on the shipment side.
+     */
+    Page<User> findSuppliers(Pageable pageable);
 }

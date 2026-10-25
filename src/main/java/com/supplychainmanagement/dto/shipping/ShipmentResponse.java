@@ -46,7 +46,13 @@ public record ShipmentResponse(
         String distributorName,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         String message,
-        List<ShipmentPackageListDto> packages
+        List<ShipmentPackageListDto> packages,
+        /* Why the carrier turned the shipment down - the planner reads it to hand it to somebody else. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String distributorComment,
+        /* When anything on the shipment last changed. Left out while null: rows from before the column existed have none. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        LocalDateTime updatedAt
 ) {
 
     /**
@@ -72,7 +78,9 @@ public record ShipmentResponse(
                 shipment.getDistributor() != null ? shipment.getDistributor().getId() : null,
                 nameOf(shipment.getDistributor()),
                 message,
-                packages.stream().map(ShipmentPackageListDto::from).toList()
+                packages.stream().map(ShipmentPackageListDto::from).toList(),
+                shipment.getDistributorComment(),
+                shipment.getUpdatedAt()
         );
     }
 

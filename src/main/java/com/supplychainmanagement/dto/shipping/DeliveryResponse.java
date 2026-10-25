@@ -38,7 +38,24 @@ public record DeliveryResponse(
         LocalDateTime deliveredAt,
         int packageCount,
         BigDecimal weight,
-        List<String> packageNumbers
+        List<String> packageNumbers,
+        /*
+         * What the carrier needs to read the shipment's page: whose it is, when it was made, and the
+         * planner's note - which is also where the reason of a cancellation is kept. The customer's id
+         * is that and nothing more; the contents stay out (see above).
+         */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        Long customerId,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        LocalDateTime createdAt,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String comment,
+        /* Why this carrier turned the shipment down - only there once it did. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String distributorComment,
+        /* When anything on the shipment last changed - a step of the carrier, the planner's edit. Left out while null: rows from before the column existed have none. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        LocalDateTime updatedAt
 ) {
 
     public static DeliveryResponse from(Shipment shipment) {
@@ -56,7 +73,12 @@ public record DeliveryResponse(
                 shipment.getDeliveredAt(),
                 packages.size(),
                 packages.stream().map(DeliveryResponse::grossWeightOf).reduce(BigDecimal.ZERO, BigDecimal::add),
-                packages.stream().map(ShipmentPackage::getPackageNumber).filter(Objects::nonNull).sorted().toList());
+                packages.stream().map(ShipmentPackage::getPackageNumber).filter(Objects::nonNull).sorted().toList(),
+                shipment.getCustomer() != null ? shipment.getCustomer().getId() : null,
+                shipment.getCreatedAt(),
+                shipment.getComment(),
+                shipment.getDistributorComment(),
+                shipment.getUpdatedAt());
     }
 
     /**

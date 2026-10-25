@@ -9,6 +9,8 @@ public enum ShipmentStatus {
 
     ACCEPTED, // Shipment has been accepted for dispatch.
 
+    REJECTED, // Shipment has been rejected for dispatch.
+
     IN_TRANSIT, // Shipment is currently in transit.
 
     DELIVERED, // Shipment has been delivered to the destination.

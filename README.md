@@ -355,6 +355,8 @@ stateDiagram-v2
         CREATED --> READY : PUT /shipments/{id}/ready
         READY --> DISPATCH_REQUESTED : PUT /shipments/{id}/distributor/{id}
         DISPATCH_REQUESTED --> ACCEPTED : POST /shipments/{id}/accept
+        DISPATCH_REQUESTED --> REJECTED : POST /shipments/{id}/reject
+        REJECTED --> DISPATCH_REQUESTED : PUT /shipments/{id}/distributor/{id} - another carrier
         ACCEPTED --> IN_TRANSIT : POST /shipments/{id}/intransit
         IN_TRANSIT --> DELIVERED : POST /shipments/{id}/delivered
         ACCEPTED --> CANCELLED : POST /shipments/{id}/cancel - up to ACCEPTED
@@ -451,12 +453,27 @@ to `DELIVERED` with no record of who drove them.
 
 ```
 PUT  /shipments/{id}/ready        CREATED → READY          lines + orders → READY_FOR_DISPATCH
-POST /shipments/{id}/accept       DISPATCH_REQUESTED → ACCEPTED   (orders already there)
+POST /shipments/{id}/accept       DISPATCH_REQUESTED → ACCEPTED   (orders already there)  body optional { "reason": "..." }
+POST /shipments/{id}/reject       DISPATCH_REQUESTED → REJECTED   body { "reason": "..." } required - and nothing else happens
 POST /shipments/{id}/intransit    ACCEPTED → IN_TRANSIT    packages → DISPATCHED, orders → IN_TRANSIT
-PATCH /shipments/{id}/trackingnumber { "trackingNumber": "DHL-123" }  not once DELIVERED/CANCELLED
+PATCH /shipments/{id}/trackingnumber { "trackingNumber": "DHL-123" }  only in DISPATCH_REQUESTED / ACCEPTED, at most 70 characters
 POST /shipments/{id}/delivered    IN_TRANSIT → DELIVERED   orders → DELIVERED
 POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
 ```
+
+**The carrier says no** (`reject`, `OutboundController`, ADMIN and DISTRIBUTOR): the carrier turns down what
+was offered. The reason is required (at most 255 characters) and goes into the shipment's
+**`distributorComment`** — the carrier's own note, apart from the planner's `comment`. `accept` takes the same kind of
+note, optional there, with the same destination. **A rejection changes the status and the note and nothing else**: the
+packages stay in the shipment, no line or order moves. Only the assigned distributor may answer (403 for another one),
+and only from `DISPATCH_REQUESTED` — after `accept`, backing out is the planner's cancellation (409). The way out is
+`PUT /shipments/{id}/distributor/{id}`, which takes `REJECTED` too: the shipment goes to the next carrier and the
+first one's note is cleared. Not decided yet: cancelling or editing a `REJECTED` shipment, and what a rejection means
+for its orders (no recompute runs).
+
+**The tracking number is fixed once the shipment is on the road**: it can be set or changed in `DISPATCH_REQUESTED` and
+`ACCEPTED` only (409 otherwise, which also replaced a 500 for shipments with no carrier yet).
+
 
 `intransit` is one word. This file said `/in-transit` for a long time and the endpoint never did —
 a client following it got a 404. The supplier's step of the same name
@@ -473,8 +490,9 @@ which then catches up an order that was not moved here and does nothing for the 
 
 **The three carrier steps** (ADMIN and DISTRIBUTOR) live in `DeliveryService`, not in
 `ShipmentService`: planning a shipment is the inside job of `RoleEnum.LOGISTICS`, reporting it is the
-carrier's. They answer with `DeliveryResponse` — address, package count, weight and package numbers,
-but **no package contents**, so a distributor never sees the customer's SKUs and quantities. They
+carrier's. They answer with `DeliveryResponse` — address, package count, weight and package numbers, the customer's
+id, `createdAt`, `updatedAt`, the planner's `comment` and the carrier's own `distributorComment` (each left out while
+empty), but **no package contents**, so a distributor never sees the customer's SKUs and quantities. They
 take the orders of the shipment along —
 `IN_TRANSIT`, `DELIVERED`, and `READY_FOR_DISPATCH` as a catch-up — found over the packages, since a shipment may carry
 packages of several orders of its customer. Orders move **forwards only**: one that is already
@@ -482,8 +500,10 @@ further along, because another shipment reported earlier, and one in `REJECTED`/
 as they are. Every change publishes an `OrderStatusChangedEvent`, so the `OrderHistory` row is
 written like for any other transition.
 
-**Cancelling** (ADMIN and LOGISTICS) works up to `ACCEPTED` — once the goods roll it would be a
-return, which the process does not model — and needs a reason, which is kept in `comment`. It undoes
+**Cancelling** (ADMIN, LOGISTICS and DISTRIBUTOR) works up to `ACCEPTED` — once the goods roll it would be a
+return, which the process does not model — and needs a reason, which is kept in `comment`. **A carrier may cancel only
+the shipment assigned to them** (403 for another one, also for one with no assignment); ADMIN and LOGISTICS may cancel
+any. This used to be unchecked: any carrier could cancel any shipment by its id. It undoes
 what the shipment had set in motion: the packages are loose again and stay `PACKED`, lines go back
 from `READY_FOR_DISPATCH` to `PACKED`, and orders back to `IN_FULFILLMENT` unless a line of theirs
 travels in another shipment.
@@ -872,11 +892,11 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged, by reservation status, default `ACTIVE`; `CONSUMED` is what has been picked)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE; the `GET` also MANAGER |
 | Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)*, `GET /order-items/packable` *(paged, optional `orderNo`: picked lines with `packed` and `remaining` - what package items are made from)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST /packing/shipment/from-items` (a package made of existing package items, by id), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE; the two `GET /order-items...` lists also MANAGER |
-| Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
+| Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`; without `sort` ordered by `created`, then by order number; sortable by the columns the table shows, among them `orderItem.order.orderNo`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
-| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`), `GET /shipments` *(paged, optional `status`)*, `GET /shipments/{id}`, `GET /shipments/packages` *(paged, the `PACKED` packages in no shipment yet)* | ADMIN, LOGISTICS |
-| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept`, `POST /shipments/{id}/intransit`, `PATCH /shipments/{id}/trackingnumber` (body `{"trackingNumber": "..."}`), `POST /shipments/{id}/delivered` — `OutboundController` | ADMIN, DISTRIBUTOR |
+| Shipments | `POST /shipments`, `POST`/`PUT /shipments/{id}/packages`, `DELETE /shipments/{id}/packages/{packageId}`, `PUT /shipments/{id}`, `PUT /shipments/{id}/distributor/{distributorId}`, `PUT /shipments/{id}/ready`, `POST /shipments/{id}/cancel` (body `{"reason": "..."}`; ADMIN, LOGISTICS and — for their own shipments — DISTRIBUTOR), `GET /shipments` *(paged, optional `status`, sortable by `customer.lastName` and `distributor.lastName` too; each row names the distributor)*, `GET /shipments/{id}`, `GET /shipments/packages` *(paged, the `PACKED` packages in no shipment yet)* | ADMIN, LOGISTICS |
+| | `GET /shipments/distributor` *(paged, optional `status`, the caller's own)*, `POST /shipments/{id}/accept` (optional body `{"reason": "..."}`), `POST /shipments/{id}/reject` (body `{"reason": "..."}`, required), `POST /shipments/{id}/intransit`, `PATCH /shipments/{id}/trackingnumber` (body `{"trackingNumber": "..."}`, at most 70 characters, only before `IN_TRANSIT`), `POST /shipments/{id}/delivered` — `OutboundController` | ADMIN, DISTRIBUTOR |
 | Products | `GET /products`, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
@@ -889,8 +909,10 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `.../reject` — `OPEN → REJECTED` (declined before anything was promised), `.../cancel` — `APPROVED`/`IN_TRANSIT` → `CANCELLED` (never from `DELIVERED`, that would be a return); `InboundController` | ADMIN, SUPPLIER |
 | | `POST /components/warehouse/{requestId}/in-stock/{storehouseId}` — the goods receipt: `DELIVERED → IN_STOCK` and the quantity added to that SKU's stock in that storehouse | ADMIN, WAREHOUSE |
 | Storehouses | `GET /storehouses` *(paged, default sort `name`, `?size=100` for a dropdown; `sort` one of `id`, `name`, `city`, `country`, else 400)* — the ids that the goods receipt and `POST /stock/add` take | ADMIN, WAREHOUSE |
-| Stock | `POST /stock/add` (`{"sku": ..., "storehouseId": ..., "qty": ...}`), `POST /stock/transfer`, `GET /stock/{sku}`, `GET /stock/storehouse/{id}` *(paged)* — all answer `StockResponse`, never the entity | ADMIN, WAREHOUSE |
+| Stock | `POST /stock/add` (`{"sku": ..., "storehouseId": ..., "qty": ...}`), `POST /stock/transfer`, `GET /stock/{sku}` *(one row per storehouse, by name; stored nowhere is `200 []`, not a 404)*, `GET /stock/storehouse/{id}` *(paged)* — all answer `StockResponse`, never the entity | ADMIN, WAREHOUSE |
 | Users | `GET /users` *(paged)*, `GET /users/{id}`, `POST /users`, `PUT /users/{id}` (body `UserRequestDto`, roles as names), `DELETE /users/{id}` | ADMIN, MANAGER |
+| | `GET /users/distributors` *(paged, active carriers only, `UserDto`)* — whom a shipment can be handed to (`PUT /shipments/{id}/distributor/{distributorId}`) | ADMIN, MANAGER, LOGISTICS |
+| | `GET /users/suppliers` *(paged, active suppliers only, `UserDto`)* — whom a component request can be placed with (`POST /components/request/{supplierId}`) | ADMIN, MANAGER, WAREHOUSE |
 
 Notable response-code conventions:
 
@@ -1003,8 +1025,12 @@ part of them.
 | `PackageQueryServiceImplTest`, `PackageControllerTest` | package and item lists, the `packageNumber` filter, single entries and 404 |
 | `PackageItemResponseAssemblerTest`, `ShipmentPackageListDtoTest` | computed `siblings` in one query, package rows without a cycle |
 | `ShipmentPackageMappingTest`, `ShipmentPackageWeightTest`, `ShipmentPackageCompleteTest` | no delete cascade on items, computed weight, `OPEN → PACKED` only with items |
-| `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment, the ready check, cancelling and what it takes back, binding and status codes |
-| `DeliveryServiceImplTest` | the carrier's three steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, and the distributor's work list in two queries |
+| `ShipmentServiceImplTest`, `ShipmentControllerTest` | every shipment rule, distributor assignment (also out of `REJECTED`), the ready check, cancelling and what it takes back, who may cancel, binding and status codes |
+| `ShipmentRejectTest`, `ShipmentCancelOwnerTest`, `ShipmentListSortTest` | against the real chain and rows: the carrier's rejection (status, note, nothing else, the way out), who may cancel, the shipment list's names and sort keys — a shipment with no carrier survives the sort (needs a database) |
+| `DistributorsEndpointTest`, `SuppliersEndpointTest`, `StockBySkuEndpointTest` | `GET /users/distributors`, `GET /users/suppliers` (active accounts only, each role's own set) and `GET /stock/{sku}` (an empty list, not a 404; by storehouse name) (need a database) |
+| `PackageListSortTest`, `ListParametersTest`, `RateLimitPerUserTest` | the package list's sort keys and default order, every paged list's whitelist walked against its real query, the rate limit per user (need a database) |
+| `DeliveryResponseJsonTest`, `RoleServiceHasAnyRoleTest`, `PricingPlanServiceTest` | what the carrier is told, roles by user id, which rate-limit bucket a request draws from |
+| `DeliveryServiceImplTest` | the carrier's steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, the rejection and the notes, the tracking number rule, and the distributor's work list in two queries |
 | `OutboundControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
 | `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
 | `OrderProgressServiceImplTest` | the computed order status: every step from `IN_FULFILLMENT` to `DELIVERED` out of the shipped quantities, `PARTIALLY_DELIVERED` reserved for the delivery, the fallback when a cancellation takes the coverage away, statuses outside the shipment range left alone (`WAIT_SUPPLY` among them), and `changeStatus`/`recordCreated` |
@@ -1014,14 +1040,14 @@ part of them.
 | `ComponentServiceSupplierStepsTest`, `InboundControllerTest` | what the supplier reports: one status at a time, only on their own request, ADMIN exempt, the status not leaking to a stranger, and the two ways a request ends without goods |
 | `ComponentControllerTest` | the catalogue, both bodies of the ordering endpoint, the quantity bound, the warehouse's work list and the goods receipt |
 | `RequestComponentIdTest` | that a component request can be inserted at all — its key column was a `uuid` without `AUTO_INCREMENT` (needs a database) |
-| `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line (needs a database) |
+| `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line, `ShipmentStatus` on the shipment (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
 | `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |
 | `UserMapperTest`, `ProductMapperTest` | that no password hash or internal field reaches the response; field suppression for non-privileged callers |
 | `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler, and that the catch-all keeps a status the exception carries |
 
-Nine of them need a reachable database - `ApplicationTests` loads the whole context,
+About thirty classes need a reachable database (every `@SpringBootTest`) - `ApplicationTests` loads the whole context,
 `CustomQueryExecutionTest` runs the hand-written queries against it, `ReservationDtoTest` needs real
 Hibernate proxies, and the migration tests check the schema itself. They run against **their own
 schema, `scm_test`**, through `@ActiveProfiles("test")` and

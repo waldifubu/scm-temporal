@@ -57,7 +57,7 @@ class OutboundControllerTest {
                 .build();
 
         when(userService.getAuthenticatedUserId(any())).thenReturn(99L);
-        when(deliveryService.acceptShipment(any(), any())).thenReturn(delivery(ShipmentStatus.ACCEPTED));
+        when(deliveryService.acceptShipment(any(), any(), any())).thenReturn(delivery(ShipmentStatus.ACCEPTED));
         when(deliveryService.shipmentInTransit(any(), any())).thenReturn(delivery(ShipmentStatus.IN_TRANSIT));
         when(deliveryService.shipmentDelivered(any(), any())).thenReturn(delivery(ShipmentStatus.DELIVERED));
         when(deliveryService.findShipmentsForDistributor(any(), any(), any()))
@@ -67,7 +67,7 @@ class OutboundControllerTest {
 
     private static DeliveryResponse delivery(ShipmentStatus status) {
         return new DeliveryResponse(50L, status, "Ada Lovelace", "Musterstr. 1", "DHL", null, null, null, null,
-                1, BigDecimal.ONE, List.of("PKG-5"));
+                1, BigDecimal.ONE, List.of("PKG-5"), 3L, null, null, null, null);
     }
 
     /** The three steps of the carrier, each with the id from the path and the acting user. */
@@ -77,7 +77,8 @@ class OutboundControllerTest {
         mockMvc.perform(post("/api/1.0/shipments/50/intransit")).andExpect(status().isOk());
         mockMvc.perform(post("/api/1.0/shipments/50/delivered")).andExpect(status().isOk());
 
-        verify(deliveryService).acceptShipment(50L, 99L);
+        // No body: a plain acceptance, no note.
+        verify(deliveryService).acceptShipment(50L, null, 99L);
         verify(deliveryService).shipmentInTransit(50L, 99L);
         verify(deliveryService).shipmentDelivered(50L, 99L);
         verifyNoInteractions(shipmentService);
@@ -156,6 +157,96 @@ class OutboundControllerTest {
     @Test
     void refusesAnUnknownStatus() throws Exception {
         mockMvc.perform(get("/api/1.0/shipments/distributor").param("status", "FLYING"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    // ------------------------------------------------------------------ reject
+
+    /** The id from the path, the reason from the body, the acting user - and no other service is asked. */
+    @Test
+    void rejectPassesTheShipmentTheReasonAndTheUserOn() throws Exception {
+        when(deliveryService.rejectShipment(any(), any(), any())).thenReturn(delivery(ShipmentStatus.REJECTED));
+
+        mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+                        .content("""
+                                { "reason": "no truck free" }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("REJECTED"));
+
+        verify(deliveryService).rejectShipment(50L, "no truck free", 99L);
+        verifyNoInteractions(shipmentService);
+    }
+
+    /** The reason is required, as it is on a cancellation: a bean validation, so a 400 before the service is asked. */
+    @Test
+    void rejectWithoutAReasonIsA400() throws Exception {
+        for (String body : new String[]{"{}", "{ \"reason\": \"\" }", "{ \"reason\": \"   \" }", "{ \"reason\": null }"}) {
+            mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest());
+        }
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    @Test
+    void rejectWithoutABodyIsA400() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/reject")).andExpect(status().isBadRequest());
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    /** One more than the column holds is a 400 naming the field, not a database error. */
+    @Test
+    void rejectWithATooLongReasonIsA400() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+                        .content("{ \"reason\": \"" + "x".repeat(256) + "\" }"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(deliveryService);
+    }
+
+    /** It is the carrier's endpoint, in the carrier's controller - not a second verb on the planner's. */
+    @Test
+    void rejectIsAPostOnly() throws Exception {
+        mockMvc.perform(put("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+                        .content("{ \"reason\": \"x\" }"))
+                .andExpect(status().isMethodNotAllowed());
+    }
+
+    // ------------------------------------------------------------------ accept with a note
+
+    /** The carrier's note on accepting goes to the service under the id from the path - no other service is asked. */
+    @Test
+    void acceptPassesTheNoteOn() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/accept").contentType(APPLICATION_JSON)
+                        .content("""
+                                { "reason": "pick-up on Monday" }
+                                """))
+                .andExpect(status().isOk());
+
+        verify(deliveryService).acceptShipment(50L, "pick-up on Monday", 99L);
+        verifyNoInteractions(shipmentService);
+    }
+
+    /** An empty object or a blank note is an acceptance like any other - the note is optional. */
+    @Test
+    void acceptTakesAnEmptyOrBlankNoteAsNoNote() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/accept").contentType(APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk());
+        mockMvc.perform(post("/api/1.0/shipments/50/accept").contentType(APPLICATION_JSON).content("{ \"reason\": null }"))
+                .andExpect(status().isOk());
+
+        verify(deliveryService, org.mockito.Mockito.times(2)).acceptShipment(50L, null, 99L);
+    }
+
+    /** One more than the column holds is a 400 naming the field, not a database error. */
+    @Test
+    void acceptWithATooLongNoteIsA400() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/accept").contentType(APPLICATION_JSON)
+                        .content("{ \"reason\": \"" + "x".repeat(256) + "\" }"))
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(deliveryService);

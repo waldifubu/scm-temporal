@@ -17,6 +17,16 @@ public interface RoleService {
      */
     boolean isAdmin(Long userId);
 
+    /**
+     * Whether the user with this id holds at least one of the given roles, read from the stored roles
+     * rather than from anything a request carried. An unknown id, a {@code null} id and no roles at all
+     * answer {@code false}.
+     * <p>
+     * The general form of {@link #isAdmin(Long)}, for a rule a service enforces on an acting user it only
+     * knows by id: "the planning side may call a shipment off, a carrier only their own".
+     */
+    boolean hasAnyRole(Long userId, RoleEnum... roles);
+
     boolean isPrivilegedUser(org.springframework.security.core.userdetails.User authUser);
 
     /**

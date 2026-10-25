@@ -18,8 +18,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.Set;
 
@@ -66,12 +66,17 @@ public class StockController {
     }
 
     /**
-     * Returns a list of stock entries for the given SKU and optional storehouse ID.
+     * Returns a list of stock entries for the given SKU and optional storehouse ID, by storehouse name.
      * If storehouseId is 0, it returns stock from all storehouses.
+     * <p>
+     * An article that is stored nowhere - or not in the storehouse asked for - is an <strong>empty
+     * list</strong>, not a 404: "no stock" is an answer to this question, and a table that lists
+     * what a product holds would otherwise have to read an error as an empty table. (An unknown SKU
+     * looks the same; the product catalogue is where that is told apart.)
      *
      * @param sku          the SKU to look up
      * @param storehouseId the storehouse ID to filter by (0 for all storehouses)
-     * @return a ResponseEntity containing the list of Stock entries
+     * @return a ResponseEntity containing the list of Stock entries, possibly empty
      */
     @GetMapping(value = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
@@ -87,9 +92,9 @@ public class StockController {
             }
         }
 
-        if (stockList.isEmpty()) {
-            throw new ResourceNotFoundException("Stock", "sku " + sku + " in storehouse ", storehouseId);
-        }
+        // The database gives no order for this finder; a table wants the same rows in the same place.
+        stockList.sort(Comparator.comparing(StockResponse::storehouseName, Comparator.nullsLast(String.CASE_INSENSITIVE_ORDER))
+                .thenComparing(StockResponse::storehouseId, Comparator.nullsLast(Comparator.naturalOrder())));
 
         return ResponseEntity.ok().body(stockList);
     }

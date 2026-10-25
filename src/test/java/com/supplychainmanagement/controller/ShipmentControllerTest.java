@@ -66,7 +66,7 @@ class ShipmentControllerTest {
 
         ShipmentResponse response = new ShipmentResponse(50L, 3L, "Ada Lovelace", ShipmentStatus.CREATED,
                 "Musterstr. 1", "DHL", null, null, LocalDate.of(2026, 10, 1), null, null, null, 0, BigDecimal.ZERO,
-                null, null, null, List.of());
+                null, null, null, List.of(), null, null);
         when(shipmentService.createShipment(any())).thenReturn(response);
         when(shipmentService.addShipmentPackages(any(), any())).thenReturn(response);
         when(shipmentService.replaceShipmentPackages(any(), any())).thenReturn(response);
