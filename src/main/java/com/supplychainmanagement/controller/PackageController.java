@@ -6,7 +6,9 @@ import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.service.PackageQueryService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,7 +31,8 @@ public class PackageController {
     /**
      * All package items - loose ones from POST /packing as well as those in a package, which is what
      * {@code shipmentPackageId} tells apart. Paged like the other lists; {@code sort} takes the fields
-     * of the package item itself (id, created, quantity, runNo, ...).
+     * of the package item itself (id, created, quantity, runNo, ...). Without {@code sort}: by
+     * {@code created}, then by order number.
      */
     // Packages belong to WAREHOUSE, shipments to LOGISTICS, and the two do not overlap: everything
     // under /packages and /shipment-packages is packing work, everything under /shipments is
@@ -40,9 +43,9 @@ public class PackageController {
     public PageResponse<PackageItemResponse> getPackageItems(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
-            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findPackageItems(pageRequest(page, size, sort, order, PACKAGE_ITEM_SORTABLE)));
+        return PageResponse.of(packageQueryService.findPackageItems(itemPageRequest(page, size, sort, order)));
     }
 
     /**
@@ -75,9 +78,9 @@ public class PackageController {
     public PageResponse<PackageItemResponse> getLonelyPackageItems(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
-            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findLoosePackageItems(pageRequest(page, size, sort, order, PACKAGE_ITEM_SORTABLE)));
+        return PageResponse.of(packageQueryService.findLoosePackageItems(itemPageRequest(page, size, sort, order)));
     }
 
     /** One package item, in the same shape as the /packages list. Unknown id: 404. */
@@ -95,15 +98,37 @@ public class PackageController {
     }
 
     /**
-     * What {@code sort} may name on the two package item lists: the columns of the item itself. Anything
-     * else is a 400 naming these - it used to be a 500 for what is a typo in a query string. Package
-     * private, so a test can walk every entry against the real query.
+     * What {@code sort} may name on the two package item lists: the columns of the item itself, and what a
+     * table shows next to them - the order line it belongs to (id, quantity, fulfillment status), its order
+     * number and the package it sits in. Anything else is a 400 naming these - it used to be a 500 for what is
+     * a typo in a query string. Package private, so a test can walk every entry against the real query.
+     * <p>
+     * {@code shipmentPackage.id} is a path through an <em>optional</em> association: a loose item has no
+     * package. Spring Data sorts through a left join there, so loose items are sorted, not dropped from the list
+     * the moment somebody clicks that column - {@code PackageListSortTest} holds it with real rows.
      */
-    static final Set<String> PACKAGE_ITEM_SORTABLE = Set.of("id", "runNo", "quantity", "created");
+    static final Set<String> PACKAGE_ITEM_SORTABLE = Set.of("id", "runNo", "quantity", "created",
+            "orderItem.id", "orderItem.order.orderNo", "orderItem.quantity", "orderItem.fulfillmentStatus",
+            "shipmentPackage.id");
 
     /** The same for the package list: the package's own columns, under the entity's names. */
     static final Set<String> SHIPMENT_PACKAGE_SORTABLE = Set.of("id", "packageNumber", "createdAt", "packedAt",
             "weight", "length", "width", "height", "shipmentPackageStatus", "shipmentPackageType");
+
+    /**
+     * The page of an item list. Without a {@code sort} the list is ordered by <strong>when the item was made,
+     * then by the number of its order</strong> - two keys, so it cannot be a default value of the parameter -
+     * and {@code order} turns both. With a {@code sort} it is that one key, as before; the service adds what
+     * keeps the pages apart.
+     */
+    private static Pageable itemPageRequest(int page, int size, String sort, String order) {
+        if (sort != null && !sort.isBlank()) {
+            return pageRequest(page, size, sort, order, PACKAGE_ITEM_SORTABLE);
+        }
+        Pageable byCreated = pageRequest(page, size, "created", order, PACKAGE_ITEM_SORTABLE);
+        Sort.Direction direction = byCreated.getSort().iterator().next().getDirection();
+        return PageRequest.of(page, size, Sort.by(direction, "orderItem.order.orderNo"));
+    }
 
     private static Pageable pageRequest(int page, int size, String sort, String order, Set<String> sortable) {
         return PageRequests.of(page, size, sort, order, sortable);

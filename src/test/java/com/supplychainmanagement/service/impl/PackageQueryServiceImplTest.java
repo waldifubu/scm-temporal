@@ -38,6 +38,8 @@ import static org.mockito.Mockito.when;
 class PackageQueryServiceImplTest {
 
     private static final Pageable SECOND_PAGE = PageRequest.of(1, 2);
+    /** What the item lists ask the repository: the caller's page with the id as the tie-break. */
+    private static final Pageable SECOND_PAGE_BY_ID = PageRequest.of(1, 2, org.springframework.data.domain.Sort.by("id"));
 
     @Mock
     private ShipmentPackageRepository shipmentPackageRepository;
@@ -133,7 +135,7 @@ class PackageQueryServiceImplTest {
         packed.setQuantity(5);
         packed.setShipmentPackage(shipmentPackage(7L, ShipmentPackageStatus.OPEN));
 
-        when(packageItemRepository.findAllWithProductBy(SECOND_PAGE))
+        when(packageItemRepository.findAllWithProductBy(SECOND_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(loose, packed), SECOND_PAGE, 4));
 
         Page<PackageItemResponse> rows = service.findPackageItems(SECOND_PAGE);
@@ -162,7 +164,7 @@ class PackageQueryServiceImplTest {
         loose.setOrderItem(line);
         loose.setQuantity(5);
 
-        when(packageItemRepository.findAllWithProductByShipmentPackageIsNull(SECOND_PAGE))
+        when(packageItemRepository.findAllWithProductByShipmentPackageIsNull(SECOND_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(loose), SECOND_PAGE, 3));
 
         Page<PackageItemResponse> rows = service.findLoosePackageItems(SECOND_PAGE);
@@ -265,7 +267,7 @@ class PackageQueryServiceImplTest {
         item.setOrderItem(line);
         item.setQuantity(5);
 
-        when(packageItemRepository.findAllWithProductBy(SECOND_PAGE))
+        when(packageItemRepository.findAllWithProductBy(SECOND_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(item), SECOND_PAGE, 3));
         when(packageItemRepository.findItemIdsByOrderItemIdIn(java.util.Set.of(11L)))
                 .thenReturn(List.of(line(11L, 101L), line(11L, 104L)));
@@ -285,5 +287,30 @@ class PackageQueryServiceImplTest {
                 return packageItemId;
             }
         };
+    }
+
+    /** The caller's sort stays, the id comes after it; a sort by id is not given a second id - on both lists. */
+    @Test
+    void addsTheIdAsTheLastSortKeyWithoutRepeatingIt() {
+        org.springframework.data.domain.Sort byOrder = org.springframework.data.domain.Sort.by(
+                org.springframework.data.domain.Sort.Direction.DESC, "orderItem.order.orderNo");
+        PageRequest sortedByOrder = PageRequest.of(0, 25, byOrder);
+        PageRequest sortedById = PageRequest.of(2, 10, org.springframework.data.domain.Sort.by(
+                org.springframework.data.domain.Sort.Direction.DESC, "id"));
+        when(packageItemRepository.findAllWithProductBy(any())).thenReturn(Page.empty(SECOND_PAGE));
+        when(packageItemRepository.findAllWithProductByShipmentPackageIsNull(any())).thenReturn(Page.empty(SECOND_PAGE));
+
+        service.findPackageItems(sortedByOrder);
+        service.findPackageItems(sortedById);
+        service.findLoosePackageItems(sortedByOrder);
+
+        verify(packageItemRepository).findAllWithProductBy(PageRequest.of(0, 25, org.springframework.data.domain.Sort.by(
+                org.springframework.data.domain.Sort.Order.desc("orderItem.order.orderNo"),
+                org.springframework.data.domain.Sort.Order.asc("id"))));
+        verify(packageItemRepository).findAllWithProductBy(sortedById);
+        verify(packageItemRepository).findAllWithProductByShipmentPackageIsNull(PageRequest.of(0, 25,
+                org.springframework.data.domain.Sort.by(
+                        org.springframework.data.domain.Sort.Order.desc("orderItem.order.orderNo"),
+                        org.springframework.data.domain.Sort.Order.asc("id"))));
     }
 }

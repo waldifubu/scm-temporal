@@ -19,12 +19,14 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.service.OrderProgressService;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.repository.UserRepository;
@@ -42,7 +44,9 @@ import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 
 import java.time.LocalDate;
@@ -81,6 +85,8 @@ class ShipmentServiceImplTest {
     private OrderItemRepository orderItemRepository;
     @Mock
     private OrderProgressService orderProgress;
+    @Mock
+    private RoleService roleService;
 
     @InjectMocks
     private ShipmentServiceImpl service;
@@ -95,8 +101,14 @@ class ShipmentServiceImplTest {
             implements ShipmentPackageRepository.PackageCustomer {
     }
 
+    /** The acting user of the cancel tests below, who is not assigned to any shipment: the planning side. */
+    private static final Long PLANNER_ID = 99L;
+    /** A carrier. */
+    private static final Long CARRIER_ID = 77L;
+
     @BeforeEach
     void database() {
+        when(roleService.hasAnyRole(PLANNER_ID, RoleEnum.ADMIN, RoleEnum.LOGISTICS)).thenReturn(true);
         customer = new Customer();
         customer.setId(CUSTOMER_ID);
         customer.setFirstName("Ada");
@@ -588,6 +600,62 @@ class ShipmentServiceImplTest {
         assertStatus(thrown, HttpStatus.CONFLICT);
     }
 
+    /**
+     * A carrier turned the shipment down: the planner hands it to another one. Back to DISPATCH_REQUESTED
+     * with the new carrier, and the first carrier's note is not left on it for the second to read.
+     */
+    @Test
+    void handsARejectedShipmentToAnotherDistributor() {
+        Shipment shipment = loadedShipment(ShipmentStatus.REJECTED);
+        List<ShipmentPackage> packagesBefore = List.copyOf(shipment.getPackages());
+        Distributor first = new Distributor();
+        first.setId(12L);
+        shipment.setDistributor(first);
+        shipment.setDistributorComment("no truck free");
+        shipment.setComment("call first");
+        Distributor second = new Distributor();
+        second.setId(20L);
+        second.setFirstName("Grace");
+        second.setLastName("Hopper");
+        when(userRepository.findById(20L)).thenReturn(Optional.of(second));
+
+        ShipmentResponse response = service.assignDistributor(SHIPMENT_ID, 20L);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(shipment.getDistributor()).isSameAs(second);
+        assertThat(response.distributorName()).isEqualTo("Grace Hopper");
+        assertThat(shipment.getDistributorComment()).isNull();
+        // The planner's own note and the packages are not part of it.
+        assertThat(shipment.getComment()).isEqualTo("call first");
+        assertThat(shipment.getPackages()).isNotEmpty().containsExactlyElementsOf(packagesBefore);
+    }
+
+    /** The note of the carrier stays on a shipment that was not rejected - the reset belongs to the way out of REJECTED only. */
+    @Test
+    void leavesTheCarriersNoteAloneWhenAShipmentWasNotRejected() {
+        Shipment shipment = loadedShipment(ShipmentStatus.DISPATCH_REQUESTED);
+        shipment.setDistributorComment("kept");
+        Distributor distributor = new Distributor();
+        distributor.setId(20L);
+        when(userRepository.findById(20L)).thenReturn(Optional.of(distributor));
+
+        service.assignDistributor(SHIPMENT_ID, 20L);
+
+        assertThat(shipment.getDistributorComment()).isEqualTo("kept");
+    }
+
+    /** The refusal names what is allowed now - REJECTED included. */
+    @Test
+    void namesTheStatusesAnAssignmentIsAllowedIn() {
+        loadedShipment(ShipmentStatus.ACCEPTED);
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.assignDistributor(SHIPMENT_ID, 20L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("READY, DISPATCH_REQUESTED or REJECTED");
+    }
+
     /** Once in transit the distributor is fixed. */
     @Test
     void assignsADistributorBeforeTheShipmentIsAcceptedOnly() {
@@ -875,6 +943,96 @@ class ShipmentServiceImplTest {
         assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.READY);
     }
 
+    // ---- who may cancel: the planning side, and the one carrier the shipment is assigned to
+
+    private static Distributor carrier(Long id) {
+        Distributor carrier = new Distributor();
+        carrier.setId(id);
+        return carrier;
+    }
+
+    /** The carrier the shipment was handed to may call it off - that is why the endpoint is open to them. */
+    @Test
+    void theAssignedCarrierMayCancelItsShipment() {
+        Shipment shipment = existingShipment(ShipmentStatus.ACCEPTED, packed(5L));
+        shipment.setDistributor(carrier(CARRIER_ID));
+        orderInShipment(OrderStatus.READY_FOR_DISPATCH);
+
+        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("cannot make it"), CARRIER_ID);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CANCELLED);
+        assertThat(shipment.getComment()).isEqualTo("cannot make it");
+    }
+
+    /** Another carrier knows the id and nothing more: refused, and nothing is touched. */
+    @Test
+    void anotherCarrierMayNot() {
+        ShipmentPackage shipmentPackage = packed(5L);
+        Shipment shipment = existingShipment(ShipmentStatus.ACCEPTED, shipmentPackage);
+        shipment.setDistributor(carrier(12L));
+        shipment.setComment("call first");
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("not mine"), CARRIER_ID));
+
+        assertStatus(thrown, HttpStatus.FORBIDDEN);
+        assertThat(thrown).hasMessageContaining("assigned to, or by logistics");
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
+        // The reason a refused carrier typed does not replace the planner's note.
+        assertThat(shipment.getComment()).isEqualTo("call first");
+        assertThat(shipment.getPackages()).containsExactly(shipmentPackage);
+        verify(orderProgress, never()).recompute(any(), any());
+    }
+
+    /** A shipment nobody has been assigned is not any carrier's. */
+    @Test
+    void aCarrierMayNotCancelAShipmentNobodyWasAssigned() {
+        Shipment shipment = existingShipment(ShipmentStatus.READY, packed(5L));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("why not"), CARRIER_ID));
+
+        assertStatus(thrown, HttpStatus.FORBIDDEN);
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.READY);
+    }
+
+    /** Asked before the status: a carrier poking at somebody else's shipment learns nothing about where it stands. */
+    @Test
+    void theOwnerIsAskedBeforeTheStatus() {
+        Shipment shipment = existingShipment(ShipmentStatus.IN_TRANSIT, packed(5L));
+        shipment.setDistributor(carrier(12L));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("late"), CARRIER_ID));
+
+        assertStatus(thrown, HttpStatus.FORBIDDEN);
+    }
+
+    /** The planning side calls off any shipment, whoever it was handed to. */
+    @Test
+    void thePlanningSideMayCancelAShipmentAssignedToAnyCarrier() {
+        Shipment shipment = existingShipment(ShipmentStatus.DISPATCH_REQUESTED, packed(5L));
+        shipment.setDistributor(carrier(12L));
+        orderInShipment(OrderStatus.IN_FULFILLMENT);
+
+        service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("customer called"), PLANNER_ID);
+
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.CANCELLED);
+    }
+
+    /** A carrier who is also the one assigned does not need the planning roles - and vice versa, the roles are asked by id. */
+    @Test
+    void theRolesAreAskedForTheActingUser() {
+        Shipment shipment = existingShipment(ShipmentStatus.READY, packed(5L));
+        shipment.setDistributor(carrier(12L));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.cancelShipment(SHIPMENT_ID, new CancelShipmentRequest("x"), CARRIER_ID));
+
+        assertStatus(thrown, HttpStatus.FORBIDDEN);
+        verify(roleService).hasAnyRole(CARRIER_ID, RoleEnum.ADMIN, RoleEnum.LOGISTICS);
+    }
+
     /** A shipment called off before it was ever reported ready touches no line and no order. */
     @Test
     void cancelOfACreatedShipmentMovesNothingBack() {
@@ -907,7 +1065,10 @@ class ShipmentServiceImplTest {
     void listsAllShipmentsWithoutAStatus() {
         Shipment shipment = existingShipment(ShipmentStatus.CREATED, packed(6L), packed(5L));
         PageRequest pageable = PageRequest.of(0, 25);
-        when(shipmentRepository.findAllWithCustomerBy(pageable)).thenReturn(new PageImpl<>(List.of(shipment), pageable, 1));
+        // The page is asked with the id as the tie-break: shipments created together share everything a
+        // column can sort by, and a database may order such ties differently on the next page.
+        when(shipmentRepository.findAllWithCustomerBy(PageRequest.of(0, 25, Sort.by("id"))))
+                .thenReturn(new PageImpl<>(List.of(shipment), pageable, 1));
         when(shipmentRepository.findWithPackagesByIdIn(anyCollection())).thenReturn(List.of(shipment));
 
         var page = service.findShipments(null, pageable);
@@ -915,6 +1076,22 @@ class ShipmentServiceImplTest {
         assertThat(page.getContent()).singleElement()
                 .satisfies(row -> assertThat(row.shipmentPackageIds()).containsExactly(5L, 6L));
         verify(shipmentRepository, never()).findAllWithCustomerByStatus(any(), any());
+    }
+
+    /** The caller's sort stays, the id comes after it; a sort by id is not given a second id. */
+    @Test
+    void addsTheIdAsTheLastSortKeyOfTheListWithoutRepeatingIt() {
+        PageRequest byCustomer = PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "customer.lastName"));
+        PageRequest byId = PageRequest.of(2, 10, Sort.by(Sort.Direction.DESC, "id"));
+        when(shipmentRepository.findAllWithCustomerBy(any())).thenReturn(Page.empty(byCustomer));
+        when(shipmentRepository.findAllWithCustomerByStatus(any(), any())).thenReturn(Page.empty(byCustomer));
+
+        service.findShipments(null, byCustomer);
+        service.findShipments(ShipmentStatus.READY, byId);
+
+        verify(shipmentRepository).findAllWithCustomerBy(
+                PageRequest.of(0, 25, Sort.by(Sort.Order.desc("customer.lastName"), Sort.Order.asc("id"))));
+        verify(shipmentRepository).findAllWithCustomerByStatus(ShipmentStatus.READY, byId);
     }
 
     // ------------------------------------------------------------------ what may still be shipped

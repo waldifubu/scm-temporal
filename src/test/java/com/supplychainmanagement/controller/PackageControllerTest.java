@@ -147,8 +147,48 @@ class PackageControllerTest {
                 .andExpect(jsonPath("$.content[0].shipmentPackageId").value(nullValue()))
                 .andExpect(jsonPath("$.total").value(1));
 
-        verify(packageQueryService).findLoosePackageItems(PageRequest.of(0, 10, Sort.by(Sort.Direction.ASC, "id")));
+        // No sort asked: when the item was made, then the number of its order.
+        verify(packageQueryService).findLoosePackageItems(PageRequest.of(0, 10,
+                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo"))));
         verify(packageQueryService, never()).findPackageItems(any());
+    }
+
+    /** The default of the item list: created first, then the order number - both ways round with {@code order}. */
+    @Test
+    void sortsTheItemListByCreatedThenByOrderNumberWhenNoSortIsAsked() throws Exception {
+        when(packageQueryService.findPackageItems(any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
+
+        mockMvc.perform(get("/api/1.0/packages")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/packages").param("order", "DESC")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/packages").param("sort", "")).andExpect(status().isOk());
+
+        verify(packageQueryService, org.mockito.Mockito.times(2)).findPackageItems(PageRequest.of(0, 25,
+                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo"))));
+        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25,
+                Sort.by(Sort.Order.desc("created"), Sort.Order.desc("orderItem.order.orderNo"))));
+    }
+
+    /** A sort that is asked for stays that one key - the default is what is there when nothing is asked. */
+    @Test
+    void keepsASortThatIsAskedFor() throws Exception {
+        when(packageQueryService.findPackageItems(any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
+
+        mockMvc.perform(get("/api/1.0/packages").param("sort", "id").param("order", "DESC")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/packages").param("sort", "orderItem.order.orderNo")).andExpect(status().isOk());
+
+        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "id")));
+        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "orderItem.order.orderNo")));
+    }
+
+    /** An unknown key is still a 400 naming what is allowed - the missing default does not let anything through. */
+    @Test
+    void stillRefusesAKeyThatIsNotOnTheList() throws Exception {
+        mockMvc.perform(get("/api/1.0/packages").param("sort", "password")).andExpect(status().isBadRequest());
+        mockMvc.perform(get("/api/1.0/lonely-packages").param("sort", "nope")).andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packageQueryService);
     }
 
     @Test

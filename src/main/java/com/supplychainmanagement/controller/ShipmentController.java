@@ -34,10 +34,13 @@ public class ShipmentController {
 
     /**
      * What {@code sort} may name on the shipment lists (here and {@code GET /shipments/distributor}): the
-     * shipment's own columns. Package private, so a test can walk every entry against the real query.
+     * shipment's own columns, and the last names of the customer and the distributor - what a table shows
+     * as the two names. {@code distributor.lastName} is a left join (the distributor is optional), so a
+     * shipment without one is sorted, not dropped. Package private, so a test can walk every entry against
+     * the real query.
      */
     static final Set<String> SHIPMENT_SORTABLE = Set.of("id", "status", "requestedDeliveryDate", "trackingNumber",
-            "shippingMethod", "createdAt", "shippedAt", "deliveredAt");
+            "shippingMethod", "createdAt", "shippedAt", "deliveredAt", "customer.lastName", "distributor.lastName");
 
     private static Pageable pageRequest(int page, int size, String sort, String order, Set<String> sortable) {
         return PageRequests.of(page, size, sort, order, sortable);

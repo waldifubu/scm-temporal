@@ -26,12 +26,16 @@ public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
     @Query("SELECT s FROM Shipment s WHERE s.id = :id")
     Optional<Shipment> findForUpdateById(@Param("id") Long id);
 
-    /** One page of shipments with their customer - a to-one fetch keeps the paging in SQL. */
-    @EntityGraph(attributePaths = "customer")
+    /**
+     * One page of shipments with their customer and distributor - to-one fetches keep the paging in SQL.
+     * The distributor is optional, so it is a left join: a shipment nobody has taken on is still listed,
+     * also when the page is sorted by the distributor's name.
+     */
+    @EntityGraph(attributePaths = {"customer", "distributor"})
     Page<Shipment> findAllWithCustomerBy(Pageable pageable);
 
-    /** One page of shipments in a status, with their customer. */
-    @EntityGraph(attributePaths = "customer")
+    /** One page of shipments in a status, with their customer and distributor. */
+    @EntityGraph(attributePaths = {"customer", "distributor"})
     Page<Shipment> findAllWithCustomerByStatus(ShipmentStatus status, Pageable pageable);
 
     /** One page of the shipments assigned to one distributor, with their customer. */

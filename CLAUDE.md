@@ -528,6 +528,18 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   `GET /shipments/packages` is the planning side's list of what it may still ship - see the note on
   the WAREHOUSE/LOGISTICS split further down. `ShipmentResponse`
   names customer and distributor by id and name only, never the `User` entities.
+  <br>**A list row names the distributor too** (`ShipmentListDto.distributorId` / `distributorName`, both `null` until the
+  shipment has been handed to a carrier - the keys stay in the JSON). **The page can be sorted by the two names**:
+  `SHIPMENT_SORTABLE` (shared with `GET /shipments/distributor`) holds `customer.lastName` and `distributor.lastName`
+  next to the shipment's own columns. The second one is a path through an *optional* association, which is the trap:
+  as an inner join every shipment nobody has taken on would vanish from the list the moment that column is clicked - no
+  error, a shorter table. Spring Data sorts through a left join for an optional association, and the list query
+  fetches `customer` and `distributor` through the `@EntityGraph` (to-one, so it stays paged in SQL).
+  `ShipmentListSortTest` holds it with real rows (a shipment without a carrier stays in both directions; names created
+  against the id order). Both list services add **the id as the tie-break** (`findShipments`, `findShipmentsForDistributor`),
+  as `findPackableItems` does. It is held by the two service unit tests, which stub the repository with the exact page
+  asked (`FIRST_PAGE_BY_ID`, the caller's sort with the id after it, and not repeated for a sort by id) - not by the
+  context test: a small table does not reorder its ties on its own, so an endpoint test cannot see it go.
 - **Reporting a shipment ready** (`PUT /shipments/{id}/ready`, `checkShipmentReady`): read
   `FOR UPDATE` and only from `CREATED` (409 - on a shipment already on its way the call would take
   lines packed again in the meantime back to `READY_FOR_DISPATCH`), with a shipping address (409),
@@ -550,7 +562,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
 - **The carrier's three steps** (ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
   side lives in `DeliveryService`, not in `ShipmentService`; `RoleEnum.LOGISTICS` is the inside role
   that plans shipments, which is why it is not called `LogisticsService`). They answer with
-  `DeliveryResponse`: address, package count, weight and package numbers, **no package contents** -
+  `DeliveryResponse`: address, package count, weight and package numbers, the customer's id, `createdAt`, `updatedAt`, `comment` and `distributorComment` (each left out while empty), **no package contents** -
   the carrier is not shown the customer's SKUs and quantities. The steps are:
   `POST /shipments/{id}/accept` (`DISPATCH_REQUESTED` → `ACCEPTED`),
   `POST /shipments/{id}/intransit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
@@ -562,8 +574,12 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   (`POST /supplier/{requestId}/intransit`) is spelled the same way, so there is one spelling to
   remember now; it used to be hyphenated on that side, which is how the mistake survived.
   <br>There is a fourth, `PATCH /shipments/{id}/trackingnumber` (ADMIN, DISTRIBUTOR): the carrier's
-  own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`), refused once the
-  shipment is `DELIVERED` or `CANCELLED` and only from the assigned distributor. It moves no status
+  own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`, at most 70 characters),
+  **settable only in `DISPATCH_REQUESTED` and `ACCEPTED`** (a positive list, `TRACKING_NUMBER_CHANGEABLE_IN`;
+  409 otherwise) and only from the assigned distributor. **From `IN_TRANSIT` on it is fixed** - it is what the customer
+  is told to follow - and it was not before: the check refused only `DELIVERED`/`CANCELLED`, later `REJECTED`, so a
+  carrier could still change the number of a shipment on the road, and a `CREATED`/`READY` shipment (no carrier
+  assigned) ended in a NullPointerException, a 500, on the missing assignment. It moves no status
   and takes no order along. The body used to be a bare `@RequestBody String` - not a JSON object at
   all; the length bound now lives in one place (`TrackingNumberRequest.MAX_LENGTH`) and the service
   reads it from there, because the service is also reachable from inside, where no bean validation
@@ -644,8 +660,52 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   <br>`linesPastReservation` and the existing `hasLineBeyondReservation` share one predicate, so the
   rule cannot drift; `CANCELLED` deliberately does not count as past reservation - the line holds
   nothing and nothing moved for it.
+- **The carrier says no** (`POST /shipments/{id}/reject`, ADMIN and DISTRIBUTOR, `OutboundController`,
+  `DeliveryService.rejectShipment`): body `{ "reason": "..." }` (`RejectShipmentRequest`, shaped like
+  `CancelShipmentRequest`, at most 255 characters because the column is a plain `varchar(255)` - a longer one is a 400,
+  not a database 500). `DISPATCH_REQUESTED -> REJECTED` and the reason into **`Shipment.distributorComment`** - the
+  carrier's own note, apart from `comment`, which stays the planner's (a cancellation writes its reason into
+  `comment`, a rejection never does). **It does nothing else, on purpose**: the packages stay in the shipment, no
+  line and no order moves, `OrderProgressService` is not asked. DISPATCH_REQUESTED only, like `accept` - declining
+  what was offered, before anything was promised; after `accept`, backing out is a cancellation (409 otherwise).
+  Only the assigned distributor (403 for another one, asked before the status), ADMIN exempt, blank reason 400.
+  Both answers show the reason: `DeliveryResponse.distributorComment` and `ShipmentResponse.distributorComment`
+  (left out while null). `shipment.status` needed its CHECK widened for the new value:
+  `StatusCheckConstraintMigration` covers it now, and `StatusCheckConstraintTest.takesEveryShipmentStatus` writes
+  every value. `DeliveryServiceImplTest`, `OutboundControllerTest` and `ShipmentRejectTest` (real chain and rows)
+  hold it; four mutations - ownership, status, the wrong field, order progress asked as well - turn them red.
+  <br>**`accept` takes the same kind of note** (`POST /shipments/{id}/accept`, body `AcceptShipmentRequest`
+  `{ "reason": "..." }`): kept in `distributorComment` too, so the field is the carrier's note on the shipment whichever
+  way they answered. **Optional here** - the body itself is optional (`@RequestBody(required = false)`, so a client
+  that sends none keeps working), and an empty or blank `reason` leaves the comment as it was; required only for
+  `reject`. At most 255 characters, a 400 above. `DeliveryService.acceptShipment(id, reason, userId)`, with the old
+  two-argument form kept as a default method. The page has one `reason` field above the Accept and Reject buttons
+  and both send it.
+  <br>**The way out of a rejection is `PUT /shipments/{id}/distributor/{id}`**: `assignDistributor` takes `REJECTED` next to
+  `READY` and `DISPATCH_REQUESTED` (409 otherwise, the message names all three), hands the shipment to the new carrier
+  (back to `DISPATCH_REQUESTED`) and **clears `distributorComment`** - the note belongs to the carrier who typed it, and
+  the next one is not shown it as if it were about them. The planner's `comment` and the packages are not touched. The
+  first carrier then gets a 403 for the shipment. `ShipmentServiceImplTest` and `ShipmentRejectTest` hold it. The page
+  offers the button in `REJECTED` (see `ASSIGNABLE_STATES` in the frontend), marking the carrier who said no as
+  "rejected" and not selectable again.
+  <br>**Still not decided, so not done:** `cancel` (`CANCELLABLE_IN`) and the data change (`DATA_CHANGEABLE_IN`) do not
+  list `REJECTED`, so a rejected shipment can be handed on but not called off or edited before that, and its packages
+  stay in it until it is. Because no recompute runs on a rejection, its orders keep the status they had until the next
+  shipment event touches them; `OrderProgressServiceImpl` ignores `REJECTED` (not in its coverage sets), so the next
+  recompute sees the shipment as not covering anything. `assignTrackingNumber` still accepts a rejected shipment (it
+  refuses only `DELIVERED`/`CANCELLED`).
 - **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN, LOGISTICS **and DISTRIBUTOR** -
-  one endpoint for both sides): only up to
+  one endpoint for both sides). **A carrier may only call off the shipment assigned to them**
+  (`ShipmentServiceImpl.requireMayCancel`, asked before the status like the carrier's other steps): ADMIN and
+  LOGISTICS - the planning side - may cancel any shipment, the assigned distributor their own, **anybody else with
+  the DISTRIBUTOR role is a 403, and so is a carrier for a shipment nobody has been assigned**. Until 2026-10-25 the
+  endpoint checked nothing of the sort: any carrier could call off any shipment of the house by its id, and the
+  reason they typed replaced the shipment's `comment` (the planner's note). It reads the roles by id
+  (`RoleService.hasAnyRole(userId, roles)`, the general form of `isAdmin(Long)`) because the service only
+  knows the acting user by id. `ShipmentServiceImplTest` (five cases: owner, other carrier, unassigned, owner asked
+  before status, planner for any carrier) and `ShipmentCancelOwnerTest` (real chain and rows) hold it; removing the
+  check or dropping LOGISTICS from the exemption turns both red.
+  <br>Cancelling is only possible up to
   `ACCEPTED` (409 afterwards - once it rolls it is a return, which the process does not model), and
   only with a reason (400), which is kept in `comment`. It undoes what the shipment had set in
   motion: the packages are loose again and stay `PACKED`, lines go from `READY_FOR_DISPATCH` back to
@@ -1116,6 +1176,50 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   disabled supplier too (409 `Supplier N is deactivated ...`, checked right after the "is a supplier" test and
   before the components are looked up, nothing saved): the list hid them, but an id noted earlier still worked.
   A missing flag counts as not active.
+- **What one article holds is `GET /stock/{sku}`** (ADMIN and WAREHOUSE, `StockController`): a list of
+  `StockResponse`, one row per storehouse, **by storehouse name** (then id - the finder gives no order, and a table
+  wants the same rows in the same place), optional `?storehouseId=` (0 = all). **Nothing stored - or nothing in the
+  storehouse asked for - is `200 []`, not a 404**: it was `ResourceNotFoundException`, which a product page listing
+  the stock of an article had to read as an empty table. An unknown SKU looks the same; the catalogue
+  (`GET /products/sku/{sku}`) is where that is told apart. The page needs the SKU from `ProductDto.sku`, then asks
+  this - MANAGER and CUSTOMER may read `/products` but get a 403 here, so a client shows the card to
+  ADMIN/WAREHOUSE only. `StockBySkuEndpointTest` runs it against the real chain and rows (empty article, empty
+  storehouse filter, name order with names created against the id order, the 403s); mutations - the throw put back,
+  the sort removed - turn it red.
+- **The two people lists for picking from: `GET /users/distributors` and `GET /users/suppliers`**
+  (`UserController`, `UserService.findDistributors` / `findSuppliers`, answered as `UserDto`, paged like `/users`
+  with the same `USER_SORTABLE`). They exist because the roles that *assign* a carrier or *place* a request may not
+  read the rest of `/users`: LOGISTICS hands a shipment over (`PUT /shipments/{id}/distributor/{distributorId}`)
+  and WAREHOUSE orders components, and neither could learn an id. **The roles differ on purpose, each is the set
+  that may do the thing the list is for**: distributors ADMIN, MANAGER, LOGISTICS; suppliers ADMIN, MANAGER,
+  WAREHOUSE - WAREHOUSE gets a 403 on the carriers and LOGISTICS one on the suppliers, and neither opens the rest of
+  `/users`. **Active accounts only** on both (a disabled account cannot log in, so it could never accept a
+  shipment or approve a request - it would sit in `DISPATCH_REQUESTED` / `OPEN` for good). Both go through a
+  repository typed on the subclass (`DistributorRepository`, `SupplierRepository`), so the `user_type`
+  discriminator is Hibernate's and cannot be forgotten. The literal segments win over `GET /users/{id}`.
+  `DistributorsEndpointTest` and `SuppliersEndpointTest` run them against the real chain and rows; mutations -
+  a role added or dropped, the active filter removed - turn them red.
+  <br>Unlike `GET /components/suppliers` (id and name only, WAREHOUSE-safe) these carry the full `UserDto`:
+  user name, e-mail address and roles. That is the design chosen for the planning side; note it when widening a role.
+  <br>`PUT /shipments/{id}/distributor/{id}` itself **does not check that the distributor is active** - the list
+  hides disabled carriers, the endpoint accepts a known id, the same gap `requestComponents` had for suppliers
+  until it was closed. Not changed here.
+- **The package item lists sort by what their table shows** (`GET /packages`, `GET /lonely-packages`): next to the
+  item's own `id`, `runNo`, `quantity` and `created`, `PACKAGE_ITEM_SORTABLE` takes `orderItem.id`,
+  `orderItem.order.orderNo`, `orderItem.quantity`, `orderItem.fulfillmentStatus` and `shipmentPackage.id`. The page
+  groups its rows by order number, so sorting by it is the point; `siblings` stays unsortable (worked out per row).
+  **Without a `sort` the lists are ordered by `created`, then by the order number** (`PackageController.itemPageRequest`;
+  two keys, so it is not a default value of the parameter, which is optional now - it was `id`), `order` turning both;
+  the id is added after them. A `sort` that is asked for stays that one key. `PackageControllerTest` holds the pages
+  asked, `PackageListSortTest` the order with real rows (items made in the order third, first, second come back in that
+  order, not by number). The page sends no `sort` at start and marks `createdAt`.
+  `shipmentPackage.id` is a path through an *optional* association - a loose item has no package - and Spring Data sorts
+  through a left join there, so loose items are sorted and not dropped from the list when that column is clicked
+  (`PackageListSortTest` holds it with real rows). Both lists add **the id as the tie-break**
+  (`PackageQueryServiceImpl.withIdTieBreak`): items of one order share the sort value, which is exactly the case a sort
+  by order number is for, and with ties the database may order the same rows differently on the next page. Held by
+  `PackageQueryServiceImplTest` (the exact page asked) and not by the context test - a small table does not reorder its
+  ties on its own.
 - **Storehouses are listed, read-only** (`GET /storehouses`, ADMIN and WAREHOUSE,
   `StorehouseController`/`StorehouseService`, `StorehouseResponse`): two warehouse operations take a
   `storehouseId` - the goods receipt and `POST /stock/add` - and nothing said which ids exist, so a

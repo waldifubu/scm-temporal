@@ -1,5 +1,7 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.repository.ShipmentRepository;
+import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.entity.OrderItem;
@@ -74,6 +76,8 @@ class StatusCheckConstraintTest {
     private RequestComponentRepository requestComponentRepository;
     @Autowired
     private ComponentRepository componentRepository;
+    @Autowired
+    private ShipmentRepository shipmentRepository;
 
     private Order orderInStatus(OrderStatus status) {
         User customer = testData.customer();
@@ -147,5 +151,21 @@ class StatusCheckConstraintTest {
                 .build();
 
         assertThatCode(() -> orderHistoryRepository.saveAndFlush(entry)).doesNotThrowAnyException();
+    }
+
+    /**
+     * The same for a shipment. REJECTED is the value that would have run into the check Hibernate wrote
+     * when the table was created - the carrier's "no" would have come back as a 500 on a shipment that
+     * is perfectly well.
+     */
+    @ParameterizedTest
+    @EnumSource(ShipmentStatus.class)
+    void takesEveryShipmentStatus(ShipmentStatus status) {
+        com.supplychainmanagement.entity.Shipment shipment = new com.supplychainmanagement.entity.Shipment();
+        shipment.setCustomer(testData.customer());
+        shipment.setStatus(status);
+        shipment.setCreatedAt(java.time.LocalDateTime.now());
+
+        assertThatCode(() -> shipmentRepository.saveAndFlush(shipment)).doesNotThrowAnyException();
     }
 }

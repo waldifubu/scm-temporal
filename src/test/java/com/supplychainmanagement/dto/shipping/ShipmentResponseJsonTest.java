@@ -57,4 +57,23 @@ class ShipmentResponseJsonTest {
     void alwaysCarriesThePackagesList() {
         assertThat(jsonOf("Musterstr. 1")).contains("\"packages\":[]");
     }
+
+    /** The planner's detail page shows when the shipment last changed. */
+    @Test
+    void carriesWhenTheShipmentLastChanged() {
+        Shipment shipment = new Shipment();
+        shipment.setId(50L);
+        shipment.setStatus(ShipmentStatus.READY);
+        shipment.setUpdatedAt(java.time.LocalDateTime.of(2026, 10, 25, 9, 30, 0));
+
+        ShipmentResponse response = ShipmentResponse.from(shipment, List.of(), null);
+
+        assertThat(response.updatedAt()).isEqualTo(java.time.LocalDateTime.of(2026, 10, 25, 9, 30, 0));
+        assertThat(mapper.writeValueAsString(response)).contains("\"updatedAt\"");
+    }
+
+    @Test
+    void leavesTheUpdateOutWhileThereIsNone() {
+        assertThat(jsonOf("Musterstr. 1")).doesNotContain("updatedAt");
+    }
 }

@@ -11,7 +11,9 @@ import com.supplychainmanagement.service.PackageItemResponseAssembler;
 import com.supplychainmanagement.service.PackageQueryService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -67,7 +69,20 @@ public class PackageQueryServiceImpl implements PackageQueryService {
     @Override
     @Transactional(readOnly = true)
     public Page<PackageItemResponse> findPackageItems(Pageable pageable) {
-        return packageItemResponseAssembler.toResponses(packageItemRepository.findAllWithProductBy(pageable));
+        return packageItemResponseAssembler.toResponses(
+                packageItemRepository.findAllWithProductBy(withIdTieBreak(pageable)));
+    }
+
+    /**
+     * The id after whatever the caller sorts by. Items packed together share their order, their line and their
+     * moment, and a table sorted by order number is exactly the case of many rows with the same value - with
+     * ties the database may order the same rows differently on the next page: one item twice, another never.
+     */
+    private static Pageable withIdTieBreak(Pageable pageable) {
+        Sort sort = pageable.getSort().getOrderFor("id") == null
+                ? pageable.getSort().and(Sort.by("id"))
+                : pageable.getSort();
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort);
     }
 
     /**
@@ -78,7 +93,7 @@ public class PackageQueryServiceImpl implements PackageQueryService {
     @Transactional(readOnly = true)
     public Page<PackageItemResponse> findLoosePackageItems(Pageable pageable) {
         return packageItemResponseAssembler.toResponses(
-                packageItemRepository.findAllWithProductByShipmentPackageIsNull(pageable));
+                packageItemRepository.findAllWithProductByShipmentPackageIsNull(withIdTieBreak(pageable)));
     }
 
     /** One package item - the same row the lists show; unknown id is a 404. */

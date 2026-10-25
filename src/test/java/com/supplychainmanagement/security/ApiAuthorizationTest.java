@@ -111,6 +111,10 @@ class ApiAuthorizationTest {
                 get("/api/1.0/shipments", RoleEnum.ADMIN, RoleEnum.LOGISTICS),
                 // The planning side's own view of what it may ship - the overlap's replacement.
                 get("/api/1.0/shipments/packages", RoleEnum.ADMIN, RoleEnum.LOGISTICS),
+                // The carriers a shipment can be handed to.
+                get("/api/1.0/users/distributors", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.LOGISTICS),
+                // The suppliers a component request can be placed with - the roles that may place one.
+                get("/api/1.0/users/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // The carrier reports; the house plans.
                 get("/api/1.0/shipments/distributor", RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/accept", null, RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
@@ -120,6 +124,8 @@ class ApiAuthorizationTest {
                 patch("/api/1.0/shipments/1/trackingnumber", "{\"trackingNumber\": \"DHL-123\"}",
                         RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 // One cancel for both sides, which was two endpoints on one path before.
+                // The carrier turns a shipment down - theirs, with a reason.
+                post("/api/1.0/shipments/1/reject", "{\"reason\": \"no truck free\"}", RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/cancel", "{\"reason\": \"no truck\"}",
                         RoleEnum.ADMIN, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 // The component catalogue: the warehouse reads it because it orders parts.

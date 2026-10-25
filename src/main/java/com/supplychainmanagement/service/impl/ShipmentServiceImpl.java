@@ -17,6 +17,7 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
@@ -25,11 +26,14 @@ import com.supplychainmanagement.repository.ShipmentPackageRepository;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.OrderProgressService;
+import com.supplychainmanagement.service.RoleService;
 import com.supplychainmanagement.service.ShipmentService;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -65,6 +69,7 @@ public class ShipmentServiceImpl implements ShipmentService {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final UserRepository userRepository;
+    private final RoleService roleService;
     private final OrderProgressService orderProgress;
 
     /**
@@ -207,9 +212,15 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Override
     @Transactional(readOnly = true)
     public Page<ShipmentListDto> findShipments(ShipmentStatus status, Pageable pageable) {
+        // Shipments created together share a status, a date, a carrier - and with ties the database may
+        // order the same rows differently on the next page: one shipment twice, another never. The id settles it.
+        Sort sort = pageable.getSort().getOrderFor("id") == null
+                ? pageable.getSort().and(Sort.by("id"))
+                : pageable.getSort();
+        Pageable ordered = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort);
         Page<Shipment> page = status == null
-                ? shipmentRepository.findAllWithCustomerBy(pageable)
-                : shipmentRepository.findAllWithCustomerByStatus(status, pageable);
+                ? shipmentRepository.findAllWithCustomerBy(ordered)
+                : shipmentRepository.findAllWithCustomerByStatus(status, ordered);
         if (page.isEmpty()) {
             return page.map(ShipmentListDto::from);
         }
@@ -277,11 +288,13 @@ public class ShipmentServiceImpl implements ShipmentService {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
-        var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED);
+        // REJECTED is here so the planner can hand a shipment on to another carrier once the first one has
+        // turned it down - the way out of what would otherwise be a dead end.
+        var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.REJECTED);
 
         if(!allowedStatuses.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
-                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in READY or DISPATCH_REQUESTED status");
+                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in READY, DISPATCH_REQUESTED or REJECTED status");
         }
 
         // Checked before it is used as one, and on the unproxied instance: a cast up front fails any
@@ -290,6 +303,11 @@ public class ShipmentServiceImpl implements ShipmentService {
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", distributorId));
         if (!(Hibernate.unproxy(user) instanceof Distributor distributor)) {
             throw new APIException(HttpStatus.BAD_REQUEST, "User " + distributorId + " is not a distributor");
+        }
+        // The note of the carrier who turned the shipment down is theirs: the next one is not shown it as if it
+        // were about them. The packages were never touched by a rejection, so nothing else has to be undone.
+        if (shipment.getStatus() == ShipmentStatus.REJECTED) {
+            shipment.setDistributorComment(null);
         }
         shipment.setDistributor(distributor);
         shipment.setStatus(ShipmentStatus.DISPATCH_REQUESTED);
@@ -323,6 +341,10 @@ public class ShipmentServiceImpl implements ShipmentService {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
+        // Asked before the status, like the carrier's own steps: somebody poking at a shipment that is not
+        // theirs learns nothing about where it stands.
+        requireMayCancel(shipment, userId);
+
         if (!CANCELLABLE_IN.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
                     + shipment.getStatus() + ", it can only be cancelled up to " + ShipmentStatus.ACCEPTED);
@@ -349,6 +371,29 @@ public class ShipmentServiceImpl implements ShipmentService {
         shipmentRepository.save(shipment);
 
         return toResponse(shipment);
+    }
+
+    /**
+     * Who may call a shipment off: the planning side - ADMIN and LOGISTICS, which put it together and
+     * may take it apart - and the one distributor it was assigned to. Any other carrier is a 403, and so is
+     * a carrier for a shipment nobody has been assigned: it is not theirs either.
+     * <p>
+     * The endpoint is open to DISTRIBUTOR as well, because a carrier has to be able to refuse what was
+     * handed to it. Without this check every carrier could call off any shipment of the house by its
+     * id - and the reason they give replaces the shipment's comment.
+     */
+    private void requireMayCancel(Shipment shipment, Long userId) {
+        if (roleService.hasAnyRole(userId, RoleEnum.ADMIN, RoleEnum.LOGISTICS)) {
+            return;
+        }
+
+        Distributor assigned = shipment.getDistributor();
+        if (assigned != null && Objects.equals(assigned.getId(), userId)) {
+            return;
+        }
+
+        throw new APIException(HttpStatus.FORBIDDEN, "Shipment " + shipment.getId()
+                + " can only be cancelled by the distributor it is assigned to, or by logistics");
     }
 
     @Override
