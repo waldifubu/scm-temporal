@@ -7,14 +7,13 @@ import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Picking - the reservations waiting to be picked and picking them, one reservation or a whole
@@ -33,23 +32,34 @@ import java.util.List;
 @RequestMapping({"/api/{version}"})
 public class PickingController {
 
+    /**
+     * What {@code sort} may name on the picking list: the reservation's own columns - the list is a
+     * projection rooted in {@code Reservation}, so a column of the order line or the product is not
+     * resolvable. Package private, so a test can walk every entry against the real query.
+     */
+    static final Set<String> PICKING_SORTABLE = Set.of("id", "sku", "quantity", "status", "createdAt", "expiresAt", "consumedAt");
+
     private final OrderHandlingService orderHandlingService;
 
     /**
      * Paged like the order list in {@code OrderController.list}, down to the parameter names, so the
      * two list views are driven the same way. Sorted by {@code expiresAt} by default: the
      * reservation closest to expiry is the one to pick first.
+     * <p>
+     * {@code status} says which stage is listed: {@code ACTIVE} (the default) is what is still to be
+     * picked, {@code CONSUMED} what has been picked - the reservation behind a line that
+     * {@code GET /order-items/packable} offers for packing. Read by the manager as well as by the
+     * warehouse; picking itself stays with ADMIN and WAREHOUSE.
      */
     @GetMapping(path = "/picking-orders", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
     public PageResponse<PickingOrderDto> getPickingOrders(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "expiresAt") String sort,
             @RequestParam(defaultValue = "ACTIVE") ReservationStatus status,
             @RequestParam(defaultValue = "ASC") String order) {
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        Pageable pageable = PageRequests.of(page, size, sort, order, PICKING_SORTABLE);
 
         return PageResponse.of(orderHandlingService.pickingOrders(status, pageable));
     }

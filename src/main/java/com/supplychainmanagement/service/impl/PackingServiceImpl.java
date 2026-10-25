@@ -21,6 +21,11 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -32,6 +37,26 @@ public class PackingServiceImpl implements PackingService {
     private final OrderItemRepository orderItemRepository;
     private final ShipmentPackageRepository shipmentPackageRepository;
     private final PackageItemRepository packageItemRepository;
+
+    /**
+     * A line is open for packing while it is PICKED (nothing packed) or PACKING (some of it);
+     * {@link #packLine} sets it PACKED the moment it is full, so those two are exactly the lines with
+     * room left.
+     */
+    static final List<FulfillmentStatus> PACKABLE_STATUSES =
+            List.of(FulfillmentStatus.PICKED, FulfillmentStatus.PACKING);
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<PackableItemDto> findPackableItems(Long orderNo, Pageable pageable) {
+        // Lines picked in one go share their sort value, and with ties the database may order the
+        // same rows differently on the next page - one line twice, another never. The id settles it.
+        Sort sort = pageable.getSort().getOrderFor("id") == null
+                ? pageable.getSort().and(Sort.by("id"))
+                : pageable.getSort();
+        return orderItemRepository.findPackable(PACKABLE_STATUSES, orderNo,
+                PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), sort));
+    }
 
     /**
      * Rejects the whole request before a single line is locked or changed.
@@ -143,8 +168,9 @@ public class PackingServiceImpl implements PackingService {
 
         itemIdsByLineRun.forEach((lineRun, itemIds) -> {
             if (itemIds.size() > 1) {
+                String packageName = shipmentPackageId != null ? "ShipmentPackage " + shipmentPackageId : "the new package";
                 throw new APIException(HttpStatus.CONFLICT, "OrderItem " + lineRun.orderItemId()
-                        + " from run " + lineRun.runNo() + " would be in ShipmentPackage " + shipmentPackageId
+                        + " from run " + lineRun.runNo() + " would be in " + packageName
                         + " twice, as package items " + itemIds);
             }
         });
@@ -394,6 +420,32 @@ public class PackingServiceImpl implements PackingService {
         return shipmentPackageRepository.save(shipmentPackage);
     }
 
+    @Override
+    @Transactional
+    public ShipmentPackage createPackageFromItems(CreatePackageFromItemsRequest request) {
+        if (request.packageItems() == null || request.packageItems().isEmpty()) {
+            // Bean validation says it first at the endpoint; the service is reachable from inside too.
+            throw new APIException(HttpStatus.BAD_REQUEST, "At least one package item id is required");
+        }
+
+        // Locked in ascending id order, like every other change of what a package holds: two
+        // concurrent requests for overlapping items cannot then both see them loose.
+        List<PackageItem> requested = findPackageItemsForUpdate(request.packageItems());
+
+        ShipmentPackage shipmentPackage = newShipmentPackage(request.packageNumber(),
+                request.shipmentPackageType(), request.length(), request.width(), request.height());
+
+        // The package has no id yet, so no item can already be "in" it: whatever sits in a package
+        // is in another one.
+        requireLooseOrIn(shipmentPackage, requested);
+        requireOneOrder(null, requested);
+        requireOneItemPerLineAndRun(null, requested);
+
+        requested.forEach(item -> attach(item, shipmentPackage));
+
+        return shipmentPackageRepository.save(shipmentPackage);
+    }
+
     /**
      * Replaces the package's own data with the defaults a new package gets - see
      * {@link UpdatePackageRequest}. Its contents are changed through the item methods below.
@@ -568,11 +620,17 @@ public class PackingServiceImpl implements PackingService {
      * {@link #createCustomShipment}, so the two cannot drift apart in how a package is set up.
      */
     private ShipmentPackage newShipmentPackage(CreatePackageRequest request) {
-        ShipmentPackage shipmentPackage = new ShipmentPackage();
-        shipmentPackage.setPackageNumber(request.packageNumber() != null ? request.packageNumber() : generatePackageNumber());
-        shipmentPackage.setShipmentPackageStatus(ShipmentPackageStatus.OPEN);
-        applyPackageFields(shipmentPackage, request.shipmentPackageType(),
+        return newShipmentPackage(request.packageNumber(), request.shipmentPackageType(),
                 request.length(), request.width(), request.height());
+    }
+
+    /** An OPEN package with the given data - no number means a generated one, no type means OTHER. */
+    private ShipmentPackage newShipmentPackage(String packageNumber, ShipmentPackageType type,
+                                               BigDecimal length, BigDecimal width, BigDecimal height) {
+        ShipmentPackage shipmentPackage = new ShipmentPackage();
+        shipmentPackage.setPackageNumber(packageNumber != null ? packageNumber : generatePackageNumber());
+        shipmentPackage.setShipmentPackageStatus(ShipmentPackageStatus.OPEN);
+        applyPackageFields(shipmentPackage, type, length, width, height);
 
         return shipmentPackage;
     }

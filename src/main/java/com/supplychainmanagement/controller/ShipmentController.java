@@ -7,14 +7,13 @@ import com.supplychainmanagement.service.ShipmentService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
+import java.util.Set;
 
 /**
  * Shipments as LOGISTICS plans them: creating them from PACKED packages of one customer, changing
@@ -33,9 +32,15 @@ public class ShipmentController {
     private final ShipmentService shipmentService;
     private final UserService userService;
 
-    private static Pageable pageRequest(int page, int size, String sort, String order) {
-        Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        return PageRequest.of(page, size, Sort.by(direction, sort));
+    /**
+     * What {@code sort} may name on the shipment lists (here and {@code GET /shipments/distributor}): the
+     * shipment's own columns. Package private, so a test can walk every entry against the real query.
+     */
+    static final Set<String> SHIPMENT_SORTABLE = Set.of("id", "status", "requestedDeliveryDate", "trackingNumber",
+            "shippingMethod", "createdAt", "shippedAt", "deliveredAt");
+
+    private static Pageable pageRequest(int page, int size, String sort, String order, Set<String> sortable) {
+        return PageRequests.of(page, size, sort, order, sortable);
     }
 
     /**
@@ -100,7 +105,7 @@ public class ShipmentController {
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(required = false) ShipmentStatus status,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(shipmentService.findShipments(status, pageRequest(page, size, sort, order)));
+        return PageResponse.of(shipmentService.findShipments(status, pageRequest(page, size, sort, order, SHIPMENT_SORTABLE)));
     }
 
     /**
@@ -125,7 +130,7 @@ public class ShipmentController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(shipmentService.findShippablePackages(pageRequest(page, size, sort, order)));
+        return PageResponse.of(shipmentService.findShippablePackages(pageRequest(page, size, sort, order, PackageController.SHIPMENT_PACKAGE_SORTABLE)));
     }
 
     /**

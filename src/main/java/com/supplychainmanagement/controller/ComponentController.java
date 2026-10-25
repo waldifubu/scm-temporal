@@ -12,8 +12,6 @@ import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -22,11 +20,19 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.Set;
 
 @RestController
 @RequestMapping({"/api/{version}/components"})
 @AllArgsConstructor
 public class ComponentController {
+
+    /**
+     * What {@code sort} may name on the warehouse's request list: the request's own columns, under the
+     * entity's names ({@code requestStatus}, not {@code status}). Package private, so a test can walk
+     * every entry against the real query.
+     */
+    static final Set<String> REQUEST_SORTABLE = Set.of("id", "qty", "requestDate", "requestStatus", "updated");
 
     /** What the supplier list may be sorted by - see {@link PageRequests}. */
     private static final java.util.Set<String> SUPPLIER_SORTABLE = java.util.Set.of("id", "firstName", "lastName");
@@ -89,9 +95,8 @@ public class ComponentController {
             @RequestParam(defaultValue = "requestDate") String sort,
             @RequestParam(required = false) RequestStatus status,
             @RequestParam(defaultValue = "ASC") String order) {
-        Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
         return PageResponse.of(componentService.findRequests(
-                status, PageRequest.of(page, size, Sort.by(direction, sort))));
+                status, PageRequests.of(page, size, sort, order, REQUEST_SORTABLE)));
     }
 
 /*

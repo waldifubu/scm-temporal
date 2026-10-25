@@ -9,13 +9,12 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import java.util.Set;
 
 @RestController
 @RequiredArgsConstructor
@@ -24,6 +23,14 @@ public class UserController {
 
     private final UserService userService;
     private final UserMapper userMapper;
+
+    /**
+     * What {@code sort} may name on the user list. {@code password} is deliberately not among them: a page
+     * ordered by the hash says something about the hash. Package private, so a test can walk every entry
+     * against the real query.
+     */
+    static final Set<String> USER_SORTABLE = Set.of("id", "username", "email", "firstName", "lastName", "userType",
+            "isActive", "color", "lastLogin", "createdAt", "updatedAt");
 
     @NoCheck
     @GetMapping(path = "", version = "1.0")
@@ -34,8 +41,7 @@ public class UserController {
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order) {
 
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        Pageable pageable = PageRequests.of(page, size, sort, order, USER_SORTABLE);
         return toPageResponse(userService.findAll(pageable));
     }
 

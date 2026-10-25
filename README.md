@@ -173,8 +173,22 @@ Which service owns which stretch — one controller per service, named after wha
   second time — on MariaDB 11.6+ (`innodb_snapshot_isolation`) that second update fails with
   `Record has changed since last read in table 'reservation'`. Picking a line that is not `RESERVED`
   is rejected with **400**, not silently skipped.
-- **The packing work list** is `GET /order-items`: order lines by fulfillment status, `PICKED` by
-  default, sorted by `updatedAt`, each with its `reservationId`.
+- **The packing work list** is `GET /order-items/packable`: the lines that have been picked and still have
+  room - `PICKED` and `PACKING` together - each with how much is **packed** already (every `package_item`
+  of it, in a package or loose), how much **remains** (the most a `PackItem` may name; more is a 400), and
+  the consumed reservation behind the pick (`reservationId`, `storehouseId`/`storehouseName`, `pickedAt`).
+  `?orderNo=` narrows it to one order - a package holds the items of one order, so that is the call before
+  `POST /packing/{orderNo}`. `GET /order-items` stays the plain list by one status (default `PICKED`) and
+  cannot say this; `GET /picking-orders?status=CONSUMED` lists the same stage from the reservation's side.
+  Both read for ADMIN, MANAGER and WAREHOUSE.
+- **A package from items that exist already** is `POST /packing/shipment/from-items` - body
+  `{"shipmentPackageType": "OTHER", "packageItems": [1, 2, 3, 4], "packageNumber": null, "length": null,
+  "width": null, "height": null}`. `packageItems` are **package item ids** (the loose items `POST /packing`
+  made, listed by `GET /lonely-packages`), not order line ids; a `weight` key is ignored, the package
+  computes it. All or nothing: an unknown id (404, naming each), an item already in a package (409, never
+  taken out of it), items of two orders (400) or two items of one line from one run (409) leave no package
+  behind - which the two calls `POST /packing/shipment` and `POST /packing/shipment/{id}/items` do not
+  promise. The new package is `OPEN`.
 - **Three ways to pack.** `POST /packing/{orderNo}` builds a `ShipmentPackage` together with its
   items; `items` is required and every line has to belong to that order. `POST /packing` creates
   loose `PackageItem`s without a package — every item of one call shares a `runNo`, which is how a
@@ -289,15 +303,15 @@ unique constraint above would otherwise permanently block re-reserving the same 
 
 `AutomaticReservationService` (`service/business`) holds what runs without a request.
 `@EnableScheduling` is switched on by `AutomaticProductionService`, so a `@Scheduled` on a bean is
-enough. During development the `@Scheduled` annotations of these four are commented out; the
-intervals are the ones they carry:
+enough. `tryToReserve()`, `tryToRelease()` and `tryToDelete()` are active; only the `@Scheduled` of
+`checkCreatedOrders()` is still commented out. The intervals are the ones they carry:
 
 | Routine | Does | Interval |
 |---------|------|----------|
 | `checkCreatedOrders()` | checks coverage per `CREATED` order and acknowledges the ones whose every line is coverable | every 300 s |
 | `tryToReserve()` | calls `reserveItems` for every order in `IN_FULFILLMENT` | every 150 s |
 | `tryToRelease()` | calls `releaseItems` for every order holding a reservation past `expiresAt` (`findOrdersWithExpiredReservations()`) — **all** of that order's active reservations | every 150 s |
-| `tryToDelete()` | deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders two days after `expiresAt` — finds nothing today, no order reaches that status | every 150 s |
+| `tryToDelete()` | deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders two days after `consumedAt` (`expiresAt` for rows consumed before that column existed) | every 150 s |
 
 All four change state; each works the first 100 orders of its status. `checkItems` itself still
 writes nothing — it is the `acknowledge` call after it that does.
@@ -446,7 +460,8 @@ POST /shipments/{id}/cancel       up to ACCEPTED → CANCELLED
 
 `intransit` is one word. This file said `/in-transit` for a long time and the endpoint never did —
 a client following it got a 404. The supplier's step of the same name
-(`/components/supplier/{id}/in-transit`) *is* hyphenated, which is how the mistake survived.
+(`POST /supplier/{requestId}/intransit`) is spelled the same way now; it used to be hyphenated, which is
+how the mistake survived.
 
 **Ready** is checked, not claimed: the shipment is read `FOR UPDATE`, has to be `CREATED`, carry a
 shipping address and at least one package, and every package has to be `PACKED` — each of them a
@@ -549,7 +564,7 @@ mvn -Dspring-boot.run.profiles=dev spring-boot:run
 
 The app starts on `server.port` (default `8080`). Logs are written both to stdout and to
 `logs/app-<port>.log` (`logging.file.name=logs/app-${server.port}.log` in
-`application-dev.properties`) — tail that file to tell `Started Application` from
+`application.properties`) — tail that file to tell `Started Application` from
 `APPLICATION FAILED TO START`.
 
 ### Run tests
@@ -734,8 +749,7 @@ The fulfillment chain is split by responsibility rather than by entity, one cont
   answers the page plus `produced`, the number of products actually built.
 - **`FulfillmentService`** — getting an order reserved: `reserveItems()` / `releaseItems()`.
 - **`OrderHandlingService`** — what the warehouse does with an order that is already reserved:
-  the picking list, the order lines by fulfillment status, picking by reservation or by order, and
-  the final `readyForDispatch()`.
+  the picking list, the order lines by fulfillment status, and picking by reservation or by order.
 - **`PackingService`** — packing picked lines into a `ShipmentPackage` or as loose items of a run,
   changing what a package holds, completing it.
 - **`PackageQueryService`** — reading packages and package items.
@@ -856,8 +870,8 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
-| Picking | `GET /picking-orders` *(paged)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE |
-| Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE |
+| Picking | `GET /picking-orders` *(paged, by reservation status, default `ACTIVE`; `CONSUMED` is what has been picked)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}` | ADMIN, WAREHOUSE; the `GET` also MANAGER |
+| Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`)*, `GET /order-items/packable` *(paged, optional `orderNo`: picked lines with `packed` and `remaining` - what package items are made from)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST /packing/shipment/from-items` (a package made of existing package items, by id), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE; the two `GET /order-items...` lists also MANAGER |
 | Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE |
@@ -927,19 +941,30 @@ Notable response-code conventions:
 ## Rate limiting
 
 `RateLimitingFilter` (`service/ratelimiting`) puts each request into a Bucket4j bucket with
-per-`PricingPlan` bandwidth (`FREE`, `BASIC`, `PROFESSIONAL` — see
-`PricingPlan.resolvePlanFromApiKey()`). The bucket key is the `X-API-KEY` header; without one the
-caller falls back to a bucket per remote address, and thus to `PricingPlan.FREE`. A missing key is
-not treated as a rate-limit violation.
+per-`PricingPlan` bandwidth. `PricingPlanService.resolveBucket` picks the bucket in this order:
+
+| Request | Bucket | Plan |
+|---------|--------|------|
+| `X-API-KEY` with a paid prefix (`BX001-`, `PX001-`, `NL001-…`) | that key | `BASIC` / `PROFESSIONAL` / `NO_LIMIT` |
+| logged in, no paid key | the user | `USER` — 120 at once, 60 per minute |
+| not logged in, any other key | that key | `FREE` — 30 at once, 20 per 2 minutes |
+| not logged in, no key | the remote address | `FREE` |
+
+A missing key is not treated as a rate-limit violation. The limit used to be per address for everybody, so all users
+behind one proxy shared 30 requests; the user's own bucket fixes that. The filter runs after Spring Security, so a
+request that was refused with 401 is not counted.
+
+**Behind a reverse proxy** the remote address is the proxy's unless the application is told to read
+`X-Forwarded-For`: set `server.forward-headers-strategy=native` (or `framework`) — see
+`application.properties.dist`. It is off by default, because without a proxy the header is forged by the caller.
 
 The filter is deliberately **not** a `@Component` — as a filter bean Spring Boot would register it
 for every request, Vaadin UIDL and static resources included, and throttle the whole application.
 `RateLimitingConfig` registers it through a `FilterRegistrationBean` scoped to `/api/*`.
 
-> **Heads-up on the FREE plan:** it is defined as `capacity(2)` with `refillGreedy(20, 2 minutes)` —
-> a bucket that holds two tokens but is refilled twenty at a time. In practice the third request
-> inside the refill window gets a 429. That combination looks like a typo; revisit it before anyone
-> relies on these numbers.
+> **Not closed:** for a caller who is not logged in, a made-up `X-API-KEY` is a `FREE` bucket of its own, so the
+> unauthenticated endpoints (login included) can be called more often than 30 times by changing the header on every
+> call. A logged-in caller gains nothing from it.
 
 ## Testing
 
@@ -947,7 +972,7 @@ for every request, Vaadin UIDL and static resources included, and throttle the w
 mvn test
 ```
 
-334 tests. Controller tests use standalone MockMvc with the project's own API version resolver
+929 tests. Controller tests use standalone MockMvc with the project's own API version resolver
 (`ApiVersioningTestSupport`), so they call `/api/1.0/...` like a client; security filters are not
 part of them.
 
@@ -968,6 +993,8 @@ part of them.
 | `OrderServiceAccessTest`, `RoleServiceCanReadAnyOrderTest`, `OrderReadAccessTest` | that a customer reaches only their own order and ADMIN, MANAGER, WAREHOUSE and LOGISTICS reach any - the last one against a real order, because the first two cannot see a role the service refuses after `@PreAuthorize` let it through |
 | `OrderHistoryServiceImplTest`, `OrderHistoryEndpointTest`, `DisplayNamesTest` | the history as a timeline, who may read it, and that a customer is not told which employee made a change |
 | `OpenApiDocumentTest`, `OpenApiDisabledTest`, `ApiDocumentCustomizerTest`, `ApiOperationCustomizerTest` | the OpenAPI description from the real application (literal versioned paths, one operation per path, roles as `x-roles`, error answers, public `/auth`, every `$ref` resolved), that it is off by default, and each customizer rule on its own |
+| `PackageFromItemsEndpointTest`, `PackingServiceCreateFromItemsTest` | a package made of existing items from the caller's own JSON: only OPEN, the items moved into it, weight computed (a sent one ignored), every refusal (unknown id, item in another package, two orders, one line and run twice, no ids) leaving no package behind, and who may write |
+| `PackableItemsEndpointTest`, `PackingServicePackableItemsTest`, `PackableItemDtoTest` | the packable list against real rows: only `PICKED`/`PACKING` lines, packed as the **sum** of package items, remaining, the consumed reservation (and a line without one still listed), the order filter, paging against the count, stable ties, and who may read it |
 | `OrderServiceLineQuantityTest` | the line limit after merging repeated articles |
 | `PackingServiceCreatePackageTest` | packages, loose items and custom packages: splitting a line, the over-packing guard, skipping, quantities before status, folding one line per run, the 400/404 answers |
 | `PackingServicePackageContentsTest` | adding, replacing and removing items, package data, completing a package, the weight following the contents |
@@ -1008,29 +1035,18 @@ mvn test -Dtest='!ApplicationTests,!CustomQueryExecutionTest,!ReservationDtoTest
 ```
 
 Still uncovered: the retry loop in `InventoryServiceImpl`, the storehouse selection inside
-`produce()`, the loops in `OrderHandlingServiceImpl`, `readyForDispatch()` (which has no caller
-either) and three of the four routines in `AutomaticReservationService` — `tryToDelete()` is covered
+`produce()`, the loops in `OrderHandlingServiceImpl` and three of the four routines in `AutomaticReservationService` — `tryToDelete()` is covered
 by `AutomaticReservationServiceDeleteTest`. The Vaadin views and `WebController` have no tests at
 all.
 
 ## Known gaps / work in progress
 
-- **`OrderHandlingService.readyForDispatch()`** (per reservation) has had no caller since
-  2026-09-22: its endpoint `POST /dispatch/{reservationId}` was commented out and then deleted, when
-  `checkShipmentReady` took the step over. It is also wrong in the current model — it finds the line
-  through a `CONSUMED` reservation, which `tryToDelete()` exists to sweep away, and it would move a
-  line without any shipment while the order's status is derived from shipments. The method and its
-  interface declaration are still there.
 - **No way back from `IN_TRANSIT`**: a return or a failed delivery cannot be recorded (`ShipmentStatus`
   has neither `RETURNED` nor `DELIVERY_FAILED`), and cancelling is only possible up to `ACCEPTED`.
 - **No history for shipments** the way `OrderHistory` records orders: who cancelled a shipment and
   why is only the free text in `comment`.
 - **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
-  roles from the request as they are — a manager can grant themselves or others `ADMIN`. An update
-  without `isActive` also re-activates a disabled user.
-- `ShipmentServiceImpl.assignDistributor` reads the shipment without a lock, unlike the other
-  shipment changes.
-- Two error response shapes coexist, see [Error responses](#error-responses).
+  roles from the request as they are — a manager can grant themselves or others `ADMIN`.
 - The order number range `90000..199999` holds **110000 orders**, and the next one is refused. That is
   the ceiling of `OrderNumberScrambler`, and it can only be widened while no numbers are in use — a
   different range is a different permutation. (It replaced a `Math.random()` loop whose ceiling was
@@ -1039,8 +1055,6 @@ all.
 - `Reservation.expiresAt` only decides which orders `tryToRelease()` picks up. Once one reservation
   of an order has expired, every active reservation of that order is released — a fresh one reserved
   in a later call included.
-- `POST /orders/{orderId}/consume` is commented out in `InventoryController`; consumption happens
-  only as part of picking.
 - `spring-boot-starter-webflux` is still declared in `pom.xml` although no code uses Reactor
   any more.
 

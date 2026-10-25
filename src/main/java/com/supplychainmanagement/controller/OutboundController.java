@@ -8,9 +8,7 @@ import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
@@ -38,8 +36,7 @@ public class OutboundController {
     private final UserService userService;
 
     private static Pageable pageRequest(int page, int size, String sort, String order) {
-        Sort.Direction direction = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        return PageRequest.of(page, size, Sort.by(direction, sort));
+        return PageRequests.of(page, size, sort, order, ShipmentController.SHIPMENT_SORTABLE);
     }
 
     /**

@@ -281,6 +281,29 @@ class ComponentRequestWorkflowTest {
     }
 
     /**
+     * A supplier whose account was switched off after somebody noted the id: the order is refused with a
+     * 409 and not a single row is written. Against the database because the flag is a stored column the
+     * unit test only sets on an object.
+     */
+    @Test
+    void placesNothingWithADeactivatedSupplier() {
+        Supplier disabled = supplier();
+        disabled.setIsActive(false);
+        userRepository.saveAndFlush(disabled);
+        Component part = component();
+        var request = new com.supplychainmanagement.dto.component.RequestComponentsRequest(
+                java.util.List.of(new com.supplychainmanagement.dto.component.RequestComponentsRequest.Item(
+                        part.getSku(), 5L, null)));
+
+        Throwable thrown = catchThrowable(() ->
+                componentService.requestComponents(disabled.getId(), request, someoneElseThan(disabled.getId())));
+
+        assertThat(thrown).isInstanceOfSatisfying(APIException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(requestComponentRepository.findBySupplierId(disabled.getId())).isEmpty();
+    }
+
+    /**
      * Somebody who is not the supplier - the receipt is booked by the warehouse, and the test holds
      * that assignedBy ends up naming them and not the supplier who reported the handover.
      */

@@ -15,9 +15,7 @@ import com.supplychainmanagement.service.UserService;
 import lombok.AllArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -25,6 +23,9 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Set;
+import java.util.Arrays;
+import com.supplychainmanagement.exception.APIException;
 
 @RestController
 @RequestMapping({"/api/{version}/orders"})
@@ -34,6 +35,25 @@ public class OrderController {
     private final OrderHistoryService orderHistoryService;
     private final UserService userService;
     private final ApplicationEventPublisher eventPublisher;
+
+    /**
+     * What {@code sort} may name on the order lists: the order's own columns, under the entity's names
+     * ({@code created}, not {@code createdAt}); {@code amountOfItems} is {@code @Transient}, not a column, and so
+     * not on it. Anything else is a 400 naming these. Package private, so a
+     * test can walk every entry against the real query.
+     */
+    static final Set<String> ORDER_SORTABLE = Set.of("id", "orderNo", "created", "updated", "dueDate",
+            "deliveryDate", "status", "total");
+
+    /** {@code status} arrives as text on {@code GET /orders}; an unknown one is a 400, not the 500 of {@code valueOf}. */
+    private static OrderStatus parseStatus(String status) {
+        try {
+            return OrderStatus.valueOf(status.trim().toUpperCase());
+        } catch (IllegalArgumentException unknown) {
+            throw new APIException(HttpStatus.BAD_REQUEST,
+                    "Unknown order status '" + status + "' - one of " + Arrays.toString(OrderStatus.values()));
+        }
+    }
 
     // CUSTOMER may see their own order list; ADMIN/MANAGER are included because
     // OrderService.findAllByUser deliberately branches to all orders for admins.
@@ -46,10 +66,9 @@ public class OrderController {
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order,
             @AuthenticationPrincipal User authUser) {
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_SORTABLE);
 
-        return toSummaryPage(orderService.findAllByUserAndStatus(authUser, OrderStatus.valueOf(status.toUpperCase()), pageable));
+        return toSummaryPage(orderService.findAllByUserAndStatus(authUser, parseStatus(status), pageable));
     }
 
     @GetMapping(path = "/new", version = "1.0")
@@ -61,8 +80,7 @@ public class OrderController {
             @RequestParam(defaultValue = "ASC") String order,
             @RequestParam(defaultValue = "CREATED") OrderStatus status
     ) {
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_SORTABLE);
 
         return toSummaryPage(orderService.findAllByStatus(status, pageable));
     }

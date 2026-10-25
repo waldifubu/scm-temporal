@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -251,6 +252,175 @@ class PackingControllerTest {
         verify(orderHandlingService).getOrderItems(eq(FulfillmentStatus.PICKED), argThat((Pageable pageable) ->
                 pageable.getPageNumber() == 2 && pageable.getPageSize() == 10
                         && pageable.getSort().equals(Sort.by(Sort.Direction.ASC, "updatedAt"))));
+    }
+
+    // ------------------------------------------------------------------ a package from existing items
+
+    /** The caller's own JSON, key for key - including the weight, which is never read. */
+    private static final String FROM_ITEMS_BODY = """
+            {
+              "shipmentPackageType": "OTHER",
+              "packageItems": [1, 2, 3, 4],
+              "packageNumber": null,
+              "weight": null,
+              "length": null,
+              "width": null,
+              "height": null
+            }""";
+
+    @Test
+    void createsAPackageFromTheCallersJson() throws Exception {
+        when(packingService.createPackageFromItems(any())).thenReturn(new ShipmentPackage());
+
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content(FROM_ITEMS_BODY))
+                .andExpect(status().isOk());
+
+        verify(packingService).createPackageFromItems(argThat(request ->
+                request.packageItems().equals(List.of(1L, 2L, 3L, 4L))
+                        && request.shipmentPackageType() == ShipmentPackageType.OTHER
+                        && request.packageNumber() == null
+                        && request.length() == null && request.width() == null && request.height() == null));
+    }
+
+    /** The type is case insensitive, as on POST /packing/shipment. */
+    @Test
+    void readsTheTypeCaseInsensitively() throws Exception {
+        when(packingService.createPackageFromItems(any())).thenReturn(new ShipmentPackage());
+
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content("{\"shipmentPackageType\": \"carton\", \"packageItems\": [7], \"length\": 30.5}"))
+                .andExpect(status().isOk());
+
+        verify(packingService).createPackageFromItems(argThat(request ->
+                request.shipmentPackageType() == ShipmentPackageType.CARTON
+                        && request.length().compareTo(new java.math.BigDecimal("30.5")) == 0));
+    }
+
+    @Test
+    void refusesARequestWithoutPackageItems() throws Exception {
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content("{\"shipmentPackageType\": \"OTHER\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.packageItems").exists());
+
+        verifyNoInteractions(packingService);
+    }
+
+    @Test
+    void refusesAnEmptyListOfPackageItems() throws Exception {
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content("{\"packageItems\": []}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packingService);
+    }
+
+    @Test
+    void refusesANullIdInTheList() throws Exception {
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content("{\"packageItems\": [1, null]}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packingService);
+    }
+
+    /** Order line ids under the old key are not package item ids: the old key is simply not this one. */
+    @Test
+    void doesNotTakeOrderLinesUnderTheItemsKey() throws Exception {
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content("{\"items\": [{\"orderItemId\": 1, \"qty\": 2}]}"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packingService);
+    }
+
+    /** The service's refusals reach the client at their own status. */
+    @Test
+    void answersAConflictFromTheServiceWith409Here() throws Exception {
+        when(packingService.createPackageFromItems(any())).thenThrow(
+                new APIException(HttpStatus.CONFLICT, "PackageItem 2 is already in ShipmentPackage 8"));
+
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                        .content(FROM_ITEMS_BODY))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("PackageItem 2 is already in ShipmentPackage 8"));
+    }
+
+    /** The literal path must not be taken for POST /packing/shipment/{id}/items or a package id. */
+    @Test
+    void keepsTheFromItemsPathApartFromTheOtherPackageEndpoints() throws Exception {
+        when(packingService.createPackageFromItems(any())).thenReturn(new ShipmentPackage());
+
+        mockMvc.perform(post("/api/1.0/packing/shipment/from-items").contentType(APPLICATION_JSON)
+                .content(FROM_ITEMS_BODY)).andExpect(status().isOk());
+
+        verify(packingService, never()).createCustomShipment(any());
+        verify(packingService, never()).addPackageItems(any(), any());
+    }
+
+    // ------------------------------------------------------------------ the packable list
+
+    private void packableAnswersEmptyPages() {
+        when(packingService.findPackableItems(any(), any())).thenAnswer(call ->
+                new org.springframework.data.domain.PageImpl<>(List.of(), call.getArgument(1), 0));
+    }
+
+    /** No parameters: every order, the first page of 25, the line picked first first. */
+    @Test
+    void listsThePackableItemsOfEveryOrderByDefault() throws Exception {
+        packableAnswersEmptyPages();
+
+        mockMvc.perform(get("/api/1.0/order-items/packable"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.total").value(0));
+
+        verify(packingService).findPackableItems(eq(null), argThat((Pageable pageable) ->
+                pageable.getPageNumber() == 0 && pageable.getPageSize() == 25
+                        && pageable.getSort().equals(Sort.by(Sort.Direction.ASC, "updatedAt"))));
+    }
+
+    /** One order is what a package is made for, so the filter reaches the service as sent. */
+    @Test
+    void narrowsThePackableItemsToOneOrder() throws Exception {
+        packableAnswersEmptyPages();
+
+        mockMvc.perform(get("/api/1.0/order-items/packable")
+                        .param("orderNo", "104321").param("page", "1").param("size", "5")
+                        .param("sort", "quantity").param("order", "DESC"))
+                .andExpect(status().isOk());
+
+        verify(packingService).findPackableItems(eq(104321L), argThat((Pageable pageable) ->
+                pageable.getPageNumber() == 1 && pageable.getPageSize() == 5
+                        && pageable.getSort().equals(Sort.by(Sort.Direction.DESC, "quantity"))));
+    }
+
+    /** It is a path of its own: the literal must not be taken for an id or a status of /order-items. */
+    @Test
+    void doesNotAnswerThePackableListFromTheStatusListsHandler() throws Exception {
+        packableAnswersEmptyPages();
+
+        mockMvc.perform(get("/api/1.0/order-items/packable")).andExpect(status().isOk());
+
+        verifyNoInteractions(orderHandlingService);
+    }
+
+    /** A joined column is not resolvable on the projection; naming one is a 400, not a 500. */
+    @Test
+    void refusesToSortThePackableItemsByAJoinedColumn() throws Exception {
+        mockMvc.perform(get("/api/1.0/order-items/packable").param("sort", "productName"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packingService);
+    }
+
+    @Test
+    void refusesANegativePageOfPackableItems() throws Exception {
+        mockMvc.perform(get("/api/1.0/order-items/packable").param("page", "-1"))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(packingService);
     }
 
     /** A conflict from the service reaches the client at its own status, as {"message": ...}. */

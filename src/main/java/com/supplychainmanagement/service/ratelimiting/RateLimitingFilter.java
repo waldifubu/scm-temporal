@@ -14,6 +14,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
+import java.security.Principal;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -39,14 +40,13 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request,
                                     @NonNull HttpServletResponse response,
                                     @NonNull FilterChain filterChain) throws ServletException, IOException {
-        // The bucket key must never be null: PricingPlanService keeps the buckets in a
-        // ConcurrentHashMap and computeIfAbsent(null, ...) would throw an NPE. Without an API key
-        // the caller falls back to one bucket per remote address (and thus to PricingPlan.FREE)
-        // rather than being rejected - a missing key is not a rate limit violation.
-        String apiKey = request.getHeader(API_KEY_HEADER);
-        String bucketKey = (apiKey != null && !apiKey.isBlank()) ? apiKey : "ip:" + request.getRemoteAddr();
-
-        Bucket bucket = pricingPlanService.resolveBucket(bucketKey, apiKey);
+        // Which bucket is PricingPlanService's decision (paid key, else the logged-in user, else any
+        // key, else the address). A missing key is not a rate limit violation. The filter runs after
+        // Spring Security, so the principal is already there for a request that carried a valid token;
+        // for one that did not, Security has answered 401 before we get here and it is not counted.
+        Principal principal = request.getUserPrincipal();
+        Bucket bucket = pricingPlanService.resolveBucket(request.getHeader(API_KEY_HEADER),
+                principal == null ? null : principal.getName(), request.getRemoteAddr());
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
 
         if (!probe.isConsumed()) {

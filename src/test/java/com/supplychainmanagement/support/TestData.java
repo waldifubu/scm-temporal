@@ -3,7 +3,10 @@ package com.supplychainmanagement.support;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.OrderHistory;
+import com.supplychainmanagement.entity.PackageItem;
+import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.entity.users.Admin;
@@ -14,10 +17,14 @@ import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.entity.users.Supplier;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.entity.users.Warehouse;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.OrderHistoryRepository;
+import com.supplychainmanagement.repository.OrderItemRepository;
+import com.supplychainmanagement.repository.PackageItemRepository;
+import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.RoleRepository;
@@ -61,6 +68,9 @@ public class TestData {
     private final RoleRepository roleRepository;
     private final OrderRepository orderRepository;
     private final OrderHistoryRepository orderHistoryRepository;
+    private final OrderItemRepository orderItemRepository;
+    private final ReservationRepository reservationRepository;
+    private final PackageItemRepository packageItemRepository;
 
     private static String unique(String prefix) {
         return prefix + "-" + SEQUENCE.incrementAndGet() + "-" + UUID.randomUUID().toString().substring(0, 8);
@@ -175,6 +185,35 @@ public class TestData {
         // Empty rather than null: the mapping of an order walks its lines.
         order.setOrderItems(new LinkedHashSet<>());
         return orderRepository.saveAndFlush(order);
+    }
+
+    /**
+     * One line of the order: a product of its own (an order carries each article once -
+     * {@code uk_order_item_order_product}), the given quantity and fulfillment status.
+     */
+    public OrderItem orderItem(Order order, int quantity, FulfillmentStatus status) {
+        OrderItem item = new OrderItem();
+        item.setOrder(order);
+        item.setProduct(product());
+        item.setQuantity(quantity);
+        item.setFulfillmentStatus(status);
+        return orderItemRepository.saveAndFlush(item);
+    }
+
+    /** The reservation a pick leaves behind: made ACTIVE in the storehouse, then consumed. */
+    public Reservation consumedReservation(OrderItem item, Storehouse storehouse) {
+        Reservation reservation = Reservation.active(item, item.getProduct().getSku(), item.getQuantity(), storehouse);
+        reservation.consume();
+        return reservationRepository.saveAndFlush(reservation);
+    }
+
+    /** Some of a line packed, loose - in no package, which is how {@code POST /packing} leaves it. */
+    public PackageItem packedQuantity(OrderItem item, int quantity) {
+        PackageItem packageItem = new PackageItem();
+        packageItem.setRunNo(UUID.randomUUID());
+        packageItem.setOrderItem(item);
+        packageItem.setQuantity(quantity);
+        return packageItemRepository.saveAndFlush(packageItem);
     }
 
     /**

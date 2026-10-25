@@ -11,9 +11,7 @@ import com.supplychainmanagement.service.impl.StockService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -23,11 +21,18 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 
 @RestController
 @RequestMapping({"/api/{version}/stock"})
 @AllArgsConstructor
 public class StockController {
+
+    /**
+     * What {@code sort} may name on the stock of a storehouse: the stock row's own columns. Anything
+     * else is a 400 naming these. Package private, so a test can walk every entry against the real query.
+     */
+    static final Set<String> STOCK_SORTABLE = Set.of("id", "sku", "onHand", "reserved", "updatedAt");
 
     private final StockService stockService;
 
@@ -106,8 +111,7 @@ public class StockController {
             throw new APIException(HttpStatus.BAD_REQUEST, "Missing request parameter: storehouseId");
         }
 
-        Sort.Direction dir = "DESC".equalsIgnoreCase(order) ? Sort.Direction.DESC : Sort.Direction.ASC;
-        Pageable pageable = PageRequest.of(page, size, Sort.by(dir, sort));
+        Pageable pageable = PageRequests.of(page, size, sort, order, STOCK_SORTABLE);
 
         Page<Stock> stockPage = stockService.findAllByStorehouseId(id, pageable);
         // Measured against the total, not against this page: a page past the end is empty without

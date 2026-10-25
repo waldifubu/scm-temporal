@@ -6,12 +6,31 @@ import java.time.Duration;
 
 public enum PricingPlan {
     // Declare method (could also be abstract)
+
+    /**
+     * Whoever has not logged in and names no paid key - one bucket per remote address, and the one
+     * that stands in front of the login. Deliberately small.
+     */
     FREE(null) {
         @Override
         public Bandwidth getLimit() {
             return Bandwidth.builder()
                     .capacity(30)
                     .refillGreedy(20, Duration.ofMinutes(2))
+                    .build();
+        }
+    },
+    /**
+     * A logged-in user without a paid key: a bucket of their own, keyed by user name, so one person's
+     * traffic never uses up another's - and a burst a page makes (a dozen requests for one view) fits.
+     * Never resolved from a key: {@link #resolvePlanFromApiKey} skips plans without a prefix.
+     */
+    USER(null) {
+        @Override
+        public Bandwidth getLimit() {
+            return Bandwidth.builder()
+                    .capacity(120)
+                    .refillGreedy(60, Duration.ofMinutes(1))
                     .build();
         }
     },

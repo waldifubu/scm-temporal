@@ -268,4 +268,49 @@ class ComponentServiceRequestTest {
         assertThat(thrown).hasMessageContaining("is not a supplier");
         verify(requestComponentRepository, never()).saveAll(anyList());
     }
+
+    /** A request placed with a disabled account would sit in OPEN for good - nobody can answer it. */
+    @Test
+    void refusesADeactivatedSupplierAndSavesNothing() {
+        Supplier supplier = supplier();
+        supplier.setIsActive(false);
+        known(component(5L, SCREW, "screw"));
+
+        Throwable thrown = catchThrowable(() ->
+                service.requestComponents(SUPPLIER_ID, request(item(SCREW, 10, null)), ORDERED_BY));
+
+        assertThat(thrown).isInstanceOfSatisfying(APIException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(thrown).hasMessageContaining("deactivated");
+        verify(requestComponentRepository, never()).saveAll(anyList());
+    }
+
+    /** The flag is nullable in the object model; "not known to be active" is not active either. */
+    @Test
+    void refusesASupplierWhoseActiveFlagIsMissing() {
+        Supplier supplier = supplier();
+        supplier.setIsActive(null);
+        known(component(5L, SCREW, "screw"));
+
+        Throwable thrown = catchThrowable(() ->
+                service.requestComponents(SUPPLIER_ID, request(item(SCREW, 10, null)), ORDERED_BY));
+
+        assertThat(thrown).isInstanceOfSatisfying(APIException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        verify(requestComponentRepository, never()).saveAll(anyList());
+    }
+
+    /** The check comes before the component lookup: a deactivated supplier is the answer, whatever else is wrong. */
+    @Test
+    void saysDeactivatedBeforeItLooksForTheComponents() {
+        Supplier supplier = supplier();
+        supplier.setIsActive(false);
+        known();
+
+        Throwable thrown = catchThrowable(() ->
+                service.requestComponents(SUPPLIER_ID, request(item(SCREW, 10, null)), ORDERED_BY));
+
+        assertThat(thrown).isInstanceOfSatisfying(APIException.class,
+                e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+    }
 }

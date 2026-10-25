@@ -2,6 +2,7 @@ package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.dto.order.ShippedQuantity;
+import com.supplychainmanagement.dto.shipping.PackableItemDto;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import jakarta.persistence.LockModeType;
@@ -113,4 +114,43 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
                     where oi.fulfillmentStatus = :status
                     """)
     Page<OrderItemListDto> findAllByFulfillmentStatus(@Param("status") FulfillmentStatus status, Pageable pageable);
+
+    /**
+     * The lines package items can be made from: in one of {@code statuses} (the service passes PICKED
+     * and PACKING), with how much of each is packed already - every {@code package_item} of the line,
+     * in a package or loose, which is what {@code PackingServiceImpl.packLine} counts - and the
+     * consumed reservation behind the pick. {@code orderNo} narrows it to one order, since a package
+     * holds the items of one order only; null means every order.
+     * <p>
+     * No filter on the remaining quantity: a line is PICKED or PACKING exactly while there is room,
+     * {@code packLine} sets it PACKED the moment it is full. Sortable by the columns of OrderItem itself,
+     * as {@link #findAllByFulfillmentStatus}.
+     * <p>
+     * The sum is a scalar sub-select, so the page is still one query; the count repeats the inner joins
+     * and the filter and leaves the left joins out, which can neither drop a line nor, with one
+     * reservation per line, duplicate one.
+     */
+    @Query(value = """
+            select new com.supplychainmanagement.dto.shipping.PackableItemDto(
+                oi.id, r.id, o.orderNo, p.articleNo, p.name, oi.quantity,
+                coalesce((select sum(pi.quantity) from PackageItem pi where pi.orderItem = oi), 0L),
+                oi.fulfillmentStatus, s.id, s.name, r.consumedAt)
+            from OrderItem oi
+              join oi.order o
+              join oi.product p
+              left join Reservation r on r.orderItem = oi
+              left join r.storehouse s
+            where oi.fulfillmentStatus in :statuses
+              and (:orderNo is null or o.orderNo = :orderNo)
+            """,
+            countQuery = """
+                    select count(oi)
+                    from OrderItem oi
+                      join oi.order o
+                      join oi.product p
+                    where oi.fulfillmentStatus in :statuses
+                      and (:orderNo is null or o.orderNo = :orderNo)
+                    """)
+    Page<PackableItemDto> findPackable(@Param("statuses") Collection<FulfillmentStatus> statuses,
+                                       @Param("orderNo") Long orderNo, Pageable pageable);
 }
