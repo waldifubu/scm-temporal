@@ -162,29 +162,29 @@ class OutboundControllerTest {
         verifyNoInteractions(deliveryService);
     }
 
-    // ------------------------------------------------------------------ reject
+    // ------------------------------------------------------------------ decline
 
     /** The id from the path, the reason from the body, the acting user - and no other service is asked. */
     @Test
-    void rejectPassesTheShipmentTheReasonAndTheUserOn() throws Exception {
-        when(deliveryService.rejectShipment(any(), any(), any())).thenReturn(delivery(ShipmentStatus.REJECTED));
+    void declinePassesTheShipmentTheReasonAndTheUserOn() throws Exception {
+        when(deliveryService.declineShipment(any(), any(), any())).thenReturn(delivery(ShipmentStatus.DECLINED));
 
-        mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/shipments/50/decline").contentType(APPLICATION_JSON)
                         .content("""
                                 { "reason": "no truck free" }
                                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("REJECTED"));
+                .andExpect(jsonPath("$.status").value("DECLINED"));
 
-        verify(deliveryService).rejectShipment(50L, "no truck free", 99L);
+        verify(deliveryService).declineShipment(50L, "no truck free", 99L);
         verifyNoInteractions(shipmentService);
     }
 
     /** The reason is required, as it is on a cancellation: a bean validation, so a 400 before the service is asked. */
     @Test
-    void rejectWithoutAReasonIsA400() throws Exception {
+    void declineWithoutAReasonIsA400() throws Exception {
         for (String body : new String[]{"{}", "{ \"reason\": \"\" }", "{ \"reason\": \"   \" }", "{ \"reason\": null }"}) {
-            mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON).content(body))
+            mockMvc.perform(post("/api/1.0/shipments/50/decline").contentType(APPLICATION_JSON).content(body))
                     .andExpect(status().isBadRequest());
         }
 
@@ -192,16 +192,16 @@ class OutboundControllerTest {
     }
 
     @Test
-    void rejectWithoutABodyIsA400() throws Exception {
-        mockMvc.perform(post("/api/1.0/shipments/50/reject")).andExpect(status().isBadRequest());
+    void declineWithoutABodyIsA400() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/decline")).andExpect(status().isBadRequest());
 
         verifyNoInteractions(deliveryService);
     }
 
     /** One more than the column holds is a 400 naming the field, not a database error. */
     @Test
-    void rejectWithATooLongReasonIsA400() throws Exception {
-        mockMvc.perform(post("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+    void declineWithATooLongReasonIsA400() throws Exception {
+        mockMvc.perform(post("/api/1.0/shipments/50/decline").contentType(APPLICATION_JSON)
                         .content("{ \"reason\": \"" + "x".repeat(256) + "\" }"))
                 .andExpect(status().isBadRequest());
 
@@ -210,8 +210,8 @@ class OutboundControllerTest {
 
     /** It is the carrier's endpoint, in the carrier's controller - not a second verb on the planner's. */
     @Test
-    void rejectIsAPostOnly() throws Exception {
-        mockMvc.perform(put("/api/1.0/shipments/50/reject").contentType(APPLICATION_JSON)
+    void declineIsAPostOnly() throws Exception {
+        mockMvc.perform(put("/api/1.0/shipments/50/decline").contentType(APPLICATION_JSON)
                         .content("{ \"reason\": \"x\" }"))
                 .andExpect(status().isMethodNotAllowed());
     }

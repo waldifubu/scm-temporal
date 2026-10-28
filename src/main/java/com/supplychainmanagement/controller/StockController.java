@@ -2,6 +2,7 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.stock.AddStockRequest;
+import com.supplychainmanagement.dto.stock.InventoryRow;
 import com.supplychainmanagement.dto.stock.StockResponse;
 import com.supplychainmanagement.dto.stock.TransferStockRequest;
 import com.supplychainmanagement.entity.Stock;
@@ -34,7 +35,28 @@ public class StockController {
      */
     static final Set<String> STOCK_SORTABLE = Set.of("id", "sku", "onHand", "reserved", "updatedAt");
 
+    /** What {@code sort} may name on the inventory: the sums per article, and the product's name. */
+    static final Set<String> INVENTORY_SORTABLE = Set.of("sku", "name", "onHand", "reserved", "available", "updatedAt");
+
     private final StockService stockService;
+
+    /**
+     * What the warehouse holds of each article, <strong>every storehouse added up</strong>: one row per SKU
+     * with on hand, reserved and available summed, the latest change, and the product's name (for a tooltip).
+     * Paged like every list, sorted by SKU unless asked otherwise. The literal segment wins over
+     * {@code GET /stock/{sku}}; what one article holds per storehouse is that endpoint.
+     */
+    @GetMapping(value = "/inventory", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
+    public PageResponse<InventoryRow> inventory(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "sku") String sort,
+            @RequestParam(defaultValue = "ASC") String order
+    ) {
+        Pageable pageable = PageRequests.of(page, size, sort, order, INVENTORY_SORTABLE);
+        return PageResponse.of(stockService.findInventory(pageable));
+    }
 
     /**
      * Books a quantity onto the stock of one SKU in one storehouse, creating the row the first time

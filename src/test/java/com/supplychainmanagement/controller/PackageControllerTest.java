@@ -61,7 +61,7 @@ class PackageControllerTest {
         ShipmentPackageListDto row = new ShipmentPackageListDto(5L, "PKG-1", ShipmentPackageStatus.PACKED,
                 ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
                 java.time.LocalDateTime.of(2026, 10, 8, 14, 5, 0), BigDecimal.ONE, new BigDecimal("1.5"),
-                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, 2, List.of());
+                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, null, 2, List.of());
         when(packageQueryService.findShipmentPackages(any(), any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(row), call.<Pageable>getArgument(2), 37));
     }
@@ -108,7 +108,7 @@ class PackageControllerTest {
     @Test
     void packagesListsThePackageItems() throws Exception {
         PackageItemResponse loose = looseItem();
-        when(packageQueryService.findPackageItems(any()))
+        when(packageQueryService.findPackageItems(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(loose), call.<Pageable>getArgument(0), 1));
 
         mockMvc.perform(get("/api/1.0/packages").param("sort", "created").param("order", "DESC"))
@@ -122,7 +122,7 @@ class PackageControllerTest {
                 .andExpect(jsonPath("$.content[0].shipmentPackageId").value(nullValue()))
                 .andExpect(jsonPath("$.total").value(1));
 
-        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "created")));
+        verify(packageQueryService).findPackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "created"))), org.mockito.ArgumentMatchers.isNull());
         verify(packageQueryService, never()).findShipmentPackages(any(), any(), any());
     }
 
@@ -138,7 +138,7 @@ class PackageControllerTest {
     @Test
     void lonelyPackagesListsOnlyTheLooseItems() throws Exception {
         PackageItemResponse loose = looseItem();
-        when(packageQueryService.findLoosePackageItems(any()))
+        when(packageQueryService.findLoosePackageItems(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(loose), call.<Pageable>getArgument(0), 1));
 
         mockMvc.perform(get("/api/1.0/lonely-packages").param("size", "10"))
@@ -148,38 +148,38 @@ class PackageControllerTest {
                 .andExpect(jsonPath("$.total").value(1));
 
         // No sort asked: when the item was made, then the number of its order.
-        verify(packageQueryService).findLoosePackageItems(PageRequest.of(0, 10,
-                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo"))));
-        verify(packageQueryService, never()).findPackageItems(any());
+        verify(packageQueryService).findLoosePackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 10,
+                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo")))), org.mockito.ArgumentMatchers.isNull());
+        verify(packageQueryService, never()).findPackageItems(any(), any());
     }
 
     /** The default of the item list: created first, then the order number - both ways round with {@code order}. */
     @Test
     void sortsTheItemListByCreatedThenByOrderNumberWhenNoSortIsAsked() throws Exception {
-        when(packageQueryService.findPackageItems(any()))
+        when(packageQueryService.findPackageItems(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
 
         mockMvc.perform(get("/api/1.0/packages")).andExpect(status().isOk());
         mockMvc.perform(get("/api/1.0/packages").param("order", "DESC")).andExpect(status().isOk());
         mockMvc.perform(get("/api/1.0/packages").param("sort", "")).andExpect(status().isOk());
 
-        verify(packageQueryService, org.mockito.Mockito.times(2)).findPackageItems(PageRequest.of(0, 25,
-                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo"))));
-        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25,
-                Sort.by(Sort.Order.desc("created"), Sort.Order.desc("orderItem.order.orderNo"))));
+        verify(packageQueryService, org.mockito.Mockito.times(2)).findPackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 25,
+                Sort.by(Sort.Order.asc("created"), Sort.Order.asc("orderItem.order.orderNo")))), org.mockito.ArgumentMatchers.isNull());
+        verify(packageQueryService).findPackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 25,
+                Sort.by(Sort.Order.desc("created"), Sort.Order.desc("orderItem.order.orderNo")))), org.mockito.ArgumentMatchers.isNull());
     }
 
     /** A sort that is asked for stays that one key - the default is what is there when nothing is asked. */
     @Test
     void keepsASortThatIsAskedFor() throws Exception {
-        when(packageQueryService.findPackageItems(any()))
+        when(packageQueryService.findPackageItems(any(), any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
 
         mockMvc.perform(get("/api/1.0/packages").param("sort", "id").param("order", "DESC")).andExpect(status().isOk());
         mockMvc.perform(get("/api/1.0/packages").param("sort", "orderItem.order.orderNo")).andExpect(status().isOk());
 
-        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "id")));
-        verify(packageQueryService).findPackageItems(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "orderItem.order.orderNo")));
+        verify(packageQueryService).findPackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "id"))), org.mockito.ArgumentMatchers.isNull());
+        verify(packageQueryService).findPackageItems(org.mockito.ArgumentMatchers.eq(PageRequest.of(0, 25, Sort.by(Sort.Direction.ASC, "orderItem.order.orderNo"))), org.mockito.ArgumentMatchers.isNull());
     }
 
     /** An unknown key is still a 400 naming what is allowed - the missing default does not let anything through. */
@@ -206,7 +206,7 @@ class PackageControllerTest {
         when(packageQueryService.findShipmentPackage(5L)).thenReturn(new ShipmentPackageListDto(5L, "PKG-1",
                 ShipmentPackageStatus.OPEN, ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
                 null, BigDecimal.ONE, new BigDecimal("1.5"),
-                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, 1, List.of()));
+                new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ZERO, null, null, 1, List.of()));
 
         mockMvc.perform(get("/api/1.0/shipment-packages/5"))
                 .andExpect(status().isOk())
@@ -231,5 +231,21 @@ class PackageControllerTest {
 
         mockMvc.perform(get("/api/1.0/packages/999")).andExpect(status().isNotFound());
         mockMvc.perform(get("/api/1.0/shipment-packages/999")).andExpect(status().isNotFound());
+    }
+
+    /** The status filter reaches the service as the enum; none asked is {@code null}, an unknown one a 400. */
+    @Test
+    void passesTheFulfillmentStatusFilterOn() throws Exception {
+        when(packageQueryService.findPackageItems(any(), any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
+        when(packageQueryService.findLoosePackageItems(any(), any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(), call.<Pageable>getArgument(0), 0));
+
+        mockMvc.perform(get("/api/1.0/packages").param("fulfillmentStatus", "PACKED")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/lonely-packages").param("fulfillmentStatus", "PACKING")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/packages").param("fulfillmentStatus", "NOPE")).andExpect(status().isBadRequest());
+
+        verify(packageQueryService).findPackageItems(any(), org.mockito.ArgumentMatchers.eq(FulfillmentStatus.PACKED));
+        verify(packageQueryService).findLoosePackageItems(any(), org.mockito.ArgumentMatchers.eq(FulfillmentStatus.PACKING));
     }
 }

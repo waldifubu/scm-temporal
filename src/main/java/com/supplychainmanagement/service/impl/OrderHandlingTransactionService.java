@@ -89,6 +89,59 @@ public class OrderHandlingTransactionService {
         return PickingOrderDto.of(order, reservation);
     }
 
+    /**
+     * Takes a pick back: the line goes from PICKED to WAITING, the quantity that was taken off the shelf goes
+     * onto it again, and the CONSUMED reservation is deleted at the end.
+     * <p>
+     * Same boundary as {@link #pick}, for the same reason: the stock side commits in a transaction of its own
+     * ({@code restoreWithRetry} is REQUIRES_NEW), so this one is the line. The line is set first and the stock
+     * handed back after, so a failure on the stock side rolls the line back with it; and the reservation is
+     * only touched by that inner transaction, never from here - this one took its snapshot before the inner one
+     * commits, which MariaDB (innodb_snapshot_isolation) would refuse a write on.
+     * <p>
+     * Only a line that is still PICKED can be taken back. Once any of it is in a package (PACKING, PACKED) or
+     * further on, the goods are no longer where a pick put them, and it is a 409.
+     * <p>
+     * The order is not touched: it stays IN_FULFILLMENT, and the line - WAITING again, without a reservation -
+     * is reserved anew by the next {@code reserveItems} (the sweep looks at IN_FULFILLMENT orders).
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public PickingOrderDto unpick(Order order, Reservation reservation) {
+        OrderItem orderItem = reservation.getOrderItem();
+        if (orderItem == null) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Reservation " + reservation.getId() + " belongs to no order line");
+        }
+        if (!orderItem.getOrder().getId().equals(order.getId())) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Reservation " + reservation.getId() + " does not belong to order " + order.getId());
+        }
+        if (orderItem.getFulfillmentStatus() != FulfillmentStatus.PICKED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order item " + orderItem.getId() + " is "
+                    + orderItem.getFulfillmentStatus() + ", only a PICKED line can be taken back");
+        }
+
+        orderItem.setFulfillmentStatus(FulfillmentStatus.WAITING);
+        orderItemRepository.save(orderItem);
+
+        // Mapped here, while the reservation still exists and its LAZY product and storehouse can be resolved;
+        // the row shows the line as it is after the pick is gone.
+        PickingOrderDto result = PickingOrderDto.of(order, reservation);
+
+        List<Reservation> restored;
+        try {
+            restored = inventoryService.restoreWithRetry(order.getId(), List.of(new ReserveItem(orderItem.getId(), reservation.getSku(), reservation.getQuantity(), reservation.getStorehouse().getId())));
+        } catch (Exception e) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Failed to take back reservation " + reservation.getId() + ": " + e.getMessage());
+        }
+        // Skipped instead of thrown on - no stock row, no consumed reservation. Carrying on would leave the line
+        // WAITING although nothing went back onto the shelf; the rollback takes it back to PICKED.
+        if (restored.isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Nothing taken back for reservation " + reservation.getId()
+                    + ": stock row or consumed reservation missing, order item " + orderItem.getId() + " stays PICKED");
+        }
+
+        return result;
+    }
+
     private static @NonNull OrderItem orderItemValidation(Order order, Reservation reservation) {
         OrderItem orderItem = reservation.getOrderItem();
         // Check orderItem is in Order

@@ -53,6 +53,11 @@ public class InventoryServiceImpl implements InventoryService {
         return executeWithRetry(() -> transactionService.consume(orderId, items));
     }
 
+    @Override
+    public List<Reservation> restoreWithRetry(Long orderId, List<ReserveItem> items) {
+        return executeWithRetry(() -> transactionService.restore(orderId, items));
+    }
+
     private <T> T executeWithRetry(Supplier<T> transaction) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {

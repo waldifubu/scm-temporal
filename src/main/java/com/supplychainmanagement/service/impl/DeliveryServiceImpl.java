@@ -1,7 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
-import com.supplychainmanagement.dto.outbound.RejectShipmentRequest;
+import com.supplychainmanagement.dto.outbound.DeclineShipmentRequest;
 import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Shipment;
@@ -71,9 +71,9 @@ public class DeliveryServiceImpl implements DeliveryService {
     public DeliveryResponse acceptShipment(Long shipmentId, String reason, Long userId) {
         // Checked before anything is locked or read, and here as well as on the request: the service is
         // reachable from inside the application, where no bean validation runs.
-        if (reason != null && reason.trim().length() > RejectShipmentRequest.MAX_REASON_LENGTH) {
+        if (reason != null && reason.trim().length() > DeclineShipmentRequest.MAX_REASON_LENGTH) {
             throw new APIException(HttpStatus.BAD_REQUEST,
-                    "reason cannot exceed " + RejectShipmentRequest.MAX_REASON_LENGTH + " characters");
+                    "reason cannot exceed " + DeclineShipmentRequest.MAX_REASON_LENGTH + " characters");
         }
 
         // DISPATCH_REQUESTED only, not READY: that status is set by assignDistributor and nothing
@@ -138,15 +138,15 @@ public class DeliveryServiceImpl implements DeliveryService {
 
     @Override
     @Transactional
-    public DeliveryResponse rejectShipment(Long shipmentId, String reason, Long userId) {
+    public DeliveryResponse declineShipment(Long shipmentId, String reason, Long userId) {
         // Checked here as well as on the request: the service is reachable from inside the application,
         // where no bean validation runs, and the rule belongs to the operation, not to one way of calling it.
         if (reason == null || reason.isBlank()) {
             throw new APIException(HttpStatus.BAD_REQUEST, "reason is required");
         }
-        if (reason.trim().length() > RejectShipmentRequest.MAX_REASON_LENGTH) {
+        if (reason.trim().length() > DeclineShipmentRequest.MAX_REASON_LENGTH) {
             throw new APIException(HttpStatus.BAD_REQUEST,
-                    "reason cannot exceed " + RejectShipmentRequest.MAX_REASON_LENGTH + " characters");
+                    "reason cannot exceed " + DeclineShipmentRequest.MAX_REASON_LENGTH + " characters");
         }
 
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
@@ -157,13 +157,13 @@ public class DeliveryServiceImpl implements DeliveryService {
 
         if (shipment.getStatus() != ShipmentStatus.DISPATCH_REQUESTED) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
-                    + shipment.getStatus() + ", only " + ShipmentStatus.DISPATCH_REQUESTED + " can be rejected");
+                    + shipment.getStatus() + ", only " + ShipmentStatus.DISPATCH_REQUESTED + " can be declined");
         }
 
         // The status and the reason, and nothing besides: no package is detached, no line or order moves, and
-        // OrderProgressService is not asked - what a rejected shipment means for its orders is the
+        // OrderProgressService is not asked - what a declined shipment means for its orders is the
         // planner's to settle, not a side effect of the carrier's answer.
-        shipment.setStatus(ShipmentStatus.REJECTED);
+        shipment.setStatus(ShipmentStatus.DECLINED);
         shipment.setDistributorComment(reason.trim());
         shipmentRepository.save(shipment);
 

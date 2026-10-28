@@ -1,5 +1,6 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
@@ -44,8 +45,9 @@ public class PackageController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(required = false) String sort,
-            @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findPackageItems(itemPageRequest(page, size, sort, order)));
+            @RequestParam(defaultValue = "ASC") String order,
+            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus) {
+        return PageResponse.of(packageQueryService.findPackageItems(itemPageRequest(page, size, sort, order), fulfillmentStatus));
     }
 
     /**
@@ -58,7 +60,7 @@ public class PackageController {
     // It has GET /shipments/packages of its own now, and that one is the better list anyway: it
     // leaves out the packages already travelling in a shipment, which this one still shows.
     @GetMapping(path = "/shipment-packages", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE', 'LOGISTICS')")
     public PageResponse<ShipmentPackageListDto> getShipmentPackages(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -79,8 +81,9 @@ public class PackageController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(required = false) String sort,
-            @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(packageQueryService.findLoosePackageItems(itemPageRequest(page, size, sort, order)));
+            @RequestParam(defaultValue = "ASC") String order,
+            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus) {
+        return PageResponse.of(packageQueryService.findLoosePackageItems(itemPageRequest(page, size, sort, order), fulfillmentStatus));
     }
 
     /** One package item, in the same shape as the /packages list. Unknown id: 404. */
@@ -92,7 +95,7 @@ public class PackageController {
 
     /** One package with its items, in the same shape as the /shipment-packages list. Unknown id: 404. */
     @GetMapping(path = "/shipment-packages/{shipmentPackageId}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE', 'LOGISTICS')")
     public ShipmentPackageListDto getShipmentPackage(@PathVariable Long shipmentPackageId) {
         return packageQueryService.findShipmentPackage(shipmentPackageId);
     }
@@ -127,7 +130,7 @@ public class PackageController {
         }
         Pageable byCreated = pageRequest(page, size, "created", order, PACKAGE_ITEM_SORTABLE);
         Sort.Direction direction = byCreated.getSort().iterator().next().getDirection();
-        return PageRequest.of(page, size, Sort.by(direction, "orderItem.order.orderNo"));
+        return PageRequest.of(page, size, byCreated.getSort().and(Sort.by(direction, "orderItem.order.orderNo")));
     }
 
     private static Pageable pageRequest(int page, int size, String sort, String order, Set<String> sortable) {

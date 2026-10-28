@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.reservation.ReserveItem;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Stock;
+import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.ReservationRepository;
 import com.supplychainmanagement.repository.StockRepository;
@@ -164,6 +165,42 @@ public class InventoryReservationTransactionService {
         }
 
         return consumed;
+    }
+
+    /**
+     * The reverse of {@link #consume}: each line's quantity goes back onto its stock row and the
+     * {@code CONSUMED} reservation is deleted - deleted, not kept, for the reason a released one is: its row
+     * holds the line's one slot ({@code uk_reservation_order_item}), so the line could never be reserved
+     * again while it was there.
+     * <p>
+     * A line without a stock row or without a consumed reservation is skipped, like in {@code consume}; the
+     * returned list is how a caller tells a restored line from a skipped one.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public List<Reservation> restore(Long orderId, List<ReserveItem> items) {
+        List<Reservation> restored = new ArrayList<>();
+
+        for (ReserveItem item : items) {
+            Reservation reservation;
+            try {
+                Stock stock = findStock(item);
+                reservation = reservationRepository
+                        .findByOrderItemIdAndStatus(item.orderItemId(), ReservationStatus.CONSUMED)
+                        .orElseThrow(() -> new IllegalStateException(
+                                "Consumed reservation missing for order item: " + item.orderItemId()));
+
+                stock.restore(item.quantity());
+                stockRepository.save(stock);
+                reservationRepository.delete(reservation);
+            } catch (IllegalArgumentException | IllegalStateException ile) {
+                log.warn(ile.getMessage() + " - skipping restore for order item: " + item.orderItemId());
+                continue;
+            }
+
+            restored.add(reservation);
+        }
+
+        return restored;
     }
 
     private Stock findStock(ReserveItem item) {

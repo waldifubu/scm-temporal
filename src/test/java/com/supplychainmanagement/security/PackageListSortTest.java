@@ -202,4 +202,18 @@ class PackageListSortTest {
         assertThat(idsOf(get("/lonely-packages?size=500"), List.of(ofSecond, ofFirst)))
                 .containsExactly(ofSecond.getId(), ofFirst.getId());
     }
+
+    /** The status of the order line, as the Packages page filters by it - on both lists. */
+    @Test
+    void filtersByTheFulfillmentStatusOfTheLine() throws Exception {
+        Order order = testData.order(testData.customer());
+        PackageItem packed = testData.packedQuantity(testData.orderItem(order, 4, FulfillmentStatus.PACKED), 4);
+        PackageItem packing = itemOf(order, 2);
+        List<PackageItem> mine = List.of(packed, packing);
+
+        assertThat(idsOf(get("/packages?size=500&fulfillmentStatus=PACKED"), mine)).containsExactly(packed.getId());
+        assertThat(idsOf(get("/packages?size=500&fulfillmentStatus=PACKING"), mine)).containsExactly(packing.getId());
+        assertThat(idsOf(get("/packages?size=500"), mine)).containsExactlyInAnyOrder(packed.getId(), packing.getId());
+        assertThat(idsOf(get("/lonely-packages?size=500&fulfillmentStatus=PACKED"), mine)).containsExactly(packed.getId());
+    }
 }

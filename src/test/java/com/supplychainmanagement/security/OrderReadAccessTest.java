@@ -1,9 +1,12 @@
 package com.supplychainmanagement.security;
 
 import com.supplychainmanagement.entity.Order;
+import com.supplychainmanagement.entity.OrderItem;
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.support.TestData;
+import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,6 +18,8 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.request.MockMvcRequestBuilders;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
@@ -49,6 +54,10 @@ class OrderReadAccessTest {
     private TestData testData;
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
+    @Autowired
+    private ObjectMapper objectMapper;
+    @Autowired
+    private EntityManager entityManager;
 
     private MockHttpServletResponse readOrder(Long orderNo, User as) throws Exception {
         String token = jwtTokenProvider.generateToken(
@@ -129,5 +138,25 @@ class OrderReadAccessTest {
         User warehouse = testData.userWithRoles(RoleEnum.WAREHOUSE);
 
         assertThat(readOrder(987_654_321L, warehouse).getStatus()).isEqualTo(404);
+    }
+
+    /**
+     * A line names its product by article number and SKU, so a client can link it to the product page
+     * ({@code /products/{articleNo}}) and show the SKU on hover.
+     */
+    @Test
+    void anOrderLineCarriesTheArticleNumberAndTheSkuOfItsProduct() throws Exception {
+        User manager = testData.userWithRoles(RoleEnum.MANAGER);
+        Order order = anotherCustomersOrder();
+        OrderItem line = testData.orderItem(order, 3, FulfillmentStatus.WAITING);
+        // The order in the session still has its empty set of lines; the endpoint has to read them from the database.
+        entityManager.flush();
+        entityManager.clear();
+
+        JsonNode answer = objectMapper.readTree(readOrder(order.getOrderNo(), manager).getContentAsString());
+        JsonNode item = answer.get("items").get(0);
+
+        assertThat(item.get("articleNo").asLong()).isEqualTo(line.getProduct().getArticleNo());
+        assertThat(item.get("sku").asString()).isEqualTo(line.getProduct().getSku().toString());
     }
 }

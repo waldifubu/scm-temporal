@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
@@ -16,10 +17,12 @@ public interface PackageQueryService {
     Page<ShipmentPackageListDto> findShipmentPackages(ShipmentPackageStatus status, String packageNumber, Pageable pageable);
 
     /** One page of all package items, loose ones and those in a package. */
-    Page<PackageItemResponse> findPackageItems(Pageable pageable);
+    /** {@code status}: only the items whose order line is in that fulfillment status; {@code null} lists all. */
+    Page<PackageItemResponse> findPackageItems(Pageable pageable, FulfillmentStatus status);
 
     /** One page of the loose package items - the ones not in any package yet. */
-    Page<PackageItemResponse> findLoosePackageItems(Pageable pageable);
+    /** {@code status} as in {@link #findPackageItems}. */
+    Page<PackageItemResponse> findLoosePackageItems(Pageable pageable, FulfillmentStatus status);
 
     /** One package item, in the shape of the /packages list. */
     PackageItemResponse findPackageItem(Long packageItemId);

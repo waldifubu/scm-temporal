@@ -78,6 +78,17 @@ public class Stock {
         this.updatedAt = LocalDateTime.now();
     }
 
+    /**
+     * Puts goods that were taken off the shelf for a pick back onto it - the reverse of {@link #consume}.
+     * The quantity comes back as {@code onHand} and is <em>not</em> reserved again: the reservation it
+     * belonged to is gone with the pick, so it is available to anybody until the order line reserves anew.
+     */
+    public void restore(int qty) {
+        if (qty <= 0) throw new IllegalArgumentException("qty must be > 0");
+        this.onHand += qty;
+        this.updatedAt = LocalDateTime.now();
+    }
+
     public void consume(int quantity) {
         if (reserved < quantity) {
             throw new IllegalStateException(

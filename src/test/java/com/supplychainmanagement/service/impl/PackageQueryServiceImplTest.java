@@ -138,7 +138,7 @@ class PackageQueryServiceImplTest {
         when(packageItemRepository.findAllWithProductBy(SECOND_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(loose, packed), SECOND_PAGE, 4));
 
-        Page<PackageItemResponse> rows = service.findPackageItems(SECOND_PAGE);
+        Page<PackageItemResponse> rows = service.findPackageItems(SECOND_PAGE, null);
 
         assertThat(rows.getContent()).extracting(PackageItemResponse::id).containsExactly(101L, 102L);
         assertThat(rows.getContent()).extracting(PackageItemResponse::shipmentPackageId).containsExactly(null, 7L);
@@ -167,7 +167,7 @@ class PackageQueryServiceImplTest {
         when(packageItemRepository.findAllWithProductByShipmentPackageIsNull(SECOND_PAGE_BY_ID))
                 .thenReturn(new PageImpl<>(List.of(loose), SECOND_PAGE, 3));
 
-        Page<PackageItemResponse> rows = service.findLoosePackageItems(SECOND_PAGE);
+        Page<PackageItemResponse> rows = service.findLoosePackageItems(SECOND_PAGE, null);
 
         assertThat(rows.getContent()).extracting(PackageItemResponse::id).containsExactly(101L);
         assertThat(rows.getContent()).extracting(PackageItemResponse::shipmentPackageId).containsOnlyNulls();
@@ -272,7 +272,7 @@ class PackageQueryServiceImplTest {
         when(packageItemRepository.findItemIdsByOrderItemIdIn(java.util.Set.of(11L)))
                 .thenReturn(List.of(line(11L, 101L), line(11L, 104L)));
 
-        assertThat(service.findPackageItems(SECOND_PAGE).getContent().getFirst().siblings()).containsExactly(104L);
+        assertThat(service.findPackageItems(SECOND_PAGE, null).getContent().getFirst().siblings()).containsExactly(104L);
     }
 
     private static PackageItemRepository.ItemOfLine line(Long orderItemId, Long packageItemId) {
@@ -300,9 +300,9 @@ class PackageQueryServiceImplTest {
         when(packageItemRepository.findAllWithProductBy(any())).thenReturn(Page.empty(SECOND_PAGE));
         when(packageItemRepository.findAllWithProductByShipmentPackageIsNull(any())).thenReturn(Page.empty(SECOND_PAGE));
 
-        service.findPackageItems(sortedByOrder);
-        service.findPackageItems(sortedById);
-        service.findLoosePackageItems(sortedByOrder);
+        service.findPackageItems(sortedByOrder, null);
+        service.findPackageItems(sortedById, null);
+        service.findLoosePackageItems(sortedByOrder, null);
 
         verify(packageItemRepository).findAllWithProductBy(PageRequest.of(0, 25, org.springframework.data.domain.Sort.by(
                 org.springframework.data.domain.Sort.Order.desc("orderItem.order.orderNo"),
@@ -312,5 +312,24 @@ class PackageQueryServiceImplTest {
                 org.springframework.data.domain.Sort.by(
                         org.springframework.data.domain.Sort.Order.desc("orderItem.order.orderNo"),
                         org.springframework.data.domain.Sort.Order.asc("id"))));
+    }
+
+    /** A status asked for goes to the filtered query, with the id as the tie-break - and the unfiltered one is not asked. */
+    @Test
+    void filtersByTheFulfillmentStatusOfTheLineWhenOneIsGiven() {
+        when(packageItemRepository.findAllWithProductByOrderItemFulfillmentStatus(any(), any()))
+                .thenReturn(Page.empty(SECOND_PAGE));
+        when(packageItemRepository.findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(any(), any()))
+                .thenReturn(Page.empty(SECOND_PAGE));
+
+        service.findPackageItems(SECOND_PAGE, com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED);
+        service.findLoosePackageItems(SECOND_PAGE, com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED);
+
+        verify(packageItemRepository).findAllWithProductByOrderItemFulfillmentStatus(
+                com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED, SECOND_PAGE_BY_ID);
+        verify(packageItemRepository).findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(
+                com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED, SECOND_PAGE_BY_ID);
+        verify(packageItemRepository, never()).findAllWithProductBy(any());
+        verify(packageItemRepository, never()).findAllWithProductByShipmentPackageIsNull(any());
     }
 }

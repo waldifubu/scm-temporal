@@ -59,6 +59,19 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
 
 
     /**
+     * Which pick is meant is the only thing decided here - the reversal and its transaction are
+     * {@link OrderHandlingTransactionService#unpick}.
+     */
+    @Override
+    public PickingOrderDto unpickReservationById(Long reservationId) {
+        var reservation = reservationRepository.findByIdAndStatus(reservationId, ReservationStatus.CONSUMED)
+                .orElseThrow(() -> new ResourceNotFoundException("Reservation", "id not picked (or already taken back)", reservationId));
+        Order order = reservation.getOrderItem().getOrder();
+
+        return transactionService.unpick(order, reservation);
+    }
+
+    /**
      * Picks every active reservation of the order. Not idempotent per call the way reserving is:
      * a reservation already consumed is no longer ACTIVE and simply does not turn up again.
      * <p>

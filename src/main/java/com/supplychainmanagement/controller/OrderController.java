@@ -55,10 +55,10 @@ public class OrderController {
         }
     }
 
-    // CUSTOMER may see their own order list; ADMIN/MANAGER are included because
-    // OrderService.findAllByUser deliberately branches to all orders for admins.
+    // CUSTOMER may see their own order list; ADMIN/MANAGER/WAREHOUSE are included because
+    // OrderService.findAllByUserAndStatus deliberately branches to all orders for the roles that may read any order.
     @GetMapping(path = "", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER', 'WAREHOUSE')")
     public PageResponse<OrderSummaryDto> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -72,7 +72,7 @@ public class OrderController {
     }
 
     @GetMapping(path = "/new", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'WAREHOUSE')")
     public PageResponse<OrderSummaryDto> getAllOrdersByStatus(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -170,7 +170,7 @@ public class OrderController {
         return orderHistoryService.findHistory(orderNo, authUser);
     }
 
-    @PostMapping(path = "/", version = "1.0")
+    @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
     public ResponseEntity<OrderDetailsDto> createOrder(@RequestBody(required = true) Order order,
                                                        @AuthenticationPrincipal User authUser) {
@@ -214,6 +214,8 @@ public class OrderController {
                         item.getId(),
                         item.getQuantity(),
                         item.getProduct() != null ? item.getProduct().getName() : null,
+                        item.getProduct() != null ? item.getProduct().getArticleNo() : null,
+                        item.getProduct() != null ? item.getProduct().getSku() : null,
                         item.getFulfillmentStatus()
                 ))
                 .toList();

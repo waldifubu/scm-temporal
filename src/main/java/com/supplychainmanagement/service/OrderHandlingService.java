@@ -22,5 +22,12 @@ public interface OrderHandlingService {
 
     List<PickingOrderDto> pickingReservationByOrderNo(String orderNo);
 
+    /**
+     * Takes back the pick behind a {@code CONSUMED} reservation: the line goes back to WAITING, the stock that
+     * was taken off the shelf goes onto it again, and the reservation is deleted. 404 when there is no such
+     * reservation (or it was never picked), 409 when the line has moved on from PICKED.
+     */
+    PickingOrderDto unpickReservationById(Long reservationId);
+
     Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable);
 }

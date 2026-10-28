@@ -3,15 +3,12 @@ package com.supplychainmanagement.service.impl;
 import static org.mockito.Mockito.verifyNoInteractions;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.entity.Order;
-import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.entity.users.Customer;
 import com.supplychainmanagement.entity.users.Distributor;
-import com.supplychainmanagement.entity.users.Admin;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
-import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
@@ -38,7 +35,6 @@ import org.springframework.http.HttpStatus;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -372,23 +368,23 @@ class DeliveryServiceImplTest {
         assertThatThrownBy(() -> service.acceptShipment(99L, 1L)).isInstanceOf(ResourceNotFoundException.class);
     }
 
-    // ------------------------------------------------------------------ reject
+    // ------------------------------------------------------------------ decline
 
     /**
      * The status and the reason, <strong>and nothing besides</strong>: the packages stay in the shipment, none of
      * them changes, no order line is touched and the order progress is not even asked.
      */
     @Test
-    void rejectSetsTheStatusAndTheReasonAndNothingElse() {
+    void declineSetsTheStatusAndTheReasonAndNothingElse() {
         ShipmentPackage shipmentPackage = shipmentPackage(5L, ShipmentPackageStatus.PACKED);
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage);
         shipment.setComment("call first");
 
-        DeliveryResponse response = service.rejectShipment(SHIPMENT_ID, " no truck free ", DISTRIBUTOR_ID);
+        DeliveryResponse response = service.declineShipment(SHIPMENT_ID, " no truck free ", DISTRIBUTOR_ID);
 
-        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DECLINED);
         assertThat(shipment.getDistributorComment()).isEqualTo("no truck free");
-        assertThat(response.status()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(response.status()).isEqualTo(ShipmentStatus.DECLINED);
         assertThat(response.distributorComment()).isEqualTo("no truck free");
         // Nothing else moved: the planner's note, the distributor, the packages and their status.
         assertThat(shipment.getComment()).isEqualTo("call first");
@@ -404,27 +400,27 @@ class DeliveryServiceImplTest {
 
     /** Declining what was offered - from DISPATCH_REQUESTED only. Once it is accepted, backing out is a cancellation. */
     @ParameterizedTest
-    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "ACCEPTED", "REJECTED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
-    void rejectsAnOfferedShipmentOnly(ShipmentStatus status) {
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "ACCEPTED", "DECLINED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    void declinesAnOfferedShipmentOnly(ShipmentStatus status) {
         Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        Throwable thrown = catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "no", DISTRIBUTOR_ID));
+        Throwable thrown = catchThrowable(() -> service.declineShipment(SHIPMENT_ID, "no", DISTRIBUTOR_ID));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
-        assertThat(thrown).hasMessageContaining("only DISPATCH_REQUESTED can be rejected");
+        assertThat(thrown).hasMessageContaining("only DISPATCH_REQUESTED can be declined");
         assertThat(shipment.getStatus()).isEqualTo(status);
         assertThat(shipment.getDistributorComment()).isNull();
         verify(shipmentRepository, never()).save(any());
     }
 
-    /** The reason is the one thing a rejection says - a blank one is refused, and nothing is written. */
+    /** The reason is the one thing a decline says - a blank one is refused, and nothing is written. */
     @ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(strings = {"", "   "})
-    void rejectNeedsAReason(String reason) {
+    void declineNeedsAReason(String reason) {
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, reason, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
-        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, null, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        assertStatus(catchThrowable(() -> service.declineShipment(SHIPMENT_ID, reason, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
+        assertStatus(catchThrowable(() -> service.declineShipment(SHIPMENT_ID, null, DISTRIBUTOR_ID)), HttpStatus.BAD_REQUEST);
 
         assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
         assertThat(shipment.getDistributorComment()).isNull();
@@ -432,11 +428,11 @@ class DeliveryServiceImplTest {
 
     /** The column is a varchar(255); a longer reason is a 400 that says so, not a 500 from the database. */
     @Test
-    void rejectRefusesAReasonLongerThanTheColumn() {
+    void declineRefusesAReasonLongerThanTheColumn() {
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        Throwable thrown = catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "x".repeat(256), DISTRIBUTOR_ID));
-        service.rejectShipment(SHIPMENT_ID, "y".repeat(255), DISTRIBUTOR_ID);
+        Throwable thrown = catchThrowable(() -> service.declineShipment(SHIPMENT_ID, "x".repeat(256), DISTRIBUTOR_ID));
+        service.declineShipment(SHIPMENT_ID, "y".repeat(255), DISTRIBUTOR_ID);
 
         assertStatus(thrown, HttpStatus.BAD_REQUEST);
         assertThat(thrown).hasMessageContaining("255");
@@ -445,10 +441,10 @@ class DeliveryServiceImplTest {
 
     /** Only the carrier the shipment was handed to answers for it. */
     @Test
-    void anotherCarrierMayNotRejectIt() {
+    void anotherCarrierMayNotDeclineIt() {
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "not mine", OTHER_DISTRIBUTOR_ID)),
+        assertStatus(catchThrowable(() -> service.declineShipment(SHIPMENT_ID, "not mine", OTHER_DISTRIBUTOR_ID)),
                 HttpStatus.FORBIDDEN);
 
         assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
@@ -457,34 +453,34 @@ class DeliveryServiceImplTest {
 
     /** Asked before the status, so a carrier poking at somebody else's shipment learns nothing about where it stands. */
     @Test
-    void doesNotTellAnotherCarrierTheStatusOnReject() {
+    void doesNotTellAnotherCarrierTheStatusOnDecline() {
         shipment(ShipmentStatus.ACCEPTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
-        assertStatus(catchThrowable(() -> service.rejectShipment(SHIPMENT_ID, "no", OTHER_DISTRIBUTOR_ID)),
+        assertStatus(catchThrowable(() -> service.declineShipment(SHIPMENT_ID, "no", OTHER_DISTRIBUTOR_ID)),
                 HttpStatus.FORBIDDEN);
     }
 
     @Test
-    void letsAnAdminRejectOnBehalfOfTheCarrier() {
+    void letsAnAdminDeclineOnBehalfOfTheCarrier() {
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
         when(roleService.isAdmin(1L)).thenReturn(true);
 
-        service.rejectShipment(SHIPMENT_ID, "carrier unreachable", 1L);
+        service.declineShipment(SHIPMENT_ID, "carrier unreachable", 1L);
 
-        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.DECLINED);
     }
 
     @Test
-    void rejectAnswersAnUnknownShipmentWith404() {
+    void declineAnswersAnUnknownShipmentWith404() {
         when(shipmentRepository.findForUpdateById(404L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.rejectShipment(404L, "no", DISTRIBUTOR_ID))
+        assertThatThrownBy(() -> service.declineShipment(404L, "no", DISTRIBUTOR_ID))
                 .isInstanceOf(ResourceNotFoundException.class);
     }
 
     // ------------------------------------------------------------------ accept with a note
 
-    /** The note lands where a rejection puts its reason - and the planner's own comment is not touched. */
+    /** The note lands where a decline puts its reason - and the planner's own comment is not touched. */
     @Test
     void acceptKeepsTheNoteInTheDistributorComment() {
         Shipment shipment = shipment(ShipmentStatus.DISPATCH_REQUESTED, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
@@ -563,7 +559,7 @@ class DeliveryServiceImplTest {
      * assignment), turned down, delivered, called off.
      */
     @ParameterizedTest
-    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "REJECTED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DECLINED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
     void leavesTheTrackingNumberAloneOutsideTheStatusesItMayChangeIn(ShipmentStatus status) {
         Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
         shipment.setTrackingNumber("DHL-123");

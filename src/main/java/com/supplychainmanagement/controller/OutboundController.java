@@ -3,7 +3,7 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.outbound.AcceptShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
-import com.supplychainmanagement.dto.outbound.RejectShipmentRequest;
+import com.supplychainmanagement.dto.outbound.DeclineShipmentRequest;
 import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.DeliveryService;
@@ -73,7 +73,7 @@ public class OutboundController {
                                            @Valid @RequestBody(required = false) AcceptShipmentRequest request,
                                            @AuthenticationPrincipal User authUser) {
         // The body is optional: a call without one is a plain acceptance, as it was before the carrier
-        // could add a note - which lands in distributorComment, where a rejection puts its reason.
+        // could add a note - which lands in distributorComment, where a decline puts its reason.
         return deliveryService.acceptShipment(shipmentId, request == null ? null : request.reason(),
                 userService.getAuthenticatedUserId(authUser));
     }
@@ -106,19 +106,19 @@ public class OutboundController {
     }
 
     /**
-     * The carrier turns the shipment down: DISPATCH_REQUESTED to REJECTED, with the reason they give in the
-     * body - {@code { "reason": "no truck free" }}, see {@link RejectShipmentRequest} - kept in the
+     * The carrier turns the shipment down: DISPATCH_REQUESTED to DECLINED, with the reason they give in the
+     * body - {@code { "reason": "no truck free" }}, see {@link DeclineShipmentRequest} - kept in the
      * shipment's {@code distributorComment}.
      * <p>
      * Nothing else happens: the packages stay in the shipment and no order moves. A refusal of a shipment
      * that is already accepted is {@code POST /shipments/{id}/cancel}.
      */
-    @PostMapping(path = "/{shipmentId}/reject", version = "1.0")
+    @PostMapping(path = "/{shipmentId}/decline", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','DISTRIBUTOR')")
-    public DeliveryResponse rejectShipment(@PathVariable Long shipmentId,
-                                           @Valid @RequestBody RejectShipmentRequest request,
+    public DeliveryResponse declineShipment(@PathVariable Long shipmentId,
+                                           @Valid @RequestBody DeclineShipmentRequest request,
                                            @AuthenticationPrincipal User authUser) {
-        return deliveryService.rejectShipment(shipmentId, request.reason(),
+        return deliveryService.declineShipment(shipmentId, request.reason(),
                 userService.getAuthenticatedUserId(authUser));
     }
 

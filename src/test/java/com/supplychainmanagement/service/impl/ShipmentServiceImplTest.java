@@ -16,7 +16,6 @@ import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.Manager;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
-import com.supplychainmanagement.event.OrderStatusChangedEvent;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
@@ -35,14 +34,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -581,6 +578,23 @@ class ShipmentServiceImplTest {
         assertThat(shipment.getDistributor()).isNull();
     }
 
+    /** A disabled carrier can never answer, so the shipment must not be handed to them - and stays as it was. */
+    @Test
+    void refusesADeactivatedDistributorWith409() {
+        Shipment shipment = loadedShipment(ShipmentStatus.READY);
+        Distributor distributor = new Distributor();
+        distributor.setIsActive(false);
+        when(userRepository.findById(20L)).thenReturn(Optional.of(distributor));
+
+        Throwable thrown = org.assertj.core.api.Assertions.catchThrowable(
+                () -> service.assignDistributor(SHIPMENT_ID, 20L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("deactivated");
+        assertThat(shipment.getStatus()).isEqualTo(ShipmentStatus.READY);
+        assertThat(shipment.getDistributor()).isNull();
+    }
+
     @Test
     void answersAnUnknownDistributorWith404() {
         loadedShipment(ShipmentStatus.READY);
@@ -605,8 +619,8 @@ class ShipmentServiceImplTest {
      * with the new carrier, and the first carrier's note is not left on it for the second to read.
      */
     @Test
-    void handsARejectedShipmentToAnotherDistributor() {
-        Shipment shipment = loadedShipment(ShipmentStatus.REJECTED);
+    void handsADeclinedShipmentToAnotherDistributor() {
+        Shipment shipment = loadedShipment(ShipmentStatus.DECLINED);
         List<ShipmentPackage> packagesBefore = List.copyOf(shipment.getPackages());
         Distributor first = new Distributor();
         first.setId(12L);
@@ -630,9 +644,9 @@ class ShipmentServiceImplTest {
         assertThat(shipment.getPackages()).isNotEmpty().containsExactlyElementsOf(packagesBefore);
     }
 
-    /** The note of the carrier stays on a shipment that was not rejected - the reset belongs to the way out of REJECTED only. */
+    /** The note of the carrier stays on a shipment that was not declined - the reset belongs to the way out of DECLINED only. */
     @Test
-    void leavesTheCarriersNoteAloneWhenAShipmentWasNotRejected() {
+    void leavesTheCarriersNoteAloneWhenAShipmentWasNotDeclined() {
         Shipment shipment = loadedShipment(ShipmentStatus.DISPATCH_REQUESTED);
         shipment.setDistributorComment("kept");
         Distributor distributor = new Distributor();
@@ -644,7 +658,7 @@ class ShipmentServiceImplTest {
         assertThat(shipment.getDistributorComment()).isEqualTo("kept");
     }
 
-    /** The refusal names what is allowed now - REJECTED included. */
+    /** The refusal names what is allowed now - DECLINED included. */
     @Test
     void namesTheStatusesAnAssignmentIsAllowedIn() {
         loadedShipment(ShipmentStatus.ACCEPTED);
@@ -653,7 +667,7 @@ class ShipmentServiceImplTest {
                 () -> service.assignDistributor(SHIPMENT_ID, 20L));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
-        assertThat(thrown).hasMessageContaining("READY, DISPATCH_REQUESTED or REJECTED");
+        assertThat(thrown).hasMessageContaining("READY, DISPATCH_REQUESTED or DECLINED");
     }
 
     /** Once in transit the distributor is fixed. */
