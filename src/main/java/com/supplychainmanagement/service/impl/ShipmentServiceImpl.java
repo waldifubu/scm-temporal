@@ -38,7 +38,6 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -288,13 +287,13 @@ public class ShipmentServiceImpl implements ShipmentService {
         Shipment shipment = shipmentRepository.findForUpdateById(shipmentId)
                 .orElseThrow(() -> new ResourceNotFoundException("Shipment", "id", shipmentId));
 
-        // REJECTED is here so the planner can hand a shipment on to another carrier once the first one has
+        // DECLINED is here so the planner can hand a shipment on to another carrier once the first one has
         // turned it down - the way out of what would otherwise be a dead end.
-        var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.REJECTED);
+        var allowedStatuses = Set.of(ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.DECLINED);
 
         if(!allowedStatuses.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
-                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in READY, DISPATCH_REQUESTED or REJECTED status");
+                    + shipment.getStatus() + ", a distributor can only be assigned to shipments in READY, DISPATCH_REQUESTED or DECLINED status");
         }
 
         // Checked before it is used as one, and on the unproxied instance: a cast up front fails any
@@ -304,9 +303,16 @@ public class ShipmentServiceImpl implements ShipmentService {
         if (!(Hibernate.unproxy(user) instanceof Distributor distributor)) {
             throw new APIException(HttpStatus.BAD_REQUEST, "User " + distributorId + " is not a distributor");
         }
+        // 409 and not 400, like a deactivated supplier: the request is well formed, the account's state refuses it.
+        // A disabled carrier cannot log in, so the shipment would sit in DISPATCH_REQUESTED for good.
+        // A missing flag counts as not active.
+        if (!Boolean.TRUE.equals(distributor.getIsActive())) {
+            throw new APIException(HttpStatus.CONFLICT,
+                    "Distributor " + distributorId + " is deactivated and cannot take a shipment");
+        }
         // The note of the carrier who turned the shipment down is theirs: the next one is not shown it as if it
-        // were about them. The packages were never touched by a rejection, so nothing else has to be undone.
-        if (shipment.getStatus() == ShipmentStatus.REJECTED) {
+        // were about them. The packages were never touched by a decline, so nothing else has to be undone.
+        if (shipment.getStatus() == ShipmentStatus.DECLINED) {
             shipment.setDistributorComment(null);
         }
         shipment.setDistributor(distributor);

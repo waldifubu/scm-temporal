@@ -40,6 +40,12 @@ public record ShipmentPackageListDto(
         BigDecimal height,
         BigDecimal volume,
         LocalDate dueDate,
+        /*
+         * The customer the package goes to, read off the order of its first item - a package holds the items of one
+         * order only, so it has exactly one. Null for an empty package. Only the id: the customer is a LAZY
+         * reference, and its id is served by the proxy without loading it.
+         */
+        Long customerId,
         int packages,
         /*
          * DTOs, never the PackageItem entities: an entity serializes its shipmentPackage, whose items
@@ -64,9 +70,21 @@ public record ShipmentPackageListDto(
                 shipmentPackage.getHeight(),
                 shipmentPackage.getVolume(),
                 resolveDueDate(shipmentPackage.getItems()),
+                resolveCustomerId(shipmentPackage.getItems()),
                 shipmentPackage.getItems().size(),
                 shipmentPackage.getItems().stream().map(ShipmentPackageItemDto::from).toList()
         );
+    }
+
+    private static Long resolveCustomerId(List<PackageItem> items) {
+        return items.stream()
+                .map(PackageItem::getOrderItem)
+                .map(OrderItem::getOrder)
+                .map(Order::getCustomer)
+                .filter(Objects::nonNull)
+                .map(customer -> customer.getId())
+                .findFirst()
+                .orElse(null);
     }
 
     private static LocalDate resolveDueDate(List<PackageItem> items) {

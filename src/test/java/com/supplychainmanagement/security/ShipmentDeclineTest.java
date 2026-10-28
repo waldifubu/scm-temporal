@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code POST /shipments/{id}/reject} against the real filter chain, the real roles and the real rows.
+ * {@code POST /shipments/{id}/decline} against the real filter chain, the real roles and the real rows.
  * <p>
  * What a context can show that the unit tests cannot: the database takes the new status at all
  * ({@code shipment.status} carries a CHECK that {@code StatusCheckConstraintMigration} has to widen), the
@@ -44,7 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @ActiveProfiles("test")
 @Import(TestData.class)
 @Transactional
-class ShipmentRejectTest {
+class ShipmentDeclineTest {
 
     private static final AtomicLong CALLS = new AtomicLong();
 
@@ -61,11 +61,11 @@ class ShipmentRejectTest {
     @Autowired
     private ObjectMapper objectMapper;
 
-    private MockHttpServletResponse reject(Long shipmentId, User as, String body) throws Exception {
+    private MockHttpServletResponse decline(Long shipmentId, User as, String body) throws Exception {
         String token = jwtTokenProvider.generateToken(
                 new UsernamePasswordAuthenticationToken(as.getUsername(), null, List.of()));
-        var request = MockMvcRequestBuilders.post("/api/1.0/shipments/" + shipmentId + "/reject")
-                .header("X-API-KEY", "reject-" + CALLS.incrementAndGet())
+        var request = MockMvcRequestBuilders.post("/api/1.0/shipments/" + shipmentId + "/decline")
+                .header("X-API-KEY", "decline-" + CALLS.incrementAndGet())
                 .header("Authorization", "Bearer " + token);
         if (body != null) {
             request = request.contentType("application/json").content(body);
@@ -92,30 +92,30 @@ class ShipmentRejectTest {
     }
 
     @Test
-    void theAssignedCarrierRejectsAndTheReasonIsKept() throws Exception {
+    void theAssignedCarrierDeclinesAndTheReasonIsKept() throws Exception {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
 
-        MockHttpServletResponse response = reject(shipment.getId(), owner, "{\"reason\":\" no truck free \"}");
+        MockHttpServletResponse response = decline(shipment.getId(), owner, "{\"reason\":\" no truck free \"}");
 
         assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(200);
         JsonNode body = objectMapper.readTree(response.getContentAsString());
-        assertThat(body.get("status").asString()).isEqualTo("REJECTED");
+        assertThat(body.get("status").asString()).isEqualTo("DECLINED");
         assertThat(body.get("distributorComment").asString()).isEqualTo("no truck free");
 
         // Read back from the database, not from the answer: the CHECK on shipment.status took the new value.
         Shipment stored = reload(shipment);
-        assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.DECLINED);
         assertThat(stored.getDistributorComment()).isEqualTo("no truck free");
     }
 
-    /** The rejection is the status and the reason - not the planner's note, not the assignment. */
+    /** The decline is the status and the reason - not the planner's note, not the assignment. */
     @Test
     void leavesTheRestOfTheShipmentAlone() throws Exception {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
 
-        reject(shipment.getId(), owner, "{\"reason\":\"no\"}");
+        decline(shipment.getId(), owner, "{\"reason\":\"no\"}");
 
         Shipment stored = reload(shipment);
         assertThat(stored.getComment()).isEqualTo("call first");
@@ -128,14 +128,14 @@ class ShipmentRejectTest {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
         ShipmentPackage shipmentPackage = new ShipmentPackage();
-        shipmentPackage.setPackageNumber("PKG-REJECT-" + CALLS.incrementAndGet());
+        shipmentPackage.setPackageNumber("PKG-DECLINE-" + CALLS.incrementAndGet());
         shipmentPackage.setShipmentPackageStatus(ShipmentPackageStatus.PACKED);
         shipmentPackage.setShipmentPackageType(ShipmentPackageType.CARTON);
         // The shipment owns no cascade to its packages: the package is saved itself, with the shipment set.
         shipmentPackage.setShipment(shipment);
         shipmentPackage = shipmentPackageRepository.saveAndFlush(shipmentPackage);
 
-        assertThat(reject(shipment.getId(), owner, "{\"reason\":\"no\"}").getStatus()).isEqualTo(200);
+        assertThat(decline(shipment.getId(), owner, "{\"reason\":\"no\"}").getStatus()).isEqualTo(200);
 
         ShipmentPackage stored = shipmentPackageRepository.findById(shipmentPackage.getId()).orElseThrow();
         assertThat(stored.getShipment()).isNotNull();
@@ -147,18 +147,18 @@ class ShipmentRejectTest {
     void anotherCarrierGetsA403AndTheShipmentStaysAsItWas() throws Exception {
         Shipment shipment = shipmentOf(carrier(), ShipmentStatus.DISPATCH_REQUESTED);
 
-        assertThat(reject(shipment.getId(), carrier(), "{\"reason\":\"not mine\"}").getStatus()).isEqualTo(403);
+        assertThat(decline(shipment.getId(), carrier(), "{\"reason\":\"not mine\"}").getStatus()).isEqualTo(403);
 
         assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
         assertThat(reload(shipment).getDistributorComment()).isNull();
     }
 
     @Test
-    void aShipmentThatWasAlreadyAcceptedCannotBeRejected() throws Exception {
+    void aShipmentThatWasAlreadyAcceptedCannotBeDeclined() throws Exception {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.ACCEPTED);
 
-        assertThat(reject(shipment.getId(), owner, "{\"reason\":\"changed my mind\"}").getStatus()).isEqualTo(409);
+        assertThat(decline(shipment.getId(), owner, "{\"reason\":\"changed my mind\"}").getStatus()).isEqualTo(409);
 
         assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.ACCEPTED);
     }
@@ -168,9 +168,9 @@ class ShipmentRejectTest {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
 
-        assertThat(reject(shipment.getId(), owner, "{}").getStatus()).isEqualTo(400);
-        assertThat(reject(shipment.getId(), owner, "{\"reason\":\"  \"}").getStatus()).isEqualTo(400);
-        assertThat(reject(shipment.getId(), owner, null).getStatus()).isEqualTo(400);
+        assertThat(decline(shipment.getId(), owner, "{}").getStatus()).isEqualTo(400);
+        assertThat(decline(shipment.getId(), owner, "{\"reason\":\"  \"}").getStatus()).isEqualTo(400);
+        assertThat(decline(shipment.getId(), owner, null).getStatus()).isEqualTo(400);
 
         assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
     }
@@ -181,26 +181,26 @@ class ShipmentRejectTest {
         Distributor owner = carrier();
         Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
 
-        MockHttpServletResponse response = reject(shipment.getId(), owner, "{\"reason\":\"" + "x".repeat(256) + "\"}");
+        MockHttpServletResponse response = decline(shipment.getId(), owner, "{\"reason\":\"" + "x".repeat(256) + "\"}");
 
         assertThat(response.getStatus()).isEqualTo(400);
         assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
     }
 
     @Test
-    void adminMayRejectOnBehalfOfTheCarrierAndOtherRolesStayOut() throws Exception {
+    void adminMayDeclineOnBehalfOfTheCarrierAndOtherRolesStayOut() throws Exception {
         Shipment shipment = shipmentOf(carrier(), ShipmentStatus.DISPATCH_REQUESTED);
 
         // The planning side calls a shipment off; it does not answer for the carrier.
-        assertThat(reject(shipment.getId(), testData.userWithRoles(RoleEnum.LOGISTICS), "{\"reason\":\"x\"}").getStatus())
+        assertThat(decline(shipment.getId(), testData.userWithRoles(RoleEnum.LOGISTICS), "{\"reason\":\"x\"}").getStatus())
                 .isEqualTo(403);
-        assertThat(reject(shipment.getId(), testData.userWithRoles(RoleEnum.WAREHOUSE), "{\"reason\":\"x\"}").getStatus())
+        assertThat(decline(shipment.getId(), testData.userWithRoles(RoleEnum.WAREHOUSE), "{\"reason\":\"x\"}").getStatus())
                 .isEqualTo(403);
         assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
 
-        assertThat(reject(shipment.getId(), testData.userWithRoles(RoleEnum.ADMIN), "{\"reason\":\"carrier unreachable\"}").getStatus())
+        assertThat(decline(shipment.getId(), testData.userWithRoles(RoleEnum.ADMIN), "{\"reason\":\"carrier unreachable\"}").getStatus())
                 .isEqualTo(200);
-        assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.REJECTED);
+        assertThat(reload(shipment).getStatus()).isEqualTo(ShipmentStatus.DECLINED);
     }
 
     private MockHttpServletResponse assign(Long shipmentId, Long distributorId, User as) throws Exception {
@@ -212,13 +212,13 @@ class ShipmentRejectTest {
                 .andReturn().getResponse();
     }
 
-    /** The way out: the planner hands a rejected shipment to another carrier, who can then take it on. */
+    /** The way out: the planner hands a declined shipment to another carrier, who can then take it on. */
     @Test
-    void aRejectedShipmentCanBeHandedToAnotherCarrier() throws Exception {
+    void aDeclinedShipmentCanBeHandedToAnotherCarrier() throws Exception {
         Distributor first = carrier();
         Distributor second = carrier();
         Shipment shipment = shipmentOf(first, ShipmentStatus.DISPATCH_REQUESTED);
-        assertThat(reject(shipment.getId(), first, "{\"reason\":\"no truck free\"}").getStatus()).isEqualTo(200);
+        assertThat(decline(shipment.getId(), first, "{\"reason\":\"no truck free\"}").getStatus()).isEqualTo(200);
 
         MockHttpServletResponse response = assign(shipment.getId(), second.getId(), testData.userWithRoles(RoleEnum.LOGISTICS));
 
@@ -230,6 +230,6 @@ class ShipmentRejectTest {
         assertThat(stored.getComment()).isEqualTo("call first");
 
         // The new carrier answers for it; the one who turned it down no longer does.
-        assertThat(reject(shipment.getId(), first, "{\"reason\":\"still no\"}").getStatus()).isEqualTo(403);
+        assertThat(decline(shipment.getId(), first, "{\"reason\":\"still no\"}").getStatus()).isEqualTo(403);
     }
 }

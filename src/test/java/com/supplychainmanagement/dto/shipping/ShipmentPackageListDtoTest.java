@@ -5,6 +5,7 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.ShipmentPackage;
+import com.supplychainmanagement.entity.users.Customer;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.JsonNode;
@@ -153,5 +154,39 @@ class ShipmentPackageListDtoTest {
         assertThat(item.has("shipmentPackageId")).isFalse();
         assertThat(item.has("shipmentPackage")).isFalse();
         assertThat(item.has("orderItem")).isFalse();
+    }
+
+    /** The customer the package goes to is the one of its order - their id, nothing else of them. */
+    @Test
+    void carriesTheIdOfTheCustomerOfItsOrder() {
+        ShipmentPackage shipmentPackage = packageWithOneItem();
+        Customer customer = new Customer();
+        customer.setId(44L);
+        shipmentPackage.getItems().getFirst().getOrderItem().getOrder().setCustomer(customer);
+
+        assertThat(ShipmentPackageListDto.from(shipmentPackage).customerId()).isEqualTo(44L);
+    }
+
+    /** An order without a customer, and a package without items, have none to name - null, not an exception. */
+    @Test
+    void hasNoCustomerIdWhereThereIsNoCustomer() {
+        assertThat(ShipmentPackageListDto.from(packageWithOneItem()).customerId()).isNull();
+
+        ShipmentPackage empty = new ShipmentPackage();
+        empty.setId(6L);
+        empty.setShipmentPackageStatus(ShipmentPackageStatus.OPEN);
+        assertThat(ShipmentPackageListDto.from(empty).customerId()).isNull();
+    }
+
+    @Test
+    void keepsTheCustomerIdInTheJson() throws Exception {
+        ShipmentPackage shipmentPackage = packageWithOneItem();
+        Customer customer = new Customer();
+        customer.setId(44L);
+        shipmentPackage.getItems().getFirst().getOrderItem().getOrder().setCustomer(customer);
+
+        JsonNode json = mapper.readTree(mapper.writeValueAsString(ShipmentPackageListDto.from(shipmentPackage)));
+
+        assertThat(json.get("customerId").asLong()).isEqualTo(44L);
     }
 }

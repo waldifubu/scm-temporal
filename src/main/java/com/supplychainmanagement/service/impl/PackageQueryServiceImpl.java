@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageListDto;
 import com.supplychainmanagement.entity.ShipmentPackage;
@@ -68,9 +69,11 @@ public class PackageQueryServiceImpl implements PackageQueryService {
      */
     @Override
     @Transactional(readOnly = true)
-    public Page<PackageItemResponse> findPackageItems(Pageable pageable) {
-        return packageItemResponseAssembler.toResponses(
-                packageItemRepository.findAllWithProductBy(withIdTieBreak(pageable)));
+    public Page<PackageItemResponse> findPackageItems(Pageable pageable, FulfillmentStatus status) {
+        Pageable ordered = withIdTieBreak(pageable);
+        return packageItemResponseAssembler.toResponses(status == null
+                ? packageItemRepository.findAllWithProductBy(ordered)
+                : packageItemRepository.findAllWithProductByOrderItemFulfillmentStatus(status, ordered));
     }
 
     /**
@@ -91,9 +94,11 @@ public class PackageQueryServiceImpl implements PackageQueryService {
      */
     @Override
     @Transactional(readOnly = true)
-    public Page<PackageItemResponse> findLoosePackageItems(Pageable pageable) {
-        return packageItemResponseAssembler.toResponses(
-                packageItemRepository.findAllWithProductByShipmentPackageIsNull(withIdTieBreak(pageable)));
+    public Page<PackageItemResponse> findLoosePackageItems(Pageable pageable, FulfillmentStatus status) {
+        Pageable ordered = withIdTieBreak(pageable);
+        return packageItemResponseAssembler.toResponses(status == null
+                ? packageItemRepository.findAllWithProductByShipmentPackageIsNull(ordered)
+                : packageItemRepository.findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(status, ordered));
     }
 
     /** One package item - the same row the lists show; unknown id is a 404. */

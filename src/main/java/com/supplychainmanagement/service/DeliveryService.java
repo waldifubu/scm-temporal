@@ -36,7 +36,7 @@ public interface DeliveryService {
 
     /**
      * The same, with what the carrier has to say to it: kept in the shipment's {@code distributorComment}, as
-     * a rejection keeps its reason. Optional - {@code null} or blank leaves the comment as it was. Longer than
+     * a decline keeps its reason. Optional - {@code null} or blank leaves the comment as it was. Longer than
      * the column is a 400.
      */
     DeliveryResponse acceptShipment(Long shipmentId, String reason, Long userId);
@@ -53,7 +53,7 @@ public interface DeliveryService {
     DeliveryResponse assignTrackingNumber(Long shipmentId, String trackingNumber, Long userId);
 
     /**
-     * The carrier turns the shipment down: DISPATCH_REQUESTED to REJECTED, and the reason is kept in the
+     * The carrier turns the shipment down: DISPATCH_REQUESTED to DECLINED, and the reason is kept in the
      * shipment's {@code distributorComment}. <strong>Nothing else happens</strong> - the packages stay in the
      * shipment, no order line and no order is touched, no order progress is recomputed. A shipment
      * assigned to somebody else is a 403 (ADMIN excepted), any status but DISPATCH_REQUESTED a 409, a blank
@@ -62,5 +62,5 @@ public interface DeliveryService {
      * DISPATCH_REQUESTED only, like {@link #acceptShipment}: it is declining what was offered, before
      * anything was promised. Once the shipment is accepted, backing out is a cancellation.
      */
-    DeliveryResponse rejectShipment(Long shipmentId, String reason, Long userId);
+    DeliveryResponse declineShipment(Long shipmentId, String reason, Long userId);
 }

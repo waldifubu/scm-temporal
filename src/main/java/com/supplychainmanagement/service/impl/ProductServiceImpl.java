@@ -10,6 +10,11 @@ import com.supplychainmanagement.repository.ProductCategoryRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.service.ProductService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -28,6 +33,27 @@ public class ProductServiceImpl implements ProductService {
     @Override
     public List<Product> findAll() {
         return productRepository.findAllBy();
+    }
+
+    @Override
+    public Page<Product> findPage(Pageable pageable, boolean withDetails) {
+        Page<Product> page = productRepository.findAllBy(withIdTieBreak(pageable));
+        if (!withDetails || page.isEmpty()) {
+            return page;
+        }
+        Map<Long, Product> detailed = productRepository
+                .findWithComponentsByIdIn(page.getContent().stream().map(Product::getId).toList()).stream()
+                .collect(Collectors.toMap(Product::getId, Function.identity()));
+        // The page's own order, not the order the second query happens to answer in.
+        List<Product> ordered = page.getContent().stream().map(product -> detailed.getOrDefault(product.getId(), product)).toList();
+        return new PageImpl<>(ordered, page.getPageable(), page.getTotalElements());
+    }
+
+    private static Pageable withIdTieBreak(Pageable pageable) {
+        if (pageable.getSort().getOrderFor("id") != null) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), pageable.getSort().and(Sort.by("id")));
     }
 
     @Override

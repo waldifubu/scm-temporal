@@ -86,7 +86,10 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public Page<Order> findAllByUserAndStatus(org.springframework.security.core.userdetails.User authUser, OrderStatus status, Pageable pageable) {
-        if (roleService.isAdmin(authUser)) {
+        // The roles that work from orders without being their customer - ADMIN, MANAGER, WAREHOUSE, LOGISTICS, the
+        // same set that may read any single order - see all of them. They have none of their own, and asking for
+        // those handed them an empty list. Everybody else on this endpoint is a customer.
+        if (roleService.canReadAnyOrder(authUser)) {
             return findAllByStatus(status, pageable);
         }
 

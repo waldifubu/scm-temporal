@@ -25,6 +25,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -195,5 +197,64 @@ class InventoryReservationTransactionServiceTest {
         when(reservationRepository.findActiveByOrderItem(11L)).thenReturn(Optional.empty());
 
         assertThat(service.consume(ORDER_ID, List.of(reserveItem(11L, 3)))).isEmpty();
+    }
+
+    // ------------------------------------------------------------------ restore (a pick taken back)
+
+    private Reservation consumedReservation(Long orderItemId, int quantity) {
+        Reservation reservation = Reservation.active(line(orderItemId, quantity), SKU, quantity, storehouse);
+        reservation.consume();
+        when(reservationRepository.findByOrderItemIdAndStatus(orderItemId, ReservationStatus.CONSUMED))
+                .thenReturn(Optional.of(reservation));
+        return reservation;
+    }
+
+    /** The quantity goes back onto the stock row and the consumed reservation is deleted, not kept. */
+    @Test
+    void restorePutsTheStockBackAndDeletesTheConsumedReservation() {
+        Stock stock = stockAvailable(7);
+        Reservation consumed = consumedReservation(11L, 3);
+
+        var restored = service.restore(ORDER_ID, List.of(reserveItem(11L, 3)));
+
+        assertThat(restored).containsExactly(consumed);
+        assertThat(stock.getOnHand()).isEqualTo(10);
+        verify(stockRepository).save(stock);
+        verify(reservationRepository).delete(consumed);
+    }
+
+    /** Only a CONSUMED reservation is looked for: an ACTIVE one is not a pick to take back. */
+    @Test
+    void restoreAsksForTheConsumedReservationOfTheLine() {
+        stockAvailable(7);
+        consumedReservation(11L, 3);
+
+        service.restore(ORDER_ID, List.of(reserveItem(11L, 3)));
+
+        verify(reservationRepository).findByOrderItemIdAndStatus(11L, ReservationStatus.CONSUMED);
+        verify(reservationRepository, never()).findActiveByOrderItem(11L);
+    }
+
+    /** A line without a consumed reservation is skipped - nothing is added to the shelf for it. */
+    @Test
+    void restoreSkipsALineWithoutAConsumedReservation() {
+        Stock stock = stockAvailable(7);
+        when(reservationRepository.findByOrderItemIdAndStatus(11L, ReservationStatus.CONSUMED)).thenReturn(Optional.empty());
+
+        assertThat(service.restore(ORDER_ID, List.of(reserveItem(11L, 3)))).isEmpty();
+
+        assertThat(stock.getOnHand()).isEqualTo(7);
+        verify(reservationRepository, never()).delete(any(Reservation.class));
+    }
+
+    /** And a line without a stock row: the reservation stays, so nothing is lost without the goods being back. */
+    @Test
+    void restoreSkipsALineWithoutAStockRowAndKeepsItsReservation() {
+        when(stockRepository.findByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.empty());
+        consumedReservation(11L, 3);
+
+        assertThat(service.restore(ORDER_ID, List.of(reserveItem(11L, 3)))).isEmpty();
+
+        verify(reservationRepository, never()).delete(any(Reservation.class));
     }
 }

@@ -80,7 +80,7 @@ class ShipmentControllerTest {
                 ShipmentPackageType.CARTON, java.time.LocalDateTime.of(2026, 10, 7, 9, 15, 30),
                 java.time.LocalDateTime.of(2026, 10, 8, 14, 5, 0), BigDecimal.ONE, BigDecimal.TEN,
                 new BigDecimal("40"), new BigDecimal("30"), new BigDecimal("20"), BigDecimal.ONE,
-                LocalDate.of(2026, 10, 1), 1, List.of());
+                LocalDate.of(2026, 10, 1), 3L, 1, List.of());
         when(shipmentService.findShippablePackages(any()))
                 .thenAnswer(call -> new PageImpl<>(List.of(shippable), call.<Pageable>getArgument(0), 1));
     }

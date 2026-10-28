@@ -78,6 +78,24 @@ public class PickingController {
     }
 
     /**
+     * Takes a pick back. The reservation has to be one that was picked (CONSUMED): its order line goes from
+     * PICKED back to WAITING, the stock that was taken off the shelf is put back onto it, and the reservation
+     * is deleted - the line is then reserved anew like any other waiting line. 404 for a reservation that was
+     * not picked (or has been taken back already), 409 once the line has been packed.
+     * <p>
+     * A POST under its own path rather than a DELETE on {@code /picking/{reservationId}}: it changes stock and a
+     * line, and the answer is the row as it stands afterwards.
+     *
+     * @param reservationId the reservation that was picked, as {@code GET /picking-orders?status=CONSUMED} lists it
+     * @return the picking row, with the line back in WAITING
+     */
+    @PostMapping(path = "/release/{reservationId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    public PickingOrderDto releasePick(@PathVariable Long reservationId) {
+        return orderHandlingService.unpickReservationById(reservationId);
+    }
+
+    /**
      * Pick all reservations associated with a specific order number. This allows warehouse staff to process all items related to a single order in one operation.
      *
      * @param orderNo The order number for which to pick all reservations.

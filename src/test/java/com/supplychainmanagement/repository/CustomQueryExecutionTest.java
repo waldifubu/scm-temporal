@@ -397,4 +397,17 @@ class CustomQueryExecutionTest {
         assertThat(shipmentRepository.findWithPackagesByIdIn(List.of(UNKNOWN_ID))).isEmpty();
         assertThat(shipmentRepository.findWithPackagesById(UNKNOWN_ID)).isEmpty();
     }
+
+    /** The filter by the fulfillment status of the order line: every row has that status, loose or not. */
+    @Test
+    void packageItemsCanBeFilteredByTheFulfillmentStatusOfTheirLine() {
+        var all = packageItemRepository.findAllWithProductByOrderItemFulfillmentStatus(
+                com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED, PageRequest.of(0, 50));
+        var loose = packageItemRepository.findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(
+                com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED, PageRequest.of(0, 50));
+
+        assertThat(all.getContent()).allSatisfy(item -> assertThat(item.getOrderItem().getFulfillmentStatus())
+                .isEqualTo(com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED));
+        assertThat(loose.getContent()).allSatisfy(item -> assertThat(item.getShipmentPackage()).isNull());
+    }
 }

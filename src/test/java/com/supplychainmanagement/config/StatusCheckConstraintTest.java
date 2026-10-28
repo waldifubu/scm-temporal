@@ -154,7 +154,7 @@ class StatusCheckConstraintTest {
     }
 
     /**
-     * The same for a shipment. REJECTED is the value that would have run into the check Hibernate wrote
+     * The same for a shipment. DECLINED is the value that would have run into the check Hibernate wrote
      * when the table was created - the carrier's "no" would have come back as a 500 on a shipment that
      * is perfectly well.
      */

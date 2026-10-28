@@ -3,6 +3,9 @@ package com.supplychainmanagement.service;
 import com.supplychainmanagement.dto.product.ProductRequestDto;
 import com.supplychainmanagement.entity.Product;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+
 import java.util.List;
 
 /**
@@ -12,6 +15,14 @@ import java.util.List;
 public interface ProductService {
 
     List<Product> findAll();
+
+    /**
+     * One page of products. With {@code withDetails} the components and categories are loaded as well - in
+     * a second query for the whole page, not one per product; without, they are left unloaded. The id is
+     * added to the sort as the tie-break, so products that share the sort value keep their place from one
+     * page to the next.
+     */
+    Page<Product> findPage(Pageable pageable, boolean withDetails);
 
     Product findById(Long id);
 

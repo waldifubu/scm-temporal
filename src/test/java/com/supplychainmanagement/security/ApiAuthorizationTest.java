@@ -107,7 +107,9 @@ class ApiAuthorizationTest {
         return Stream.of(
                 // The clean split: packing work is the warehouse's, planning is logistics'.
                 get("/api/1.0/packages", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
-                get("/api/1.0/shipment-packages", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
+                // LOGISTICS reads the containers too (list and single one) - the planning side looks into what it ships.
+                get("/api/1.0/shipment-packages", RoleEnum.ADMIN, RoleEnum.WAREHOUSE, RoleEnum.LOGISTICS),
+                get("/api/1.0/shipment-packages/1", RoleEnum.ADMIN, RoleEnum.WAREHOUSE, RoleEnum.LOGISTICS),
                 get("/api/1.0/shipments", RoleEnum.ADMIN, RoleEnum.LOGISTICS),
                 // The planning side's own view of what it may ship - the overlap's replacement.
                 get("/api/1.0/shipments/packages", RoleEnum.ADMIN, RoleEnum.LOGISTICS),
@@ -125,7 +127,7 @@ class ApiAuthorizationTest {
                         RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 // One cancel for both sides, which was two endpoints on one path before.
                 // The carrier turns a shipment down - theirs, with a reason.
-                post("/api/1.0/shipments/1/reject", "{\"reason\": \"no truck free\"}", RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
+                post("/api/1.0/shipments/1/decline", "{\"reason\": \"no truck free\"}", RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/cancel", "{\"reason\": \"no truck\"}",
                         RoleEnum.ADMIN, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 // The component catalogue: the warehouse reads it because it orders parts.
@@ -167,6 +169,8 @@ class ApiAuthorizationTest {
                 // picking and packing themselves stay with ADMIN and WAREHOUSE.
                 get("/api/1.0/picking-orders", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 get("/api/1.0/order-items", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                // Taking a pick back changes stock and a line: picking itself, so ADMIN and WAREHOUSE only.
+                post("/api/1.0/release/987654321", null, RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 get("/api/1.0/order-items/packable", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // Making a package from existing package items is packing, which the manager does not do -
                 // he reads the lists above, he does not write.

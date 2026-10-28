@@ -92,7 +92,7 @@ public class AutomaticReservationService {
                 .collect(Collectors.joining(", "));
     }
 
-    @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 70, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void tryToReserve() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
 

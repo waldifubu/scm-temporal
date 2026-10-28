@@ -1,8 +1,10 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.stock.InventoryRow;
 import com.supplychainmanagement.entity.Stock;
 import com.supplychainmanagement.entity.Storehouse;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.repository.StockInventoryRepository;
 import com.supplychainmanagement.repository.StockRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
 import lombok.AllArgsConstructor;
@@ -22,6 +24,13 @@ public class StockService {
 
     private final StockRepository stockRepository;
     private final StorehouseRepository storehouseRepository;
+    private final StockInventoryRepository stockInventoryRepository;
+
+    /** What the warehouse holds per article, every storehouse added up. */
+    @Transactional(readOnly = true)
+    public Page<InventoryRow> findInventory(Pageable pageable) {
+        return stockInventoryRepository.findInventory(pageable);
+    }
 
     /**
      * Books {@code quantity} onto the stock of one SKU in one storehouse, creating the row if this is

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.repository;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.entity.PackageItem;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
@@ -40,6 +41,14 @@ public interface PackageItemRepository extends JpaRepository<PackageItem, Long> 
      */
     @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
     Page<PackageItem> findAllWithProductByShipmentPackageIsNull(Pageable pageable);
+
+    /** {@link #findAllWithProductBy} for the items whose order line is in one fulfillment status. */
+    @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
+    Page<PackageItem> findAllWithProductByOrderItemFulfillmentStatus(FulfillmentStatus status, Pageable pageable);
+
+    /** {@link #findAllWithProductByShipmentPackageIsNull} for the items whose order line is in one fulfillment status. */
+    @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
+    Page<PackageItem> findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(FulfillmentStatus status, Pageable pageable);
 
     /** One package item with what its detail view reads - order line, product and order. */
     @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})

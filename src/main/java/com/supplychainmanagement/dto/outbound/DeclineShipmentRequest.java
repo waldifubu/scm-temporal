@@ -5,7 +5,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 /**
- * Why a carrier turned a shipment down. Required: it is the only thing the rejection records besides the
+ * Why a carrier turned a shipment down. Required: it is the only thing the decline records besides the
  * status, and the planner who has to hand the shipment to somebody else reads it to know why. It is
  * kept in the shipment's {@code distributorComment}.
  * <p>
@@ -13,9 +13,9 @@ import jakarta.validation.constraints.Size;
  * {@code varchar(255)}: a longer reason would otherwise come back as a 500 from the database instead of a
  * 400 that names the field.
  */
-public record RejectShipmentRequest(
+public record DeclineShipmentRequest(
         @NotBlank(message = "reason is required")
-        @Size(max = RejectShipmentRequest.MAX_REASON_LENGTH, message = "reason is too long (at most 255 characters)")
+        @Size(max = DeclineShipmentRequest.MAX_REASON_LENGTH, message = "reason is too long (at most 255 characters)")
         String reason
 ) {
 

@@ -70,6 +70,33 @@ class PickingControllerTest {
                 .andExpect(jsonPath("$.fulfillmentStatus").value("PICKED"));
     }
 
+    /** A pick taken back: POST /release/{reservationId}, the row as it stands afterwards. */
+    @Test
+    void takesAPickBack() throws Exception {
+        PickingOrderDto waiting = new PickingOrderDto(7L, 91234L, 11L, 900L, "Regal", SKU, 2, 1L,
+                "Lager", FulfillmentStatus.WAITING, LocalDateTime.of(2026, 10, 5, 12, 0));
+        when(orderHandlingService.unpickReservationById(7L)).thenReturn(waiting);
+
+        mockMvc.perform(post("/api/1.0/release/7"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.reservationId").value(7))
+                .andExpect(jsonPath("$.fulfillmentStatus").value("WAITING"));
+    }
+
+    /** A reservation that was not picked, and a line that has moved on, answer as ErrorDetails like every endpoint. */
+    @Test
+    void answersARefusedTakeBackAsErrorDetails() throws Exception {
+        when(orderHandlingService.unpickReservationById(7L)).thenThrow(new APIException(
+                HttpStatus.CONFLICT, "Order item 11 is PACKED, only a PICKED line can be taken back"));
+        when(orderHandlingService.unpickReservationById(8L)).thenThrow(
+                new com.supplychainmanagement.exception.ResourceNotFoundException("Reservation", "id not picked (or already taken back)", 8L));
+
+        mockMvc.perform(post("/api/1.0/release/7"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Order item 11 is PACKED, only a PICKED line can be taken back"));
+        mockMvc.perform(post("/api/1.0/release/8")).andExpect(status().isNotFound());
+    }
+
     /** A whole order picked - the rows as a list. */
     @Test
     void picksAWholeOrder() throws Exception {

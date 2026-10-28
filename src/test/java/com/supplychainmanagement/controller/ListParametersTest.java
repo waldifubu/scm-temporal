@@ -69,6 +69,8 @@ class ListParametersTest {
                 new Listing("/lonely-packages", PackageController.PACKAGE_ITEM_SORTABLE),
                 new Listing("/components/requests", ComponentController.REQUEST_SORTABLE),
                 new Listing("/users", UserController.USER_SORTABLE),
+                new Listing("/products", ProductController.PRODUCT_SORTABLE),
+                new Listing("/stock/inventory", StockController.INVENTORY_SORTABLE),
                 new Listing("/stock/storehouse/1", StockController.STOCK_SORTABLE));
     }
 
