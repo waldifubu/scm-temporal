@@ -1,7 +1,9 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
+import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -62,4 +64,12 @@ public interface UserService {
      * counterpart on the shipment side.
      */
     Page<User> findSuppliers(Pageable pageable);
+
+    /**
+     * The carriers the rules ({@code DistributorRule}) name for a customer, a weight and a volume, best first:
+     * the rule that sets the most dimensions leads, the priority decides between equals, and a carrier named by
+     * several rules appears once, at its best place. Only active carriers. Empty when no rule applies.
+     */
+    List<Distributor> queryDistributors(DistributorQueryRequest request);
+
 }

@@ -1,5 +1,7 @@
 package com.supplychainmanagement.dto.user;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+
 import java.util.Set;
 
 /**
@@ -17,6 +19,8 @@ public record UserDto(
         String email,
         String color,
         Boolean isActive,
-        Set<String> roles
+        Set<String> roles,
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        Long ruleId
 ) {
 }

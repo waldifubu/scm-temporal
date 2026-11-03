@@ -2,6 +2,7 @@ package com.supplychainmanagement.dto.mapper;
 
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.Customer;
+import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import org.junit.jupiter.api.Test;
@@ -70,5 +71,23 @@ class UserMapperTest {
         user.setRoles(null);
 
         assertThat(mapper.mapToDto(user).roles()).isEmpty();
+    }
+
+    /** It lives on the carrier alone, so a mapping by name through {@code User} used to leave it {@code null}. */
+    @Test
+    void aCarrierShowsTheRuleThatNamedIt() {
+        Distributor carrier = new Distributor();
+        carrier.setId(319L);
+        carrier.setRuleId(7L);
+
+        assertThat(mapper.mapToDto(carrier).ruleId()).isEqualTo(7L);
+        assertThat(JsonMapper.builder().build().writeValueAsString(mapper.mapToDto(carrier))).contains("\"ruleId\":7");
+    }
+
+    @Test
+    void aCarrierNobodyLookedUpAndEveryOtherUserHaveNoRuleAndNoKey() {
+        assertThat(mapper.mapToDto(new Distributor()).ruleId()).isNull();
+        assertThat(mapper.mapToDto(sampleUser()).ruleId()).isNull();
+        assertThat(JsonMapper.builder().build().writeValueAsString(mapper.mapToDto(sampleUser()))).doesNotContain("ruleId");
     }
 }

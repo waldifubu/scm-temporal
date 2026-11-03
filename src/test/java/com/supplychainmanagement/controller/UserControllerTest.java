@@ -1,7 +1,9 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.mapper.UserMapper;
+import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserRequestDto;
+import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.GlobalExceptionHandler;
 import com.supplychainmanagement.model.enums.RoleEnum;
@@ -13,6 +15,8 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
+import java.math.BigDecimal;
+import java.util.List;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,6 +29,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -95,5 +100,52 @@ class UserControllerTest {
                 .andExpect(status().isBadRequest());
 
         verifyNoInteractions(userService);
+    }
+
+    /** The question is in the body: customer, weight in kg, volume in cm3 - and the answer is a page, best carrier first. */
+    @Test
+    void queryDistributorsBindsTheBodyAndAnswersAPage() throws Exception {
+        Distributor first = new Distributor();
+        first.setId(319L);
+        Distributor second = new Distributor();
+        second.setId(320L);
+        when(userService.queryDistributors(any(DistributorQueryRequest.class))).thenReturn(List.of(first, second));
+
+        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+                        .content("""
+                                { "customerId": 311, "weight": 60.5, "volume": 250000 }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].id").value(319))
+                .andExpect(jsonPath("$.content[1].id").value(320))
+                .andExpect(jsonPath("$.total").value(2));
+
+        ArgumentCaptor<DistributorQueryRequest> captor = ArgumentCaptor.forClass(DistributorQueryRequest.class);
+        verify(userService).queryDistributors(captor.capture());
+        assertThat(captor.getValue().customerId()).isEqualTo(311L);
+        assertThat(captor.getValue().weight()).isEqualByComparingTo(new BigDecimal("60.5"));
+        assertThat(captor.getValue().volume()).isEqualByComparingTo(new BigDecimal("250000"));
+    }
+
+    @Test
+    void queryDistributorsAnswersAnEmptyPageWhenNoRuleApplies() throws Exception {
+        when(userService.queryDistributors(any(DistributorQueryRequest.class))).thenReturn(List.of());
+
+        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON).content("{}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isEmpty())
+                .andExpect(jsonPath("$.total").value(0));
+    }
+
+    @Test
+    void queryDistributorsRefusesANegativeWeightOrVolume() throws Exception {
+        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+                        .content("{ \"weight\": -1 }"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+                        .content("{ \"volume\": -5 }"))
+                .andExpect(status().isBadRequest());
+
+        verify(userService, org.mockito.Mockito.never()).queryDistributors(any());
     }
 }

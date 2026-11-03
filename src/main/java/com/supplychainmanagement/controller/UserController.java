@@ -1,8 +1,10 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.annotation.HttpQuery;
 import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.mapper.UserMapper;
+import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
@@ -10,10 +12,14 @@ import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.Query;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import io.swagger.v3.oas.annotations.Operation;
+import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import java.util.List;
 import java.util.Set;
 
 @RestController
@@ -62,6 +68,20 @@ public class UserController {
             @RequestParam(defaultValue = "ASC") String order) {
         Pageable pageable = PageRequests.of(page, size, sort, order, USER_SORTABLE);
         return toPageResponse(userService.findDistributors(pageable));
+    }
+
+    /**
+     * The carriers the rules name for a shipment of this customer, weight (kg) and volume (cm&sup3;), best first.
+     * The HTTP {@code QUERY} method: a question with a body that changes nothing. An empty page when no rule applies.
+     * Every carrier carries {@code ruleId}, the rule that named it.
+     */
+    @NoCheck
+    @HttpQuery(path = "/distributors/query", version = "1.0")
+    @Operation(hidden = true)
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'LOGISTICS')")
+    public PageResponse<UserDto> queryDistributors(@Valid @RequestBody DistributorQueryRequest request) {
+        List<UserDto> distributors = userService.queryDistributors(request).stream().map(userMapper::mapToDto).toList();
+        return new PageResponse<>(distributors, distributors.size(), 0, Math.max(distributors.size(), 1));
     }
 
     /**

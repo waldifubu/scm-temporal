@@ -1,19 +1,23 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.mapper.UserMapper;
+import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
+import com.supplychainmanagement.entity.DistributorRule;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.*;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.DistributorRepository;
+import com.supplychainmanagement.repository.DistributorRuleRepository;
 import com.supplychainmanagement.repository.RoleRepository;
 import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
+import org.hibernate.Hibernate;
 import org.springframework.beans.BeanUtils;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -22,10 +26,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 @Service
 @RequiredArgsConstructor
@@ -45,6 +46,7 @@ public class UserServiceImpl implements UserService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final DistributorRepository distributorRepository;
+    private final DistributorRuleRepository distributorRuleRepository;
     private final SupplierRepository supplierRepository;
     private final PasswordEncoder passwordEncoder;
     private final UserMapper userMapper;
@@ -289,6 +291,30 @@ public class UserServiceImpl implements UserService {
     @Override
     public Page<User> findDistributors(Pageable pageable) {
         return distributorRepository.findAllByIsActiveTrue(pageable).map(distributor -> (User) distributor);
+    }
+
+    @Override
+    public List<Distributor> queryDistributors(DistributorQueryRequest request) {
+        // Most specific first, then the higher priority, then the older rule - so the answer never depends on
+        // the order the database returns the rows in.
+        Comparator<DistributorRule> bestFirst = Comparator.comparingInt(DistributorRule::specificity)
+                .thenComparingInt(DistributorRule::getPriority)
+                .reversed()
+                .thenComparing(DistributorRule::getId);
+        Map<Long, Distributor> byId = new LinkedHashMap<>();
+
+        List<DistributorRule> toSort = new ArrayList<>(distributorRuleRepository.findMatching(request.customerId(), request.weight(), request.volume()));
+        toSort.sort(bestFirst);
+
+        // The first rule is the best one for this carrier; a worse rule naming it again must not overwrite the id.
+        toSort.forEach(rule -> {
+            var distributor = rule.getDistributor();
+            if (!byId.containsKey(distributor.getId())) {
+                distributor.setRuleId(rule.getId());
+                byId.put(distributor.getId(), distributor);
+            }
+        });
+        return List.copyOf(byId.values());
     }
 
     /**

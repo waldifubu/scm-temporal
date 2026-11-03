@@ -102,7 +102,7 @@ class SecurityBeanConfigCorsTest {
         CorsConfiguration cors = built("http://localhost:5173");
 
         assertThat(cors.getAllowedMethods())
-                .containsExactlyInAnyOrder("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS");
+                .containsExactlyInAnyOrder("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "QUERY");
     }
 
     /** The session is a cookie, so credentials stay on - which is why the origin may never be a wildcard. */

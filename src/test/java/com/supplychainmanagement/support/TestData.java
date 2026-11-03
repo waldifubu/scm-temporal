@@ -83,6 +83,13 @@ public class TestData {
         return userRepository.saveAndFlush(customer);
     }
 
+    /** An active carrier, as a distributor rule or a shipment needs one. */
+    public Distributor distributor() {
+        Distributor distributor = new Distributor();
+        fillUser(distributor, "Carl", "Carrier");
+        return userRepository.saveAndFlush(distributor);
+    }
+
     /** A supplier, as a component request needs one. */
     public Supplier supplier() {
         Supplier supplier = new Supplier();
