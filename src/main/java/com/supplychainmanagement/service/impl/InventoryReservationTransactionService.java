@@ -16,11 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.stream.Collectors;
 
 @Service
@@ -31,6 +27,10 @@ public class InventoryReservationTransactionService {
     private final StockRepository stockRepository;
     private final ReservationRepository reservationRepository;
     private final OrderItemRepository orderItemRepository;
+
+    private static String keyOf(ReserveItem item) {
+        return item.storehouseId() + ":" + item.sku();
+    }
 
     /**
      * Reserves every item it can and skips the rest, so an order whose stock is only partly
@@ -50,6 +50,8 @@ public class InventoryReservationTransactionService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public ReservationResult reserve(Long orderId, List<ReserveItem> items) {
+        // The stock rows first, before any other read of this transaction: see lockStocks.
+        Map<String, Stock> stocks = lockStocks(items);
         List<Reservation> active = new ArrayList<>(reservationRepository.findActive(orderId));
         List<Reservation> created = new ArrayList<>();
 
@@ -68,7 +70,7 @@ public class InventoryReservationTransactionService {
                 continue;
             }
 
-            Stock stock = stockRepository.findByStorehouseIdAndSku(item.storehouseId(), item.sku()).orElse(null);
+            Stock stock = stocks.get(keyOf(item));
             if (stock == null || stock.getAvailable() < item.quantity()) {
                 // No stock row, or the stock went away between checkItems and here. Leave the line
                 // unreserved instead of failing the whole order.
@@ -106,13 +108,14 @@ public class InventoryReservationTransactionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Reservation> release(Long orderId, List<ReserveItem> items) {
         List<Reservation> released = new ArrayList<>();
+        Map<String, Stock> stocks = lockStocks(items);
 
         Stock stock;
         Reservation reservation;
 
         for (ReserveItem item : items) {
             try {
-                stock = findStock(item);
+                stock = findStock(stocks, item);
                 reservation = findActiveReservation(orderId, item);
 
                 stock.release(item.quantity());
@@ -142,13 +145,14 @@ public class InventoryReservationTransactionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Reservation> consume(Long orderId, List<ReserveItem> items) {
         List<Reservation> consumed = new ArrayList<>();
+        Map<String, Stock> stocks = lockStocks(items);
 
         for (ReserveItem item : items) {
 
             Stock stock;
             Reservation reservation;
             try {
-                stock = findStock(item);
+                stock = findStock(stocks, item);
                 reservation = findActiveReservation(orderId, item);
 
                 stock.consume(item.quantity());
@@ -179,11 +183,12 @@ public class InventoryReservationTransactionService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public List<Reservation> restore(Long orderId, List<ReserveItem> items) {
         List<Reservation> restored = new ArrayList<>();
+        Map<String, Stock> stocks = lockStocks(items);
 
         for (ReserveItem item : items) {
             Reservation reservation;
             try {
-                Stock stock = findStock(item);
+                Stock stock = findStock(stocks, item);
                 reservation = reservationRepository
                         .findByOrderItemIdAndStatus(item.orderItemId(), ReservationStatus.CONSUMED)
                         .orElseThrow(() -> new IllegalStateException(
@@ -203,9 +208,41 @@ public class InventoryReservationTransactionService {
         return restored;
     }
 
-    private Stock findStock(ReserveItem item) {
-        return stockRepository.findByStorehouseIdAndSku(item.storehouseId(), item.sku())
-                .orElseThrow(() -> new IllegalArgumentException("Stock not found: " + item.sku()));
+    private Stock findStock(Map<String, Stock> locked, ReserveItem item) {
+        Stock stock = locked.get(keyOf(item));
+        if (stock == null) {
+            throw new IllegalArgumentException("Stock not found: " + item.sku());
+        }
+        return stock;
+    }
+
+    /**
+     * Locks the stock row of every item for the rest of this transaction ({@code PESSIMISTIC_WRITE}), and returns
+     * them by storehouse and SKU. A row that does not exist is simply not in the map.
+     * <p>
+     * Every booking reads {@code onHand}/{@code reserved} and writes it back; two of them on one row would compute
+     * from the same value, and {@code @Version} turns that into an {@code OptimisticLockException} and a retry. The
+     * lock makes the second one wait instead.
+     * <p>
+     * <strong>Ascending storehouse and SKU, whatever order the items come in</strong>: two orders reserving the same
+     * two articles in opposite order would otherwise each hold one row and wait for the other - a deadlock.
+     * <strong>And first in the transaction</strong>: MariaDB runs with {@code innodb_snapshot_isolation}, and a locking
+     * read of a row that changed after this transaction took its snapshot (the first plain read) is refused with
+     * "Record has changed since last read" instead of waiting.
+     */
+    private Map<String, Stock> lockStocks(List<ReserveItem> items) {
+        Map<String, Stock> locked = new HashMap<>();
+        items.stream()
+                .sorted(Comparator.comparing(ReserveItem::storehouseId, Comparator.nullsFirst(Comparator.naturalOrder()))
+                        .thenComparing(ReserveItem::sku, Comparator.nullsFirst(Comparator.naturalOrder())))
+                .forEach(item -> {
+                    String key = keyOf(item);
+                    if (!locked.containsKey(key)) {
+                        stockRepository.findForUpdateByStorehouseIdAndSku(item.storehouseId(), item.sku())
+                                .ifPresent(stock -> locked.put(key, stock));
+                    }
+                });
+        return locked;
     }
 
     /**

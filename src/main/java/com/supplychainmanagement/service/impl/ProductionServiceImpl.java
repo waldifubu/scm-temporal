@@ -85,8 +85,10 @@ public class ProductionServiceImpl implements ProductionService {
             );
         }
 
-        for (Map.Entry<UUID, Integer> required : requiredComponents.entrySet()) {
-            Stock componentStock = stockRepository.findByStorehouseIdAndSku(selectedStorehouseId, required.getKey())
+        // Locked while it is decremented, in ascending SKU order whatever the recipe lists first: two products sharing
+        // components in opposite order would otherwise deadlock. The check below reads the locked, current row.
+        for (Map.Entry<UUID, Integer> required : new java.util.TreeMap<>(requiredComponents).entrySet()) {
+            Stock componentStock = stockRepository.findForUpdateByStorehouseIdAndSku(selectedStorehouseId, required.getKey())
                     .orElseThrow(() -> new IllegalStateException("Stock missing for component sku " + required.getKey()));
 
             int decrementBy = required.getValue();

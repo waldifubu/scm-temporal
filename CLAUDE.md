@@ -1306,6 +1306,19 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   saved the data was `@Version`, and what the caller got was a 500 for a request that was fine. The
   goods receipt and `produce()` book into the same rows, and `assemble()` runs every 150 s. It joins
   the caller's transaction rather than `REQUIRES_NEW` on purpose: the goods receipt is all or nothing.
+  <br>**Every other read-modify-write of a stock row is locked too** (since 2026-11-04), through the same
+  `findForUpdateByStorehouseIdAndSku`: `reserve`/`release`/`consume`/`restore` in
+  `InventoryReservationTransactionService` (`lockStocks`), `StockService.transferItemToStock` and the component
+  decrement in `produceSingleProduct`. Plain reads (`findByStorehouseIdAndSku`, `findEligibleBySku`, the availability
+  lists) stay unlocked - they are checks, not writes. Two rules make the locks safe: **a fixed order** (storehouse id,
+  then SKU - `lockStocks` sorts, `transfer` takes the lower storehouse id first, `produce` goes by SKU), because
+  two callers taking the same rows in opposite order deadlock; and **first in the transaction**, because with
+  `innodb_snapshot_isolation` a locking read of a row that changed after the transaction's snapshot (its first plain
+  read) is refused with "Record has changed since last read" instead of waiting - so `reserve` locks before it reads
+  the active reservations. `produce` reads its eligibility checks first and cannot; there the refusal is possible but
+  narrow, and no worse than the `OptimisticLockException` it replaces. `@Version` stays as the second line of defence.
+  `StockRepository.findBySkuForUpdate` was removed: it carried no lock despite its name and had no caller.
+  Held by `InventoryReservationTransactionServiceTest` (order), `StockServiceTransferTest` (order in both directions).
   <br>One race is left where it cannot be closed - with no row yet there is nothing to lock, so two
   first-ever bookings of a SKU can both insert. That is flushed on the spot and answered as a 409 that
   says so, instead of a 500 at an outer commit; a retry would need its own transaction, which the

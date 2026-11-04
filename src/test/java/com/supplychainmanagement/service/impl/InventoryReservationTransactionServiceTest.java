@@ -92,10 +92,33 @@ class InventoryReservationTransactionServiceTest {
         stock.setReserved(0);
         stock.setStorehouse(storehouse);
 
-        when(stockRepository.findByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.of(stock));
+        when(stockRepository.findForUpdateByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.of(stock));
         when(stockRepository.save(any(Stock.class))).thenAnswer(call -> call.getArgument(0));
         when(reservationRepository.save(any(Reservation.class))).thenAnswer(call -> call.getArgument(0));
         return stock;
+    }
+
+    /**
+     * The stock rows are locked in ascending storehouse and SKU order, whatever order the items come in: two orders
+     * reserving the same two articles in opposite order would otherwise each hold one row and wait for the other.
+     */
+    @Test
+    void locksTheStockRowsInAscendingOrderWhateverTheItemsOrder() {
+        UUID low = UUID.fromString("106a99c3-944b-11f1-9b51-001e064520d8");
+        UUID high = UUID.fromString("f06a99c3-944b-11f1-9b51-001e064520d8");
+        when(reservationRepository.findActive(ORDER_ID)).thenReturn(List.of());
+        when(stockRepository.findForUpdateByStorehouseIdAndSku(any(), any())).thenReturn(Optional.empty());
+
+        service.reserve(ORDER_ID, List.of(
+                new ReserveItem(11L, high, 1, 2L),
+                new ReserveItem(12L, low, 1, 2L),
+                new ReserveItem(13L, high, 1, 1L)));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stockRepository);
+        order.verify(stockRepository).findForUpdateByStorehouseIdAndSku(1L, high);
+        // Within a storehouse by UUID.compareTo, which is signed: what matters is that it is one fixed order for everybody.
+        order.verify(stockRepository).findForUpdateByStorehouseIdAndSku(2L, high);
+        order.verify(stockRepository).findForUpdateByStorehouseIdAndSku(2L, low);
     }
 
     /**
@@ -250,7 +273,7 @@ class InventoryReservationTransactionServiceTest {
     /** And a line without a stock row: the reservation stays, so nothing is lost without the goods being back. */
     @Test
     void restoreSkipsALineWithoutAStockRowAndKeepsItsReservation() {
-        when(stockRepository.findByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.empty());
+        when(stockRepository.findForUpdateByStorehouseIdAndSku(STOREHOUSE_ID, SKU)).thenReturn(Optional.empty());
         consumedReservation(11L, 3);
 
         assertThat(service.restore(ORDER_ID, List.of(reserveItem(11L, 3)))).isEmpty();

@@ -78,6 +78,7 @@ class ProductionServiceProduceTest {
 
         when(stockRepository.findAvailableBySkuOrderByUpdatedAtAsc(sku)).thenReturn(List.of(stock));
         when(stockRepository.findByStorehouseIdAndSku(STOREHOUSE_ID, sku)).thenReturn(Optional.of(stock));
+        when(stockRepository.findForUpdateByStorehouseIdAndSku(STOREHOUSE_ID, sku)).thenReturn(Optional.of(stock));
         return stock;
     }
 

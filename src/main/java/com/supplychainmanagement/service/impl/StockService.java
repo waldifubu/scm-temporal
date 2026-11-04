@@ -88,11 +88,6 @@ public class StockService {
         return stockRepository.findBySku(sku);
     }
 
-    public Stock findStock(UUID sku, Long storehouseId) {
-        return stockRepository.findByStorehouseIdAndSku(storehouseId, sku)
-                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Stock not found"));
-    }
-
     public boolean isAvailable(UUID sku, int quantity, Long storehouseId) {
         if (quantity <= 0) {
             throw new IllegalArgumentException("Quantity must be greater than zero");
@@ -101,12 +96,6 @@ public class StockService {
         return stockRepository.findByStorehouseIdAndSku(storehouseId, sku)
                 .map(stock -> stock.getAvailable() >= quantity)
                 .orElse(false);
-    }
-
-    public int getAvailableQuantity(UUID sku, Long storehouseId) {
-        return stockRepository.findByStorehouseIdAndSku(storehouseId, sku)
-                .map(Stock::getAvailable)
-                .orElse(0);
     }
 
     @Transactional
@@ -123,14 +112,23 @@ public class StockService {
             throw new APIException(HttpStatus.BAD_REQUEST, "Source and target storehouse must be different");
         }
 
-        Stock sourceStock = stockRepository.findByStorehouseIdAndSku(storehouseFrom, sku)
+        // Both rows are locked, lower storehouse id first: A to B and B to A at the same time would otherwise each hold
+        // one row and wait for the other. The target may not exist yet - then there is nothing to lock.
+        Long lower = Math.min(storehouseFrom, storehouseTo);
+        Long higher = Math.max(storehouseFrom, storehouseTo);
+        Stock lowerStock = stockRepository.findForUpdateByStorehouseIdAndSku(lower, sku).orElse(null);
+        Stock higherStock = stockRepository.findForUpdateByStorehouseIdAndSku(higher, sku).orElse(null);
+        Stock existingSource = storehouseFrom.equals(lower) ? lowerStock : higherStock;
+        Stock existingTarget = storehouseTo.equals(lower) ? lowerStock : higherStock;
+
+        Stock sourceStock = java.util.Optional.ofNullable(existingSource)
                 .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Source stock not found"));
 
         if (sourceStock.getAvailable() < quantity) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Not enough available qty in source stock");
         }
 
-        Stock targetStock = stockRepository.findByStorehouseIdAndSku(storehouseTo, sku)
+        Stock targetStock = java.util.Optional.ofNullable(existingTarget)
                 .orElseGet(() -> {
                     var targetStorehouse = storehouseRepository.findById(storehouseTo)
                             .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Target storehouse not found"));

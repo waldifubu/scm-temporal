@@ -14,9 +14,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface StockRepository extends JpaRepository<Stock, Long> {
-    @Query("SELECT s FROM Stock s WHERE s.sku = :sku")
-    Optional<Stock> findBySkuForUpdate(@Param("sku") UUID sku);
-
     Optional<Stock> findByStorehouseIdAndSku(
             Long storehouseId,
             UUID sku
@@ -54,8 +51,6 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
             ORDER BY s.updatedAt ASC
             """)
     List<Stock> findEligibleBySku(@Param("sku") UUID sku, @Param("quantity") int quantity);
-
-    List<Stock> findByStorehouseId(Long id);
 
     Page<Stock> findByStorehouseId(Long id, Pageable pageable);
 }

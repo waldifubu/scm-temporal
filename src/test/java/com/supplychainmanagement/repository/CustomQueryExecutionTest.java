@@ -70,11 +70,6 @@ class CustomQueryExecutionTest {
     }
 
     @Test
-    void findBySkuForUpdateRuns() {
-        assertThat(stockRepository.findBySkuForUpdate(UNKNOWN_SKU)).isEmpty();
-    }
-
-    @Test
     void findAvailableBySkuOrderByUpdatedAtAscRuns() {
         assertThat(stockRepository.findAvailableBySkuOrderByUpdatedAtAsc(UNKNOWN_SKU)).isEmpty();
     }
