@@ -35,14 +35,10 @@ import java.util.regex.Pattern;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
-    private final JwtTokenProvider jwtTokenProvider; // You can implement this class to handle JWT token operations
-
-    private final UserDetailsService userDetailsService; // You can use this to load user details based on the token
-
-    private final HandlerExceptionResolver handlerExceptionResolver;
-
     private static final Pattern PUBLIC_API_PATTERN = Pattern.compile("^/api/(?:v?[0-9\\.]+/)?auth(/.*)?$");
-
+    private final JwtTokenProvider jwtTokenProvider; // You can implement this class to handle JWT token operations
+    private final UserDetailsService userDetailsService; // You can use this to load user details based on the token
+    private final HandlerExceptionResolver handlerExceptionResolver;
     @Value("${app.cookie.name}")
     private String cookieName;
 
@@ -67,11 +63,6 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     private SecurityContextHolderStrategy securityContextHolderStrategy =
             SecurityContextHolder.getContextHolderStrategy();
 
-    @Autowired(required = false)
-    public void setSecurityContextHolderStrategy(SecurityContextHolderStrategy securityContextHolderStrategy) {
-        this.securityContextHolderStrategy = securityContextHolderStrategy;
-    }
-
     public JwtAuthenticationFilter(JwtTokenProvider jwtTokenProvider, UserDetailsService userDetailsService,
                                    @Qualifier("handlerExceptionResolver") HandlerExceptionResolver handlerExceptionResolver) {
         this.jwtTokenProvider = jwtTokenProvider;
@@ -79,30 +70,10 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         this.handlerExceptionResolver = handlerExceptionResolver;
     }
 
-    /*
-    @Override
-    protected void doFilterInternal2(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
-
-        String jwtToken = getTokenFromRequest(request);
-
-        // Check if the Authorization header is present and starts with "Bearer "
-        if (StringUtils.hasText(jwtToken) && jwtTokenProvider.validateToken(jwtToken)) { // Validate the token (you can implement this method in JwtTokenProvider)
-            String username = jwtTokenProvider.getUsername(jwtToken); // Extract the username from the token (you can implement this method in JwtTokenProvider)
-            UserDetails userDetails = userDetailsService.loadUserByUsername(username); // Load user details based on the username
-
-            // Create an authentication token with the user details and authorities
-            UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
-            // Set the authentication details
-            authenticationToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-
-            SecurityContextHolder.getContext().setAuthentication(authenticationToken); // Set the authentication in the security context
-        }
-
-        // Continue with the filter chain
-        filterChain.doFilter(request, response);
+    @Autowired(required = false)
+    public void setSecurityContextHolderStrategy(SecurityContextHolderStrategy securityContextHolderStrategy) {
+        this.securityContextHolderStrategy = securityContextHolderStrategy;
     }
-     */
-
 
     // Auth endpoints and CORS preflights must pass without a token,
     // non-/api routes (Thymeleaf web app) are not JWT-secured at all.
@@ -122,6 +93,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             @NonNull FilterChain filterChain
     ) throws ServletException, IOException {
         String token = getTokenFromCookie(request);
+
         if (token == null) {
             token = getTokenFromRequestHeader(request);
         }
@@ -154,7 +126,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             // rule for it - log in again. 410 means "this resource used to exist and is gone for good",
             // which a session is not; a client following the rule would treat an expired session as a
             // different kind of error from an invalid one, though the remedy is identical.
-            throw new APIException(HttpStatus.UNAUTHORIZED, "JWT token expired: "+ex.getMessage());
+            throw new APIException(HttpStatus.UNAUTHORIZED, "JWT token expired: " + ex.getMessage());
         } catch (IllegalArgumentException ex) {
             logger.warn(ex.getMessage());
             throw new BadCredentialsException("Invalid JWT token", ex);

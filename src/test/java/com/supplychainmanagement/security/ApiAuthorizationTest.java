@@ -132,14 +132,20 @@ class ApiAuthorizationTest {
                         RoleEnum.ADMIN, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 // The component catalogue: the warehouse reads it because it orders parts.
                 get("/api/1.0/components", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                // Changing a component: the warehouse may as well, it keeps the parts.
+                patch("/api/1.0/components/706a99c3-944b-11f1-9b51-001e064520d8", "{\"name\": \"Blech\"}",
+                        RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // The warehouse's work list and the supplier's own - two views of the same rows.
                 get("/api/1.0/components/requests", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // Whom a request can be placed with - the same three roles that may place one. The warehouse
                 // is among them and may not read /users, which is why the list exists.
                 get("/api/1.0/components/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 get("/api/1.0/supplier/my-requests", RoleEnum.ADMIN, RoleEnum.SUPPLIER),
-                post("/api/1.0/components/request/1",
+                post("/api/1.0/components/request",
                         "[{\"componentId\": \"706a99c3-944b-11f1-9b51-001e064520d8\", \"qty\": 1}]",
+                        RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                // Whom a request would go to, before it is sent - the same roles that may send it.
+                get("/api/1.0/components/suppliers/resolve?sku=706a99c3-944b-11f1-9b51-001e064520d8",
                         RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // What the supplier reports, and the goods receipt that answers it.
                 post("/api/1.0/supplier/1/approve", null, RoleEnum.ADMIN, RoleEnum.SUPPLIER),
@@ -148,18 +154,23 @@ class ApiAuthorizationTest {
                 post("/api/1.0/supplier/1/reject", null, RoleEnum.ADMIN, RoleEnum.SUPPLIER),
                 post("/api/1.0/supplier/1/cancel", null, RoleEnum.ADMIN, RoleEnum.SUPPLIER),
                 post("/api/1.0/components/warehouse/1/in-stock/1", null, RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
+                // Booking a delivery writes stock: the warehouse's, like the single receipt above.
+                post("/api/1.0/stock/book", "{\"requestIds\": [1], \"storehouseId\": 1}", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // Writing stock is the warehouse's everywhere.
                 post("/api/1.0/stock/add",
                         "{\"sku\": \"706a99c3-944b-11f1-9b51-001e064520d8\", \"storehouseId\": 1, \"qty\": 1}",
                         RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // Ending an order is commercial - deliberately not the customer's.
-                post("/api/1.0/orders/1/complete", null, RoleEnum.ADMIN, RoleEnum.MANAGER),
+                post("/api/1.0/orders/1/complete", null, RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.CUSTOMER),
                 post("/api/1.0/orders/1/cancel", null, RoleEnum.ADMIN, RoleEnum.MANAGER),
                 // Reading one order is wide, including LOGISTICS, which needs the dates.
                 get("/api/1.0/orders/1", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
                         RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
                 // The history of that order: the same roles as the order itself, by the same rule.
                 get("/api/1.0/orders/history/1", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
+                // The shipments of that order: the same roles and rule again.
+                get("/api/1.0/orders/1/shipments", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
                         RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
                 get("/api/1.0/users", RoleEnum.ADMIN, RoleEnum.MANAGER),
                 // The storehouses a client can name - what the goods receipt and stock booking take.

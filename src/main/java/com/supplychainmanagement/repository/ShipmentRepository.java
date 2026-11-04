@@ -18,6 +18,34 @@ import java.util.Optional;
 public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
 
     /**
+     * The shipments that carry packages with items of this order, each once, oldest first, with the distributor
+     * (a left fetch - a shipment nobody has taken on yet has none). Reached over the packages, because an order has
+     * no reference to a shipment.
+     */
+    @Query("""
+            select distinct s
+            from ShipmentPackage sp
+              join sp.shipment s
+              join sp.items pi
+              join pi.orderItem oi
+              left join fetch s.distributor
+            where oi.order.id = :orderId
+            order by s.id
+            """)
+    List<Shipment> findByOrderId(@Param("orderId") Long orderId);
+
+    /** Shipment id, package number and package id of every package in a shipment that holds items of this order. */
+    @Query("""
+            select distinct sp.shipment.id, sp.packageNumber, sp.id
+            from ShipmentPackage sp
+              join sp.items pi
+              join pi.orderItem oi
+            where oi.order.id = :orderId and sp.shipment is not null
+            order by sp.id
+            """)
+    List<Object[]> findPackageNumbersByOrderId(@Param("orderId") Long orderId);
+
+    /**
      * Locks the shipment for the rest of the transaction. Changing its packages reads what it holds
      * and then writes - two concurrent calls would otherwise both pass the checks against the same,
      * stale contents.

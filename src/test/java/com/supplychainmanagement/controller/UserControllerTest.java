@@ -29,6 +29,7 @@ import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.request;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -46,12 +47,14 @@ class UserControllerTest {
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(new UserController(userService, Mappers.getMapper(UserMapper.class)))
                 .setControllerAdvice(new GlobalExceptionHandler())
+                .setCustomArgumentResolvers(
+                        new org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
 
         User saved = new User();
         saved.setId(9L);
-        when(userService.create(any(UserRequestDto.class))).thenReturn(saved);
+        when(userService.create(any(UserRequestDto.class), any())).thenReturn(saved);
         when(userService.update(any(), any(UserRequestDto.class))).thenReturn(saved);
     }
 
@@ -66,7 +69,7 @@ class UserControllerTest {
                 .andExpect(status().isCreated());
 
         ArgumentCaptor<UserRequestDto> captor = ArgumentCaptor.forClass(UserRequestDto.class);
-        verify(userService).create(captor.capture());
+        verify(userService).create(captor.capture(), any());
         UserRequestDto request = captor.getValue();
         assertThat(request.username()).isEqualTo("ada");
         assertThat(request.isActive()).isFalse();
@@ -111,7 +114,7 @@ class UserControllerTest {
         second.setId(320L);
         when(userService.queryDistributors(any(DistributorQueryRequest.class))).thenReturn(List.of(first, second));
 
-        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+        mockMvc.perform(request(org.springframework.http.HttpMethod.QUERY, "/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
                         .content("""
                                 { "customerId": 311, "weight": 60.5, "volume": 250000 }
                                 """))
@@ -131,7 +134,7 @@ class UserControllerTest {
     void queryDistributorsAnswersAnEmptyPageWhenNoRuleApplies() throws Exception {
         when(userService.queryDistributors(any(DistributorQueryRequest.class))).thenReturn(List.of());
 
-        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON).content("{}"))
+        mockMvc.perform(request(org.springframework.http.HttpMethod.QUERY, "/api/1.0/users/distributors/query").contentType(APPLICATION_JSON).content("{}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content").isEmpty())
                 .andExpect(jsonPath("$.total").value(0));
@@ -139,10 +142,10 @@ class UserControllerTest {
 
     @Test
     void queryDistributorsRefusesANegativeWeightOrVolume() throws Exception {
-        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+        mockMvc.perform(request(org.springframework.http.HttpMethod.QUERY, "/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
                         .content("{ \"weight\": -1 }"))
                 .andExpect(status().isBadRequest());
-        mockMvc.perform(post("/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
+        mockMvc.perform(request(org.springframework.http.HttpMethod.QUERY, "/api/1.0/users/distributors/query").contentType(APPLICATION_JSON)
                         .content("{ \"volume\": -5 }"))
                 .andExpect(status().isBadRequest());
 

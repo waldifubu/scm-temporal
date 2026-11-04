@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.outbound.AcceptShipmentRequest;
 import com.supplychainmanagement.dto.shipping.DeliveryResponse;
 import com.supplychainmanagement.dto.outbound.DeclineShipmentRequest;
 import com.supplychainmanagement.dto.shipping.TrackingNumberRequest;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.DeliveryService;
 import com.supplychainmanagement.service.UserService;

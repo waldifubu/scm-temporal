@@ -1,4 +1,4 @@
-package com.supplychainmanagement.controller;
+package com.supplychainmanagement.model.common;
 
 import com.supplychainmanagement.exception.APIException;
 import org.springframework.data.domain.PageRequest;
@@ -22,12 +22,12 @@ import java.util.TreeSet;
  * names rather than against the entity: a path into a collection or a join is a valid property and
  * still not something a caller should be able to sort a page by.
  */
-final class PageRequests {
+final public class PageRequests {
 
     private PageRequests() {
     }
 
-    static Pageable of(int page, int size, String sort, String order, Set<String> sortable) {
+    public static Pageable of(int page, int size, String sort, String order, Set<String> sortable) {
         if (page < 0) {
             throw new APIException(HttpStatus.BAD_REQUEST, "page cannot be negative, got " + page);
         }

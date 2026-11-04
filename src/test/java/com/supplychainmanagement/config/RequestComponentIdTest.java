@@ -1,9 +1,9 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.config.migration.RequestComponentIdMigration;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.Supplier;
-import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.RequestComponentRepository;
@@ -15,8 +15,6 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.transaction.annotation.Transactional;
-
-import org.hibernate.Hibernate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

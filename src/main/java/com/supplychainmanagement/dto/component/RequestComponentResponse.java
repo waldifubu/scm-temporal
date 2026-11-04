@@ -27,6 +27,9 @@ public record RequestComponentResponse(
         RequestStatus requestStatus,
         LocalDateTime requestDate,
         Long supplierId,
+        /** The supplier by name, so a list need not look the id up; the same name {@code GET /components/suppliers} shows. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String supplierName,
         /*
          * Who last moved the request on, by id and name - the id alone would make every caller look
          * the user up again, and the name alone could not be followed. Null for a row placed before
@@ -62,6 +65,7 @@ public record RequestComponentResponse(
                 request.getRequestStatus(),
                 request.getRequestDate(),
                 supplier != null ? supplier.getId() : null,
+                supplier != null ? nameOf(supplier) : null,
                 assignedBy != null ? assignedBy.getId() : null,
                 assignedBy != null ? nameOf(assignedBy) : null,
                 request.getUpdated()

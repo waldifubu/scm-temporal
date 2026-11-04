@@ -617,8 +617,11 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   **`OrderProgressService.recompute`**, not the shipment. It publishes the `OrderStatusChangedEvent`
   and runs `Propagation.MANDATORY` - without the caller's transaction an `AFTER_COMMIT` listener
   would drop the event, so it refuses to run outside one.
-- **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN and MANAGER,
-  `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. Checked on
+- **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN, MANAGER **and CUSTOMER**,
+  `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. The customer confirms that the goods
+  arrived, for their **own** order only: the order is fetched through `findByOrderNoForUser` (403 for somebody else's,
+  like `GET /orders/{orderNo}`); the rules below hold for every caller. The order page offers "Complete Order" for
+  `DELIVERED` to the customer, the manager and the admin. `OrderCompleteAccessTest` holds the access. Checked on
   **quantities**, not on statuses: every line has to be covered by `PackageItem`s that travelled in
   shipments reporting `DELIVERED` (`OrderItemRepository.findShippedQuantities`, whose `DELIVERED` rows
   `OrderProgressService.undeliveredLines` reads off). Counting lines would not do - a line may be packed in
@@ -651,6 +654,16 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   nobody to name). The names come from **one** query for all rows (`userId` is a plain column, not an
   association, so there is nothing to fetch-join), and use `DisplayNames`, the one rule for what a person
   is called that the supplier list and the component requests share.
+- **The shipments of an order** (`GET /orders/{orderNo}/shipments`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS and CUSTOMER;
+  `OrderShipmentService`, `OrderShipmentResponse`): oldest first, one row per shipment the order's packages travel in -
+  status, tracking number, address, `shippedAt`/`deliveredAt`, and the numbers of **this order's** packages in it. It
+  exists because the roles that read an order may not read `/shipments` (ADMIN and LOGISTICS), and because an order
+  has no reference to a shipment - the link runs over the packages (`ShipmentRepository.findByOrderId`, two queries
+  however many shipments). The order is fetched through `findByOrderNoForUser` like the history, so the access rule is
+  the order's (404 unknown, 403 a customer's foreign order). **`distributorName` is staff only** (`canReadAnyOrder`):
+  a customer is told where and when, not which carrier; the key is absent for them and for a shipment nobody took on.
+  An order in no shipment answers `[]`. The order page asks only in `READY_FOR_DISPATCH`, `IN_TRANSIT`,
+  `PARTIALLY_DELIVERED`, `DELIVERED` and `COMPLETED` (`showsShipments`). `OrderShipmentsEndpointTest` holds it with real rows.
 - **`POST /orders` is mapped to `""`, not `"/"`** (`OrderController.createOrder`): Spring does not match a trailing slash, and with `"/"` the order form - which posts to `/orders` - got "Method 'POST' is not supported" (405) for every order. The controller test calls the method directly and could not see it; `OrderCreateEndpointTest` posts the form's body through the real chain (201), and the old mapping turns it red.
 - **The order list follows the same rule** (`GET /orders`, ADMIN, MANAGER, WAREHOUSE and CUSTOMER; `OrderServiceImpl.findAllByUserAndStatus` asks `canReadAnyOrder`): those three see every customer's orders, a customer only their own. It asked `isAdmin` first, then `isPrivilegedUser`, so a manager - who has no orders of their own - was handed the list where *they* are the customer, an empty one, and the warehouse (not on the endpoint at all) a 403 although it may read each single order. `OrderListAccessTest` holds it with real rows; putting `isPrivilegedUser` back turns the warehouse case red. `GET /orders/new` is ADMIN, MANAGER and WAREHOUSE (read only; acknowledging and rejecting stay ADMIN/MANAGER).
   <br>**A line of an order names its product** (`OrderItemDto.articleNo`, `sku`; `null` for a line without a product): `articleNo` is what `GET /products/{articleNo}` is addressed by, so a client links the line to the product page and shows the SKU as a tooltip. The product's database id is deliberately not sent - the public view of a product hides it. `OrderReadAccessTest` holds the two keys.
@@ -788,7 +801,14 @@ releases **all** of that order's active reservations (see its bullet) - the "Exp
 
 - `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and acknowledges the ones
   whose every line is coverable (`orderService.acknowledge(order, null)`). It writes.
-- `tryToReserve()` (every 150 s) calls `reserveItems` for every `IN_FULFILLMENT` order.
+- `tryToReserve()` (every 150 s) calls `reserveItems` for the orders in `RESERVABLE_STATUSES`: `IN_FULFILLMENT`,
+  `WAIT_SUPPLY` and - since 2026-11-04 - `READY_FOR_DISPATCH`, `IN_TRANSIT` and `PARTIALLY_DELIVERED`. The last three
+  because an order is *computed* from the shipments its lines travel in: one whose other lines are already shipped can
+  still have a line `WAITING`, and with those statuses missing from the sweep that line was never reserved and the
+  order never reached `DELIVERED` (order 4567: three lines delivered, the fourth `WAITING` for good although stock was
+  free). `reserveItems` moves an order's status only out of a pre-fulfillment one, so these stay where they are; the
+  line then goes through pick, pack and a further shipment, and `recompute` does the rest.
+  `AutomaticReservationServiceReserveTest` holds the list.
 - `tryToRelease()` (every 150 s) takes its orders from
   `FulfillmentService.findOrdersWithExpiredReservations()` - every order holding at least one
   reservation past `expiresAt`, each once - and calls `releaseItems` for each. `expiresAt` only
@@ -1065,7 +1085,23 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   `/components/article/{articleNo}`) is ADMIN, MANAGER and **WAREHOUSE** - the warehouse may order
   components, and without the catalogue it would have to get the SKU from somewhere else. Creating and
   changing a component stays ADMIN/MANAGER.
-- **Ordering components from a supplier** (`POST /components/request/{supplierId}`, ADMIN, MANAGER
+- **The supplier of a request comes from rules, not from the caller** (`supplier_rule`, `SupplierRule`,
+  `SupplierRuleRepository`; the inbound twin of `distributor_rule`). A rule names a supplier and optionally a
+  component and/or a product (`null` = no condition). Winner per component: the most specific rule
+  (`SupplierRule.specificity()`: component 2 + product 1, so a rule for the part beats one for its product, a
+  catch-all ranks last), then the higher `priority` (`int`, NOT NULL, default 0), then the lower id
+  (`SupplierRule.BEST_FIRST`). Rules of a deactivated supplier are never read (`findAllWithActiveSupplier`, supplier
+  fetched); matching is done in Java after that one query. `POST /components/request` takes no supplier
+  any more - the old `/request/{supplierId}` mapping is gone - and **a component no rule covers refuses the whole request
+  with 409 naming every uncovered SKU**, nothing placed (an unknown SKU is a 404). Different lines may go to
+  different suppliers. `GET /components/suppliers/resolve?sku=a&sku=b` (ADMIN, MANAGER, WAREHOUSE) answers
+  `SupplierResolution` per SKU (`supplierId`, `supplierName`, `ruleId`, all `null` when nothing covers it) so a form
+  can show the supplier before sending. Held by `ComponentServiceSupplierRuleTest`, `SupplierRuleRepositoryTest`,
+  `ComponentControllerTest` and the role matrix. Not built: the reverse list (components of one supplier) for a dropdown.
+- **`PATCH /components/{sku}`** (ADMIN, MANAGER, WAREHOUSE; `ComponentPatchRequest`): name, manufacturer, description,
+  externalId, weight, qty - only keys that are sent change; a blank name, a negative weight or a qty below 1 is a 400.
+  `GET /components/{sku}` and the PATCH answer `ComponentDetailDto` (incl. `createdAt`, `updatedAt`, product).
+- **Ordering components from a supplier** (formerly `POST /components/request/{supplierId}`, now see above; ADMIN, MANAGER
   and WAREHOUSE - a method-level `@PreAuthorize` widening the controller's ADMIN/MANAGER, because the
   warehouse owns the stock and already consumes components through `POST /produce`;
   `ComponentServiceImpl.requestComponents`): every entry of the body becomes its own
@@ -1089,8 +1125,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   first by default (`sort=requestDate`) - a pile at the dock is worked off in the order it arrived.
   One query per page: `component` and `assignedBy` come along through an `@EntityGraph`, both to-one,
   so it stays paged in SQL; `supplier` is left out because only its id is read and a proxy answers
-  `getId()` unloaded. Plural next to the singular `POST /components/request/{supplierId}`, whose path is left as
-  clients know it.
+  `getId()` unloaded. Plural next to the singular `POST /components/request`.
 - **Who moved a request** is `RequestComponent.assignedBy` - a nullable `@ManyToOne User`, written by
   every step next to `updated`, which `@UpdateTimestamp` stamps itself. Not a history, one line of
   it: the statuses say where the request has been, this says who put it there last; a real audit
@@ -1142,6 +1177,14 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   `assignedBy` recorded. No body: there is no column for a reason, and `comment` belongs to whoever
   ordered the part - overwriting it would throw away why it was needed. Note the ordering side cannot
   withdraw a request; only the supplier and ADMIN can end one.
+- **Booking a whole delivery** (`POST /stock/book`, ADMIN and WAREHOUSE, `StockController.bookToStock`,
+  `ComponentService.bookRequests`, body `BookStockRequest` `{requestIds: [..], storehouseId}`): the same booking as the
+  single receipt below (`bookIn`: `StockService.add` of the request's quantity on its component's SKU), for several
+  requests in **one transaction**, and the request ends **`IN_STOCK`**, the last status, exactly as after the single receipt. Ids sorted and deduplicated, rows locked `FOR UPDATE` in that order; an unknown storehouse or request is a
+  404 (all missing ids named), any request not `DELIVERED` a 409 naming each with its status - nothing booked then.
+  The quantity is the request's own, the client cannot send one. `ComponentRequestWorkflowTest` holds it with real rows
+  (two requests of one SKU added up, a repeated id counted once, all-or-nothing, 404s). The frontend's *Request Components* page
+  ticks only `DELIVERED` rows and posts here.
 - **The goods receipt** (`POST /components/warehouse/{requestId}/in-stock/{storehouseId}`, ADMIN and
   WAREHOUSE, `ComponentServiceImpl.receiveRequest`): `DELIVERED → IN_STOCK`, and the requested
   quantity is added to `Stock.onHand` for that component's SKU in the receiving storehouse through
@@ -1228,7 +1271,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   after the "is a distributor" test, nothing written; a missing flag counts as not active) - the same rule
   `requestComponents` has for suppliers. Without it an id noted earlier still worked and the shipment would sit in
   `DISPATCH_REQUESTED` for good. `ShipmentServiceImplTest.refusesADeactivatedDistributorWith409` holds it; dropping the check turns it red.
-- **Which carrier a shipment is meant for is a table of rules** (`DistributorRule`, `distributor_rule`; `UserService.queryDistributors`). A rule names a distributor and conditions, all optional and `null` = no condition: the customer, a weight range in kg and a volume range in cm³ (`ShipmentPackage.getVolume()` works in cm³; the pages show m³). Bounds are `[min, max)`. `DistributorRuleRepository.findMatching` returns what applies and skips rules of a deactivated carrier (the next rule gets its turn); a `null` parameter matches only rules that leave that dimension open. **Ranking is in Java, not SQL**: the rule that sets the most dimensions wins (`DistributorRule.specificity()`, a range counts once), then `priority`, then the lower id, and a carrier named twice appears once at its best place. `POST /users/distributors/query` (ADMIN, MANAGER, LOGISTICS; body `DistributorQueryRequest` `{customerId, weight, volume}`, all optional, negative = 400) answers the ranked carriers as a page, empty when no rule applies. The method is the HTTP **`QUERY`** (a safe request with a body); `POST` on the same path answers the same, for a client or proxy that does not pass `QUERY`. Spring 7.0.8's `RequestMethod` has no `QUERY`, so `@RequestMapping(method=...)` cannot name it - three pieces make it work: **`@HttpQuery`** (`annotation/`, a `@RequestMapping` without a method, same `path`/`version`), **`QueryHandlerMapping`** (a `RequestMappingHandlerMapping` registered through Boot's `WebMvcRegistrations`, which adds `QueryMethodCondition` - passes only method `QUERY`, and for a CORS preflight the announced `Access-Control-Request-Method` - to every `@HttpQuery` method) and a **`StrictHttpFirewall` bean** with `QUERY` in its allowed methods (the default firewall rejects any method outside its short list before a filter runs). `QUERY` is also in the CORS allowed methods. The servlet side needs nothing: `FrameworkServlet` dispatches methods it does not know since Spring 7. The handler is `@Operation(hidden = true)`: OpenAPI 3.1 has no `QUERY` operation, and a mapping without a method would be listed under every other one. `DistributorQueryEndpointTest` holds it through the real chain (firewall, roles, `GET`/`PUT` on the path refused, `QUERY` on another path 405, preflight); removing the firewall entry or the method test turns it red. Not run against a real Tomcat, only MockMvc. It replaced a fixed customer-to-carrier map (and the `GET /users/distributors/customer/{customerId}` that answered from it, gone). `DistributorRuleSeedMigration` (an `ApplicationReadyEvent` listener) writes that map's two pairs - customer 311 to distributor 319, 312 to 320 - as customer-only rules, but **only into an empty table** and only where both users exist with the right type (`user_type` `customer` / `distributor`); emptying the table by hand brings the two back on the next start. `DistributorRuleSeedMigrationTest` holds it. `DistributorRuleRepositoryTest` holds the bounds, the open dimensions and the inactive carrier against real rows; `UserServiceDistributorMappingTest` the ranking.
+- **Which carrier a shipment is meant for is a table of rules** (`DistributorRule`, `distributor_rule`; `UserService.queryDistributors`). A rule names a distributor and conditions, all optional and `null` = no condition: the customer, a weight range in kg and a volume range in cm³ (`ShipmentPackage.getVolume()` works in cm³; the pages show m³). Bounds are `[min, max)`. `DistributorRuleRepository.findMatching` returns what applies and skips rules of a deactivated carrier (the next rule gets its turn); a `null` parameter matches only rules that leave that dimension open. **Ranking is in Java, not SQL**: the rule that sets the most dimensions wins (`DistributorRule.specificity()`, a range counts once), then `priority`, then the lower id, and a carrier named twice appears once at its best place. `POST /users/distributors/query` (ADMIN, MANAGER, LOGISTICS; body `DistributorQueryRequest` `{customerId, weight, volume}`, all optional, negative = 400) answers the ranked carriers as a page, empty when no rule applies. The method is the HTTP **`QUERY`** (a safe request with a body), mapped with a plain `@RequestMapping(path, version, method = RequestMethod.QUERY)`: since Spring 7.1 (Boot 4.2) `RequestMethod`/`HttpMethod` know `QUERY`, so the former extra machinery (`@HttpQuery`, a custom handler mapping, a method condition) is gone. **The firewall bean is not**: Spring Security's `StrictHttpFirewall` does not allow `QUERY` by default and rejects it before any filter runs - a 400 with no body, no handler and no exception, which is what made "Assign distributor" fail after the clean-up. `SecurityBeanConfig.httpFirewall()` adds the method to the allowed list; `DistributorQueryEndpointTest` goes red without it. `QUERY` is in the CORS allowed methods (`SecurityBeanConfig`). The handler is `@Operation(hidden = true)`: OpenAPI 3.1 has no `QUERY` operation. `DistributorQueryEndpointTest` holds it through the real chain (roles, `GET`/`PUT` on the path refused, `QUERY` on another path 405, preflight). Not run against a real Tomcat, only MockMvc. It replaced a fixed customer-to-carrier map (and the `GET /users/distributors/customer/{customerId}` that answered from it, gone). `DistributorRuleSeedMigration` (an `ApplicationReadyEvent` listener) writes that map's two pairs - customer 311 to distributor 319, 312 to 320 - as customer-only rules, but **only into an empty table** and only where both users exist with the right type (`user_type` `customer` / `distributor`); emptying the table by hand brings the two back on the next start. `DistributorRuleSeedMigrationTest` holds it. `DistributorRuleRepositoryTest` holds the bounds, the open dimensions and the inactive carrier against real rows; `UserServiceDistributorMappingTest` the ranking.
 - **The package item lists filter by the status of their order line** (`GET /packages`, `GET /lonely-packages`, optional `fulfillmentStatus`, `PackageQueryService.findPackageItems(pageable, status)`; `null` lists all, an unknown value is a 400 through the enum binding). Two derived repository finders (`...ByOrderItemFulfillmentStatus`, `...ByShipmentPackageIsNullAndOrderItemFulfillmentStatus`), the same entity graph as the unfiltered ones so the paging stays in SQL. There is **no default on the backend** - the page starts on `PACKED` and sends it; a client that sends nothing still gets every item, as before. `PackageListSortTest` holds it with real rows (packed against packing, both lists).
 - **The package item lists sort by what their table shows** (`GET /packages`, `GET /lonely-packages`): next to the
   item's own `id`, `runNo`, `quantity` and `created`, `PACKAGE_ITEM_SORTABLE` takes `orderItem.id`,

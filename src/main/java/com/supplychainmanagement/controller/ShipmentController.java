@@ -2,6 +2,7 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.*;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.service.ShipmentService;
 import com.supplychainmanagement.service.UserService;

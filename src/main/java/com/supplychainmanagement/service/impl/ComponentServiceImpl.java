@@ -1,9 +1,13 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResolution;
 import com.supplychainmanagement.dto.component.SupplierResponse;
+import com.supplychainmanagement.entity.SupplierRule;
+import com.supplychainmanagement.repository.SupplierRuleRepository;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.Product;
@@ -21,6 +25,7 @@ import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RoleService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -38,6 +43,7 @@ import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -50,6 +56,7 @@ public class ComponentServiceImpl implements ComponentService {
     private final StorehouseRepository storehouseRepository;
     private final StockService stockService;
     private final SupplierRepository supplierRepository;
+    private final SupplierRuleRepository supplierRuleRepository;
 
     /**
      * While the supplier can still call a request off: they have taken it on, but the goods are not
@@ -84,12 +91,48 @@ public class ComponentServiceImpl implements ComponentService {
         }
 
         List<RequestComponentsRequest.Item> items = request.items();
+        Map<UUID, Component> bySku = componentsBySku(items.stream().map(RequestComponentsRequest.Item::componentId).toList());
+        return place(items, bySku, component -> supplier, userId);
+    }
 
-        // One query for the whole request rather than one per line. The set collapses a SKU asked for
-        // twice - the lines stay two, only the lookup is shared.
-        Set<UUID> skus = items.stream()
-                .map(RequestComponentsRequest.Item::componentId)
-                .collect(Collectors.toCollection(LinkedHashSet::new));
+    @Override
+    @Transactional
+    public List<RequestComponentResponse> requestComponents(RequestComponentsRequest request, Long userId) {
+        List<RequestComponentsRequest.Item> items = request.items();
+        Map<UUID, Component> bySku = componentsBySku(items.stream().map(RequestComponentsRequest.Item::componentId).toList());
+
+        Map<UUID, SupplierRule> rules = rulesFor(bySku.values());
+        List<UUID> uncovered = bySku.keySet().stream().filter(sku -> !rules.containsKey(sku)).toList();
+        if (!uncovered.isEmpty()) {
+            // Every one of them at once, and nothing placed: half a request would leave the caller to
+            // work out what went through. 409 - the request is well formed, the rules refuse it.
+            throw new APIException(HttpStatus.CONFLICT, "No active supplier rule for component: "
+                    + uncovered.stream().map(UUID::toString).collect(Collectors.joining(", ")));
+        }
+
+        return place(items, bySku, component -> rules.get(component.getSku()).getSupplier(), userId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<SupplierResolution> resolveSuppliers(java.util.Collection<UUID> skus) {
+        Map<UUID, Component> bySku = componentsBySku(skus);
+        Map<UUID, SupplierRule> rules = rulesFor(bySku.values());
+        return new LinkedHashSet<>(skus).stream().map(sku -> {
+            SupplierRule rule = rules.get(sku);
+            return rule == null
+                    ? new SupplierResolution(sku, null, null, null)
+                    : new SupplierResolution(sku, rule.getSupplier().getId(),
+                            SupplierResponse.from(rule.getSupplier()).name(), rule.getId());
+        }).toList();
+    }
+
+    /**
+     * One query for the whole request rather than one per line. The SKUs are collapsed - a SKU asked for
+     * twice stays two lines, only the lookup is shared. An unknown one is a 404 naming all of them.
+     */
+    private Map<UUID, Component> componentsBySku(java.util.Collection<UUID> requested) {
+        Set<UUID> skus = new LinkedHashSet<>(requested);
         Map<UUID, Component> bySku = componentRepository.findBySkuIn(skus).stream()
                 .collect(Collectors.toMap(Component::getSku, Function.identity()));
 
@@ -100,15 +143,35 @@ public class ComponentServiceImpl implements ComponentService {
             throw new APIException(HttpStatus.NOT_FOUND, "Component not found with sku: "
                     + unknown.stream().map(UUID::toString).collect(Collectors.joining(", ")));
         }
+        return bySku;
+    }
 
+    /** The winning rule per SKU; a component no active rule covers is missing from the map. */
+    private Map<UUID, SupplierRule> rulesFor(java.util.Collection<Component> components) {
+        List<SupplierRule> rules = supplierRuleRepository.findAllWithActiveSupplier().stream()
+                .sorted(SupplierRule.BEST_FIRST)
+                .toList();
+        Map<UUID, SupplierRule> winners = new java.util.HashMap<>();
+        for (Component component : components) {
+            rules.stream().filter(rule -> rule.appliesTo(component)).findFirst()
+                    .ifPresent(rule -> winners.put(component.getSku(), rule));
+        }
+        return winners;
+    }
+
+    /** One row per line, in OPEN, placed with the supplier {@code supplierOf} gives for the line's component. */
+    private List<RequestComponentResponse> place(List<RequestComponentsRequest.Item> items,
+                                                 Map<UUID, Component> bySku,
+                                                 Function<Component, Supplier> supplierOf, Long userId) {
         // Resolved once for the whole body rather than per line - every row of one request was
         // placed by the same person.
         User placedBy = actingUser(userId);
 
         List<RequestComponent> requests = items.stream().map(item -> {
+            Component component = bySku.get(item.componentId());
             RequestComponent requested = new RequestComponent();
-            requested.setComponent(bySku.get(item.componentId()));
-            requested.setSupplier(supplier);
+            requested.setComponent(component);
+            requested.setSupplier(supplierOf.apply(component));
             requested.setQty(item.qty());
             requested.setComment(blankToNull(item.comment()));
             requested.setAssignedBy(placedBy);
@@ -230,6 +293,65 @@ public class ComponentServiceImpl implements ComponentService {
             throw new ResourceNotFoundException("Storehouse", "id", storehouseId);
         }
 
+        bookIn(request, storehouseId, RequestStatus.IN_STOCK, userId);
+        return RequestComponentResponse.from(request);
+    }
+
+    @Override
+    @Transactional
+    public List<RequestComponentResponse> bookRequests(List<Long> requestIds, Long storehouseId, Long userId) {
+        // Nothing to book is a mistake of the caller, not an empty success. The controller's bean validation
+        // says the same for a request body; this is for whoever calls the service from inside.
+        if (requestIds == null || requestIds.isEmpty()) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "No request given to book in");
+        }
+
+        // Ascending ids and each once: the rows are locked in the same order by every caller, so two
+        // deliveries booked at the same time cannot wait on each other's rows, and a repeated id is
+        // the same request, not two receipts.
+        List<Long> ids = new java.util.TreeSet<>(requestIds).stream().toList();
+
+        com.supplychainmanagement.entity.Storehouse storehouse = storehouseRepository.findById(storehouseId)
+                .orElseThrow(() -> new ResourceNotFoundException("Storehouse", "id", storehouseId));
+
+        List<RequestComponent> requests = new java.util.ArrayList<>();
+        List<Long> missing = new java.util.ArrayList<>();
+        for (Long id : ids) {
+            requestComponentRepository.findForUpdateById(id).ifPresentOrElse(requests::add, () -> missing.add(id));
+        }
+        if (!missing.isEmpty()) {
+            // Every one at once, and nothing booked: half a delivery in stock is worse than none.
+            throw new APIException(HttpStatus.NOT_FOUND, "RequestComponent not found with id: "
+                    + missing.stream().map(String::valueOf).collect(Collectors.joining(", ")));
+        }
+
+        List<String> notDelivered = requests.stream()
+                .filter(request -> request.getRequestStatus() != RequestStatus.DELIVERED)
+                .map(request -> request.getId() + " (" + request.getRequestStatus() + ")")
+                .toList();
+        if (!notDelivered.isEmpty()) {
+            throw new APIException(HttpStatus.CONFLICT, "Only " + RequestStatus.DELIVERED
+                    + " requests can be booked in, not: " + String.join(", ", notDelivered));
+        }
+
+        requests.forEach(request -> bookIn(request, storehouseId, RequestStatus.IN_STOCK, userId));
+
+        log.info("Booked {} request(s) into storehouse {} ({}): {}", requests.size(), storehouseId, storehouse.getName(),
+                requests.stream()
+                        .map(request -> request.getQty() + " x " + request.getComponent().getName()
+                                + " [" + request.getComponent().getSku() + "] (request " + request.getId() + ")")
+                        .collect(Collectors.joining("; ")));
+        return requests.stream().map(RequestComponentResponse::from).toList();
+    }
+
+    /**
+     * The booking itself, shared by the single receipt and the delivery: the request's quantity onto the
+     * stock of its component's SKU in the storehouse, then the request ends in {@code endStatus}, with
+     * the acting user on it. The caller has checked the status and the storehouse. Runs inside the
+     * caller's transaction, so a failure here leaves neither the stock nor the status changed.
+     */
+    private void bookIn(RequestComponent request, Long storehouseId, RequestStatus endStatus, Long userId) {
+        Long requestId = request.getId();
         Component component = request.getComponent();
         if (component == null || component.getSku() == null) {
             throw new APIException(HttpStatus.CONFLICT,
@@ -252,12 +374,10 @@ public class ComponentServiceImpl implements ComponentService {
 
         stockService.add(component.getSku(), storehouseId, request.getQty().intValue());
 
-        request.setRequestStatus(RequestStatus.IN_STOCK);
+        request.setRequestStatus(endStatus);
         // Who booked it in - the one step that creates real stock, so the one where it matters most.
         request.setAssignedBy(actingUser(userId));
         requestComponentRepository.save(request);
-
-        return RequestComponentResponse.from(request);
     }
 
     /**
@@ -405,6 +525,43 @@ public class ComponentServiceImpl implements ComponentService {
         apply(request, existingComponent);
 
         return componentRepository.save(existingComponent);
+    }
+
+    @Override
+    @Transactional
+    public Component patch(UUID sku, ComponentPatchRequest request) {
+        if (request == null || (request.name() == null && request.manufacturer() == null
+                && request.description() == null && request.externalId() == null
+                && request.weight() == null && request.qty() == null)) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Nothing to change: send name, manufacturer, description, externalId, weight and/or qty");
+        }
+        Component component = findBySku(sku);
+        String externalId = request.externalId() == null ? null
+                : request.externalId().isBlank() ? null : request.externalId();
+        if (externalId != null) {
+            Component incoming = new Component();
+            incoming.setExternalId(externalId);
+            validateUniqueIdentifiers(incoming, component);
+        }
+        if (request.name() != null) {
+            component.setName(request.name());
+        }
+        if (request.manufacturer() != null) {
+            component.setManufacturer(request.manufacturer().isBlank() ? null : request.manufacturer());
+        }
+        if (request.description() != null) {
+            component.setDescription(request.description().isBlank() ? null : request.description());
+        }
+        if (request.externalId() != null) {
+            component.setExternalId(externalId);
+        }
+        if (request.weight() != null) {
+            component.setWeight(request.weight());
+        }
+        if (request.qty() != null) {
+            component.setQty(request.qty());
+        }
+        return componentRepository.save(component);
     }
 
     @Override

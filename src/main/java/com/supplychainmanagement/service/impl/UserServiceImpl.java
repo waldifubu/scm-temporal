@@ -187,7 +187,8 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
-    public User create(UserRequestDto request) {
+    public User create(UserRequestDto request, org.springframework.security.core.userdetails.User actor) {
+        requireMayGrant(request, actor);
         return create(toUser(request));
     }
 
@@ -198,9 +199,24 @@ public class UserServiceImpl implements UserService {
     }
 
     /**
+     * Who may hand out which role: ADMIN is the ADMIN's to give. A MANAGER may create users (the
+     * endpoint is open to them) but not an administrator; asked before anything is looked up or written.
+     */
+    private void requireMayGrant(UserRequestDto request, org.springframework.security.core.userdetails.User actor) {
+        if (request == null || request.roles() == null || !request.roles().contains(RoleEnum.ADMIN)) {
+            return;
+        }
+        boolean actorIsAdmin = actor != null && actor.getAuthorities().stream()
+                .anyMatch(authority -> RoleEnum.ADMIN.name().equals(authority.getAuthority()));
+        if (!actorIsAdmin) {
+            throw new APIException(HttpStatus.FORBIDDEN, "Only an ADMIN may assign the ADMIN role");
+        }
+    }
+
+    /**
      * The request as the User the existing create/update work on - only the fields a client may
      * send. The roles are looked up by name here, inside the transaction, so they arrive as managed
-     * entities; which roles the caller may hand out is not checked (yet).
+     * entities; which roles the caller may hand out is checked in {@code create} (requireMayGrant).
      */
     private User toUser(UserRequestDto request) {
         if (request == null) {

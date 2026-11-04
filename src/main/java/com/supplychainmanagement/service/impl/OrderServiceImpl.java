@@ -221,11 +221,6 @@ public class OrderServiceImpl implements OrderService {
         return OrderNumberScrambler.orderNoFor(counter);
     }
 
-    public void statusCheck(Order existingOrder, Order order) {
-        OrderStatus previousStatus = existingOrder.getStatus();
-
-    }
-
     /**
      * The guard is {@code != CREATED} rather than "not already acknowledged": unlike a rejection,
      * which stays possible right up to fulfillment, a confirmation only makes sense from the

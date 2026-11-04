@@ -1,5 +1,6 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.config.migration.OrderHistoryUserIdMigration;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.entity.users.User;

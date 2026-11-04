@@ -5,6 +5,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.http.HttpMethod;
+import org.springframework.security.web.firewall.StrictHttpFirewall;
 import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
@@ -97,5 +99,17 @@ public class SecurityBeanConfig {
                     }
                 })
                 .toList();
+    }
+
+    /**
+     * Spring MVC knows the HTTP {@code QUERY} method since 7.1, but {@code StrictHttpFirewall} does not allow it by
+     * default: it rejects the request before any filter runs, as a 400 without a body or a handler
+     * ({@code QUERY /users/distributors/query} was unusable). The method is added to its list here.
+     */
+    @Bean
+    public StrictHttpFirewall httpFirewall() {
+        StrictHttpFirewall firewall = new StrictHttpFirewall();
+        firewall.setAllowedHttpMethods(List.of("GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", HttpMethod.QUERY.name()));
+        return firewall;
     }
 }

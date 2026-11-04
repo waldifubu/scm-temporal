@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.dto.component.RequestComponentResponseDto;
 import com.supplychainmanagement.dto.mapper.RequestComponentMapper;
 import com.supplychainmanagement.repository.RequestComponentRepository;
@@ -22,10 +23,11 @@ public class RequestComponentServiceImpl implements RequestComponentService {
      * around to resolve the references from. The rows arrive with their component fetched, so the
      * list costs one query instead of one per row and level.
      */
+    // Newest first and without IN_STOCK - see the endpoint, InboundController#getMyRequests.
     @Override
     @Transactional(readOnly = true)
     public List<RequestComponentResponseDto> findMyRequests(Long userId) {
-        return requestComponentRepository.findBySupplierId(userId).stream()
+        return requestComponentRepository.findBySupplierIdAndRequestStatusNotOrderByRequestDateDescIdDesc(userId, RequestStatus.IN_STOCK).stream()
                 .map(requestComponentMapper::mapToDto)
                 .toList();
     }

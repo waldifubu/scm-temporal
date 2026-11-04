@@ -1,12 +1,16 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.component.ComponentDetailDto;
+import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResolution;
 import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.UserService;
@@ -87,6 +91,17 @@ public class ComponentController {
                 PageRequests.of(page, size, sort, order, SUPPLIER_SORTABLE)));
     }
 
+    /**
+     * Whom a request for these components would go to, by the supplier rules - what the order form shows
+     * next to each line before it is sent. {@code ?sku=a&sku=b}; a component no rule covers comes back
+     * with empty supplier fields, an unknown SKU is a 404. Same roles as placing the request.
+     */
+    @GetMapping(path = "/suppliers/resolve", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    public List<SupplierResolution> resolveSuppliers(@RequestParam("sku") List<UUID> skus) {
+        return componentService.resolveSuppliers(skus);
+    }
+
     @GetMapping(path = "/requests", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public PageResponse<RequestComponentResponse> getRequests(
@@ -109,8 +124,8 @@ public class ComponentController {
 
     @GetMapping(path = "/{sku}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
-    public ComponentResponseDto getComponentBySku(@PathVariable UUID sku) {
-        return componentMapper.mapToDto(componentService.findBySku(sku));
+    public ComponentDetailDto getComponentBySku(@PathVariable UUID sku) {
+        return componentMapper.mapToDetailDto(componentService.findBySku(sku));
     }
 
     @GetMapping(path = "/article/{articleNo}", version = "1.0")
@@ -120,16 +135,16 @@ public class ComponentController {
     }
 
     /**
-     * Orders components from one supplier. Every entry of the body becomes its own row in
+     * Orders components; the supplier of each line is given by the supplier rules (see
+     * {@code ComponentService.requestComponents}), a component no rule covers refuses the whole request
+     * with 409. Every entry of the body becomes its own row in
      * {@code request_components}, in status OPEN - the same component may appear twice, and then it
      * is two requests rather than one of double the quantity.
      * <p>
      * {@code componentId} carries the component's <strong>SKU</strong>, not its numeric id. The body
      * is the bare array or the wrapped {@code {"items": [...]}}, see
-     * {@link RequestComponentsRequest}. An unknown SKU refuses the whole request with 404, a
-     * supplierId that is no supplier with 400.
+     * {@link RequestComponentsRequest}. An unknown SKU refuses the whole request with 404.
      */
-    @PostMapping(path = "/request/{supplierId}", version = "1.0")
     // WAREHOUSE on top of the class-level ADMIN/MANAGER, and a method annotation because it widens
     // them: the warehouse owns the stock (StockController is ADMIN/WAREHOUSE) and already consumes
     // components through POST /produce, so it is the role that sees a shelf run empty. Note there is
@@ -137,11 +152,10 @@ public class ComponentController {
     // signing off - so whoever may call this orders straight away.
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
     @ResponseStatus(HttpStatus.CREATED)
-    public List<RequestComponentResponse> requestComponents(@PathVariable Long supplierId,
-                                                            @Valid @RequestBody RequestComponentsRequest request,
+    @PostMapping(path = "/request", version = "1.0")
+    public List<RequestComponentResponse> requestComponents(@Valid @RequestBody RequestComponentsRequest request,
                                                             @AuthenticationPrincipal User authUser) {
-        return componentService.requestComponents(supplierId, request,
-                userService.getAuthenticatedUserId(authUser));
+        return componentService.requestComponents(request, userService.getAuthenticatedUserId(authUser));
     }
 
 
@@ -173,12 +187,16 @@ public class ComponentController {
         return componentMapper.mapToDto(componentService.create(component));
     }
 
-    @PutMapping(path = "/{id}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    /** Changes a component. The id comes from the path; the body never carries one. */
-    public ComponentResponseDto updateComponent(@PathVariable Long id,
-                                                @Valid @RequestBody ComponentRequestDto component) {
-        return componentMapper.mapToDto(componentService.update(id, component));
+    /**
+     * Changes name, manufacturer, description, externalId, weight and/or qty of one component, addressed by its SKU. Fields left out
+     * stay as they are; see {@link ComponentPatchRequest}.
+     */
+    @PatchMapping(path = "/{sku}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'WAREHOUSE')")
+    @ResponseStatus(HttpStatus.OK)
+    public ComponentDetailDto patchComponent(@PathVariable UUID sku,
+                                             @Valid @RequestBody ComponentPatchRequest request) {
+        return componentMapper.mapToDetailDto(componentService.patch(sku, request));
     }
 
     @DeleteMapping(path = "/{id}", version = "1.0")

@@ -53,7 +53,7 @@ public class ApiDocumentCustomizer implements OpenApiCustomizer {
     static final String VALIDATION_ERRORS = "ValidationErrors";
 
     private static final String VERSION_PLACEHOLDER = "{version}";
-    private static final String JSON = "application/json";
+    private static final String JSON = org.springframework.http.MediaType.APPLICATION_JSON_VALUE;
     private static final String ANY = "*/*";
     private static final Pattern PUBLIC_PATH = Pattern.compile("^/api/[^/]+/auth/.*$");
 

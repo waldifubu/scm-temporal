@@ -1,5 +1,6 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.shipping.PackageItemResponse;

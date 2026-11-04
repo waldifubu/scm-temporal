@@ -1,6 +1,6 @@
 package com.supplychainmanagement.controller;
 
-import com.supplychainmanagement.dto.auth.RegisterDto;
+import com.supplychainmanagement.dto.auth.AuthDtos.RegisterRequest;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.security.AuthService;
@@ -84,16 +84,16 @@ public class WebController {
                 throw new IllegalArgumentException("Unknown role in configuration.json: " + roleLabel);
             }
 
-            RegisterDto registerDto = new RegisterDto();
-            registerDto.setFirstname(userEntry.path("firstname").asString());
-            registerDto.setLastname(userEntry.path("lastname").asString());
-            registerDto.setUsername(username);
-            registerDto.setEmail(email);
-            registerDto.setPassword(userEntry.path("password").asString());
-            registerDto.setRole(roleEnum.name());
-            registerDto.setColor(userEntry.path("color").asString());
+            RegisterRequest request = new RegisterRequest(
+                    userEntry.path("firstname").asString(),
+                    userEntry.path("lastname").asString(),
+                    username,
+                    email,
+                    userEntry.path("password").asString(),
+                    roleEnum.name(),
+                    userEntry.path("color").asString());
 
-            authService.register(registerDto);
+            authService.register(request);
             createdUsers++;
         }
 

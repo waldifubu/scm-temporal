@@ -4,7 +4,7 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.mapper.ProductMapper;
 import com.supplychainmanagement.dto.product.ProductDto;
 import com.supplychainmanagement.dto.product.ProductRequestDto;
-import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.service.ProductService;
 import com.supplychainmanagement.service.RoleService;
 import jakarta.validation.Valid;

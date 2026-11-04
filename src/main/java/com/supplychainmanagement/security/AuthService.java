@@ -1,14 +1,14 @@
 package com.supplychainmanagement.security;
 
-import com.supplychainmanagement.dto.auth.JwtAuthResponse;
-import com.supplychainmanagement.dto.auth.LoginDto;
-import com.supplychainmanagement.dto.auth.RegisterDto;
+import com.supplychainmanagement.dto.auth.AuthDtos.AuthResponse;
+import com.supplychainmanagement.dto.auth.AuthDtos.LoginRequest;
+import com.supplychainmanagement.dto.auth.AuthDtos.RegisterRequest;
 import com.supplychainmanagement.entity.users.User;
 
 public interface AuthService {
-    User register(RegisterDto registerDto);
+    User register(RegisterRequest request);
 
-    JwtAuthResponse login(LoginDto loginDto);
+    AuthResponse login(LoginRequest request);
 
-    JwtAuthResponse logout();
+    AuthResponse logout();
 }

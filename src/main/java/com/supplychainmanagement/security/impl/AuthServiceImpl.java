@@ -1,8 +1,8 @@
 package com.supplychainmanagement.security.impl;
 
-import com.supplychainmanagement.dto.auth.JwtAuthResponse;
-import com.supplychainmanagement.dto.auth.LoginDto;
-import com.supplychainmanagement.dto.auth.RegisterDto;
+import com.supplychainmanagement.dto.auth.AuthDtos.AuthResponse;
+import com.supplychainmanagement.dto.auth.AuthDtos.LoginRequest;
+import com.supplychainmanagement.dto.auth.AuthDtos.RegisterRequest;
 import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.*;
 import com.supplychainmanagement.exception.APIException;
@@ -70,15 +70,15 @@ public class AuthServiceImpl implements AuthService {
     private String applicationTimeZone;
 
     @Override
-    public User register(RegisterDto registerDto) {
-        if (userRepository.existsByUsername(registerDto.getUsername())) {
+    public User register(RegisterRequest request) {
+        if (userRepository.existsByUsername(request.username())) {
             throw new APIException(
                     HttpStatus.BAD_REQUEST,
                     "Username already taken!"
             );
         }
 
-        if (userRepository.existsByEmail(registerDto.getEmail())) {
+        if (userRepository.existsByEmail(request.email())) {
             throw new APIException(
                     HttpStatus.BAD_REQUEST,
                     "Email already taken!"
@@ -86,17 +86,17 @@ public class AuthServiceImpl implements AuthService {
         }
 
         var user = new User();
-        user.setFirstName(registerDto.getFirstname());
-        user.setLastName(registerDto.getLastname());
-        user.setUsername(registerDto.getUsername());
-        user.setEmail(registerDto.getEmail());
-        user.setPassword(passwordEncoder.encode(registerDto.getPassword()));
-        if (registerDto.getColor() != null && !registerDto.getColor().isEmpty()) {
-            user.setColor(registerDto.getColor());
+        user.setFirstName(request.firstname());
+        user.setLastName(request.lastname());
+        user.setUsername(request.username());
+        user.setEmail(request.email());
+        user.setPassword(passwordEncoder.encode(request.password()));
+        if (request.color() != null && !request.color().isEmpty()) {
+            user.setColor(request.color());
         }
 
         Set<Role> roles = new HashSet<>();
-        var userRole = RoleEnum.valueOfLabel(registerDto.getRole());
+        var userRole = RoleEnum.valueOfLabel(request.role());
 
         if (null == userRole) {
             throw new APIException(
@@ -117,8 +117,8 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public JwtAuthResponse login(LoginDto loginDto) {
-        var dbUser = userRepository.findByUsernameOrEmail(loginDto.getUsernameOrEmail(), loginDto.getUsernameOrEmail())
+    public AuthResponse login(LoginRequest request) {
+        var dbUser = userRepository.findByUsernameOrEmail(request.usernameOrEmail(), request.usernameOrEmail())
                 .orElseThrow(() -> new APIException(
                         HttpStatus.UNAUTHORIZED,
                         INVALID_CREDENTIALS
@@ -140,7 +140,7 @@ public class AuthServiceImpl implements AuthService {
         Authentication authentication = null;
         try {
             authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(loginDto.getUsernameOrEmail(), loginDto.getPassword())
+                    new UsernamePasswordAuthenticationToken(request.usernameOrEmail(), request.password())
             );
         } catch (BadCredentialsException badCredentialsException) {
             loginAttemptService.loginFailed(dbUserUsername);
@@ -183,9 +183,9 @@ public class AuthServiceImpl implements AuthService {
         userRepository.save(dbUser);
         loginAttemptService.loginSucceeded(dbUserUsername);
 
-        return JwtAuthResponse.builder()
+        return AuthResponse.builder()
                 .tokenType("Bearer")
-                .token(token)
+                //.token(token)
                 .expiresAt(expiresAtZoned)
                 .expireAfterSeconds(expiresAt.getTime() / 1000)
                 .role(role)
@@ -196,9 +196,9 @@ public class AuthServiceImpl implements AuthService {
     }
 
     @Override
-    public JwtAuthResponse logout() {
+    public AuthResponse logout() {
         ResponseCookie cookie = jwtTokenProvider.removeJwtCookie();
-        return JwtAuthResponse.builder().cookie(cookie.toString()).build();
+        return AuthResponse.builder().cookie(cookie.toString()).build();
     }
 
     private User saveWithUserType(User user) {

@@ -116,6 +116,27 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     Page<OrderItemListDto> findAllByFulfillmentStatus(@Param("status") FulfillmentStatus status, Pageable pageable);
 
     /**
+     * The same list over <strong>every</strong> status - what {@code GET /order-items?status=ALL} answers. A query of
+     * its own rather than {@code (:status is null or ...)}: a null enum parameter has no type the database can
+     * infer, and the filter-free form is the plainer one.
+     */
+    @Query(value = """
+            select new com.supplychainmanagement.dto.order.OrderItemListDto(
+                oi.id, r.id, o.orderNo, p.articleNo, p.name, oi.quantity, oi.fulfillmentStatus, oi.updatedAt)
+            from OrderItem oi
+              join oi.order o
+              join oi.product p
+              left join Reservation r on r.orderItem = oi
+            """,
+            countQuery = """
+                    select count(oi)
+                    from OrderItem oi
+                      join oi.order o
+                      join oi.product p
+                    """)
+    Page<OrderItemListDto> findAllOrderItems(Pageable pageable);
+
+    /**
      * The lines package items can be made from: in one of {@code statuses} (the service passes PICKED
      * and PACKING), with how much of each is packed already - every {@code package_item} of the line,
      * in a package or loose, which is what {@code PackingServiceImpl.packLine} counts - and the

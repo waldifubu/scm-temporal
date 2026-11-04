@@ -28,6 +28,12 @@ public class InboundController {
      * The supplier's own requests - filtered by {@code supplier_id}, so an ADMIN asking gets their
      * own (empty) list. The warehouse's view of the same rows is {@code GET /requests} above.
      * <p>
+     * <strong>Newest first</strong> ({@code requestDate} descending, the id after it for requests placed
+     * together), and <strong>without the requests that are {@code IN_STOCK}</strong>: once the warehouse has
+     * booked the delivery into stock there is nothing left for the supplier to answer, so it drops out of
+     * their view. Everything else stays, {@code REJECTED} and {@code CANCELLED} included. The warehouse's
+     * list still shows {@code IN_STOCK}.
+     * <p>
      * Answers {@link RequestComponentResponseDto}, mapped in the service while the transaction is
      * open. That DTO used to carry the {@code Component} <strong>entity</strong> in a field, which
      * serialized the component's product along and resolved the graph through the open-in-view

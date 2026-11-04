@@ -18,7 +18,6 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * The scheduled counterpart to the fulfillment endpoints. {@code @EnableScheduling} is already
@@ -35,6 +34,10 @@ public class AutomaticReservationService {
      */
     private static final String SYSTEM_USER = "system";
     private final static Long deleteAfterDays = 2L; // Delete consumed reservations after 2 days
+    /** The statuses {@link #tryToReserve} looks at: those that may still hold a line without a reservation. */
+    static final List<OrderStatus> RESERVABLE_STATUSES = List.of(
+            OrderStatus.IN_FULFILLMENT, OrderStatus.WAIT_SUPPLY,
+            OrderStatus.READY_FOR_DISPATCH, OrderStatus.IN_TRANSIT, OrderStatus.PARTIALLY_DELIVERED);
     private final FulfillmentService fulfillmentService;
     private final OrderService orderService;
     private final ProductionService productionService;
@@ -99,9 +102,12 @@ public class AutomaticReservationService {
         // WAIT_SUPPLY as well as IN_FULFILLMENT: an order parked for missing stock is exactly the one
         // worth retrying, and a successful reservation is what takes it out of that status again
         // (PRE_FULFILLMENT_STATUSES). Without this half the sweep would never look at it.
-        var orders = Stream.concat(
-                        orderService.findAllByStatus(OrderStatus.IN_FULFILLMENT, pageable).stream(),
-                        orderService.findAllByStatus(OrderStatus.WAIT_SUPPLY, pageable).stream())
+        // The shipment side as well (RESERVABLE_STATUSES): an order is computed from the shipments its lines
+        // travel in, so one with a line still WAITING can read READY_FOR_DISPATCH, IN_TRANSIT or
+        // PARTIALLY_DELIVERED. Left out, that line was never reserved and the order never got to DELIVERED.
+        // reserveItems moves an order's status only out of a pre-fulfillment one, so these stay where they are.
+        var orders = RESERVABLE_STATUSES.stream()
+                .flatMap(status -> orderService.findAllByStatus(status, pageable).stream())
                 .toList();
         orders.forEach(order -> {
                     try {

@@ -33,7 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The HTTP {@code QUERY} method on {@code /users/distributors/query}, through the real filter chain: the firewall lets
- * the method in, the handler mapping routes it to the {@code @HttpQuery} method and to nothing else, the roles apply,
+ * the method in, the handler mapping routes it to the {@code RequestMethod.QUERY} method and to nothing else, the roles apply,
  * and the answer is the ranked carriers of the rules. {@code POST} on the same path says the same.
  */
 @SpringBootTest
@@ -43,7 +43,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Transactional
 class DistributorQueryEndpointTest {
 
-    private static final HttpMethod QUERY = HttpMethod.valueOf("QUERY");
+    private static final HttpMethod QUERY = HttpMethod.QUERY;
     private static final String PATH = "/api/1.0/users/distributors/query";
     private static final AtomicLong CALLS = new AtomicLong();
 

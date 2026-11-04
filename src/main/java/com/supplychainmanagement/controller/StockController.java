@@ -1,13 +1,20 @@
 package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
+import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.stock.AddStockRequest;
+import com.supplychainmanagement.dto.stock.BookStockRequest;
 import com.supplychainmanagement.dto.stock.InventoryRow;
 import com.supplychainmanagement.dto.stock.StockResponse;
 import com.supplychainmanagement.dto.stock.TransferStockRequest;
 import com.supplychainmanagement.entity.Stock;
+import org.springframework.security.core.userdetails.User;
+import com.supplychainmanagement.service.ComponentService;
+import com.supplychainmanagement.service.UserService;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.service.impl.StockService;
 import jakarta.validation.Valid;
 import lombok.AllArgsConstructor;
@@ -39,6 +46,8 @@ public class StockController {
     static final Set<String> INVENTORY_SORTABLE = Set.of("sku", "name", "onHand", "reserved", "available", "updatedAt");
 
     private final StockService stockService;
+    private final ComponentService componentService;
+    private final UserService userService;
 
     /**
      * What the warehouse holds of each article, <strong>every storehouse added up</strong>: one row per SKU
@@ -73,6 +82,20 @@ public class StockController {
     public ResponseEntity<StockResponse> addToStock(@Valid @RequestBody AddStockRequest request) {
         Stock stock = stockService.add(request.sku(), request.storehouseId(), request.qty());
         return ResponseEntity.ok().body(StockResponse.from(stock));
+    }
+
+    /**
+     * Books delivered component requests into stock: the quantity of each request goes onto the stock of
+     * its component in the chosen storehouse, and the request ends {@code IN_STOCK}. One transaction -
+     * a request that is unknown (404) or not {@code DELIVERED} (409) refuses the whole delivery, and
+     * nothing is booked. The body is {@link BookStockRequest}: the request ids and the storehouse.
+     */
+    @PostMapping(value = "/book", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN', 'WAREHOUSE')")
+    public List<RequestComponentResponse> bookToStock(@Valid @RequestBody BookStockRequest request,
+                                                      @AuthenticationPrincipal User authUser) {
+        return componentService.bookRequests(request.requestIds(), request.storehouseId(),
+                userService.getAuthenticatedUserId(authUser));
     }
 
     @PostMapping(value = "/transfer", version = "1.0")

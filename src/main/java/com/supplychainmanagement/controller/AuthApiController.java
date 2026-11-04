@@ -1,9 +1,9 @@
 package com.supplychainmanagement.controller;
 
 
-import com.supplychainmanagement.dto.auth.JwtAuthResponse;
-import com.supplychainmanagement.dto.auth.LoginDto;
-import com.supplychainmanagement.dto.auth.RegisterDto;
+import com.supplychainmanagement.dto.auth.AuthDtos.AuthResponse;
+import com.supplychainmanagement.dto.auth.AuthDtos.LoginRequest;
+import com.supplychainmanagement.dto.auth.AuthDtos.RegisterRequest;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.event.UserLoginEvent;
 import com.supplychainmanagement.event.UserRegisteredEvent;
@@ -32,11 +32,11 @@ public class AuthApiController {
     private AuthService authService;
 
     @PostMapping(value = "/register", version = "1.0")
-    public ResponseEntity<?> register(@Valid @RequestBody RegisterDto registerDto) {
+    public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request) {
         Map<String, String> response = new HashMap<>();
         User newUser;
         try {
-            newUser = authService.register(registerDto);
+            newUser = authService.register(request);
         } catch (RuntimeException runtimeException) {
             response.put("message", runtimeException.getMessage());
             return ResponseEntity.badRequest().body(response);
@@ -62,19 +62,19 @@ public class AuthApiController {
 
     @PostMapping(value = "/login", version = "1.0")
     @Deprecated
-    public ResponseEntity<?> login(@Valid @RequestBody LoginDto loginDto) {
-        JwtAuthResponse response = authService.login(loginDto);
+    public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
+        AuthResponse response = authService.login(request);
 
-        eventPublisher.publishEvent(new UserLoginEvent(response.getUsername()));
+        eventPublisher.publishEvent(new UserLoginEvent(response.username()));
         return ResponseEntity.ok()
-                .header(HttpHeaders.SET_COOKIE, response.getCookie())
+                .header(HttpHeaders.SET_COOKIE, response.cookie())
                 .body(response);
     }
 
     @PostMapping(value = "/login", version = "2.0")
-    public ResponseEntity<?> login20(@RequestBody LoginDto loginDto) {
+    public ResponseEntity<?> login20(@RequestBody LoginRequest request) {
         try {
-            String response = "2.0 login successful for user: " + loginDto.getUsernameOrEmail();
+            String response = "2.0 login successful for user: " + request.usernameOrEmail();
             return ResponseEntity.ok()
                     .body(response);
         } catch (APIException apiException) {
@@ -91,7 +91,7 @@ public class AuthApiController {
             Map<String, String> response = new HashMap<>();
             response.put("message", "Logout successful");
             return ResponseEntity.ok()
-                    .header(HttpHeaders.SET_COOKIE, logoutResult.getCookie())
+                    .header(HttpHeaders.SET_COOKIE, logoutResult.cookie())
                     .body(response);
         } catch (Exception e) {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());

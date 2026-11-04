@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.mapper;
 
+import com.supplychainmanagement.dto.component.ComponentDetailDto;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.ProductRefDto;
 import com.supplychainmanagement.entity.Component;
@@ -11,6 +12,9 @@ import org.mapstruct.Mapping;
 public interface ComponentMapper {
     @Mapping(target = "product", source = "product")
     ComponentResponseDto mapToDto(Component component);
+
+    @Mapping(target = "product", source = "product")
+    ComponentDetailDto mapToDetailDto(Component component);
 
     @Mapping(target = "product", source = "product")
     Component mapToEntity(ComponentResponseDto componentResponseDto);

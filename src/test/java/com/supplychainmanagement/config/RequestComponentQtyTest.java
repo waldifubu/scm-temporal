@@ -1,12 +1,12 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.config.migration.RequestComponentQtyMigration;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.Supplier;
 import com.supplychainmanagement.repository.ComponentRepository;
 import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.UserRepository;
-import org.hibernate.Hibernate;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import com.supplychainmanagement.support.TestData;

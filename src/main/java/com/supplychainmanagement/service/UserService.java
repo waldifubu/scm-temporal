@@ -30,8 +30,11 @@ public interface UserService {
 
     User update(Long id, User user);
 
-    /** Creates a user from what a client sent - see {@link UserRequestDto}. */
-    User create(UserRequestDto request);
+    /**
+     * Creates a user from what a client sent - see {@link UserRequestDto}. Only an ADMIN may hand out
+     * the ADMIN role (403 otherwise); {@code actor} is the authenticated caller.
+     */
+    User create(UserRequestDto request, org.springframework.security.core.userdetails.User actor);
 
     /** Updates a user from what a client sent - see {@link UserRequestDto}. */
     User update(Long id, UserRequestDto request);

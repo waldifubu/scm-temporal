@@ -1,8 +1,10 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
+import com.supplychainmanagement.dto.component.SupplierResolution;
 import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.model.enums.RequestStatus;
@@ -39,6 +41,12 @@ public interface ComponentService {
     /** Changes a component. The id comes from the path, never from the body. */
     Component update(Long id, ComponentRequestDto request);
 
+    /**
+     * Changes name, manufacturer, description, externalId, weight and/or qty of the component with this SKU; fields not sent stay as
+     * they are. 404 for an unknown SKU, 400 when nothing at all is sent.
+     */
+    Component patch(UUID sku, ComponentPatchRequest request);
+
     void deleteById(Long id);
 
     /**
@@ -60,6 +68,18 @@ public interface ComponentService {
      */
     List<RequestComponentResponse> requestComponents(Long supplierId, RequestComponentsRequest request,
                                                      Long userId);
+
+    /**
+     * Orders components without naming the supplier: each line goes to the supplier the supplier rules
+     * give for its component (the most specific rule, then priority, then the lower id; rules of a
+     * deactivated supplier are skipped). Every line becomes its own row, so one request can end up with
+     * several suppliers. All or nothing: a component no rule covers refuses the whole request with a 409
+     * naming every one of them, an unknown SKU with a 404.
+     */
+    List<RequestComponentResponse> requestComponents(RequestComponentsRequest request, Long userId);
+
+    /** Whom a request for each of these components would go to - empty fields where no rule applies. Unknown SKU: 404. */
+    List<SupplierResolution> resolveSuppliers(java.util.Collection<UUID> skus);
 
     /**
      * One page of component requests, all of them or those in one status.
@@ -143,4 +163,12 @@ public interface ComponentService {
      * @param userId the acting user, for symmetry with the other steps
      */
     RequestComponentResponse receiveRequest(Long requestId, Long storehouseId, Long userId);
+
+    /**
+     * Books several delivered requests into stock in one transaction: for each, its quantity is added
+     * to the stock of its component's SKU in {@code storehouseId}, and every request ends
+     * {@code IN_STOCK}. All or nothing - an unknown request or storehouse is a 404, a request that is
+     * not {@code DELIVERED} a 409, and either leaves everything as it was.
+     */
+    List<RequestComponentResponse> bookRequests(List<Long> requestIds, Long storehouseId, Long userId);
 }

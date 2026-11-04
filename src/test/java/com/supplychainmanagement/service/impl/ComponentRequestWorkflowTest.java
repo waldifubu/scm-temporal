@@ -26,6 +26,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -321,5 +322,115 @@ class ComponentRequestWorkflowTest {
         componentService.approveRequest(request.getId(), supplierId);
         componentService.requestInTransit(request.getId(), supplierId);
         componentService.requestDelivered(request.getId(), supplierId);
+    }
+
+    /** The supplier's own list comes newest first - by request date, ties by id. */
+    @Test
+    void theSuppliersOwnRequestsComeNewestFirst() {
+        RequestComponent older = placed(1L);
+        RequestComponent newer = placed(2L);
+        RequestComponent newest = placed(3L);
+        older.setRequestDate(java.time.LocalDateTime.now().minusDays(2));
+        newer.setRequestDate(java.time.LocalDateTime.now().minusDays(1));
+        newest.setRequestDate(newer.getRequestDate());
+        requestComponentRepository.saveAllAndFlush(List.of(older, newer, newest));
+        entityManager.clear();
+
+        assertThat(requestComponentRepository.findBySupplierIdAndRequestStatusNotOrderByRequestDateDescIdDesc(
+                supplier().getId(), RequestStatus.IN_STOCK))
+                .extracting(RequestComponent::getId)
+                .containsExactly(newest.getId(), newer.getId(), older.getId());
+    }
+
+    /** What is booked into stock is done for the supplier: it is not in their list any more, the others are. */
+    @Test
+    void theSuppliersOwnRequestsLeaveOutWhatIsInStock() {
+        RequestComponent open = placed(1L);
+        RequestComponent booked = delivered(2L);
+        componentService.bookRequests(List.of(booked.getId()), storehouse().getId(), supplier().getId());
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(requestComponentRepository.findBySupplierIdAndRequestStatusNotOrderByRequestDateDescIdDesc(
+                supplier().getId(), RequestStatus.IN_STOCK))
+                .extracting(RequestComponent::getId)
+                .containsExactly(open.getId());
+    }
+
+    private RequestComponent delivered(long qty) {
+        RequestComponent request = placed(qty);
+        request.setRequestStatus(RequestStatus.DELIVERED);
+        return requestComponentRepository.saveAndFlush(request);
+    }
+
+    /**
+     * {@code POST /stock/book}: a whole delivery in one go. Both quantities land on the one SKU in the
+     * chosen storehouse and both requests end IN_STOCK - which also has to pass the CHECK constraint.
+     */
+    @Test
+    void booksADeliveryOfSeveralRequestsIntoStockAndCompletesThem() {
+        Component component = component();
+        Long storehouseId = storehouse().getId();
+        int before = onHand(component.getSku(), storehouseId);
+        RequestComponent first = delivered(7L);
+        RequestComponent second = delivered(5L);
+
+        List<RequestComponentResponse> booked = componentService.bookRequests(
+                List.of(first.getId(), second.getId(), first.getId()), storehouseId, supplier().getId());
+
+        assertThat(booked).extracting(RequestComponentResponse::requestStatus)
+                .containsOnly(RequestStatus.IN_STOCK).hasSize(2);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(onHand(component.getSku(), storehouseId)).isEqualTo(before + 12);
+        assertThat(requestComponentRepository.findAllById(List.of(first.getId(), second.getId())))
+                .extracting(RequestComponent::getRequestStatus).containsOnly(RequestStatus.IN_STOCK);
+    }
+
+    /** One request that is not DELIVERED refuses the whole delivery: no stock, and the delivered one stays as it was. */
+    @Test
+    void bookingIsAllOrNothing() {
+        Component component = component();
+        Long storehouseId = storehouse().getId();
+        int before = onHand(component.getSku(), storehouseId);
+        RequestComponent ready = delivered(7L);
+        RequestComponent notYet = placed(5L);
+
+        Throwable thrown = catchThrowable(() -> componentService.bookRequests(
+                List.of(ready.getId(), notYet.getId()), storehouseId, supplier().getId()));
+
+        assertThat(thrown).isInstanceOfSatisfying(APIException.class, e -> {
+            assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+            assertThat(e.getMessage()).contains(String.valueOf(notYet.getId())).doesNotContain(ready.getId() + " (");
+        });
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(onHand(component.getSku(), storehouseId)).isEqualTo(before);
+        assertThat(requestComponentRepository.findById(ready.getId()).orElseThrow().getRequestStatus())
+                .isEqualTo(RequestStatus.DELIVERED);
+    }
+
+    /** Nothing to book is refused, not answered with an empty success. */
+    @Test
+    void bookingNothingIsRefused() {
+        Long storehouseId = storehouse().getId();
+        Long userId = supplier().getId();
+
+        for (List<Long> none : java.util.Arrays.asList(List.<Long>of(), null)) {
+            assertThat(catchThrowable(() -> componentService.bookRequests(none, storehouseId, userId)))
+                    .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
+        }
+    }
+
+    @Test
+    void bookingAnUnknownRequestOrStorehouseIsA404() {
+        RequestComponent ready = delivered(7L);
+
+        assertThat(catchThrowable(() -> componentService.bookRequests(List.of(ready.getId(), -1L), storehouse().getId(), supplier().getId())))
+                .isInstanceOfSatisfying(APIException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        assertThat(catchThrowable(() -> componentService.bookRequests(List.of(ready.getId()), -1L, supplier().getId())))
+                .isInstanceOf(com.supplychainmanagement.exception.ResourceNotFoundException.class);
     }
 }

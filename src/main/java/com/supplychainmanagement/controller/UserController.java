@@ -1,6 +1,5 @@
 package com.supplychainmanagement.controller;
 
-import com.supplychainmanagement.annotation.HttpQuery;
 import com.supplychainmanagement.annotation.NoCheck;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.mapper.UserMapper;
@@ -8,16 +7,18 @@ import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
 import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.service.UserService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.repository.Query;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import io.swagger.v3.oas.annotations.Operation;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Set;
@@ -76,9 +77,8 @@ public class UserController {
      * Every carrier carries {@code ruleId}, the rule that named it.
      */
     @NoCheck
-    @HttpQuery(path = "/distributors/query", version = "1.0")
-    @Operation(hidden = true)
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'LOGISTICS')")
+    @RequestMapping(path = "/distributors/query", version = "1.0", method = RequestMethod.QUERY, consumes = MediaType.APPLICATION_JSON_VALUE, produces = MediaType.APPLICATION_JSON_VALUE)
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','LOGISTICS')")
     public PageResponse<UserDto> queryDistributors(@Valid @RequestBody DistributorQueryRequest request) {
         List<UserDto> distributors = userService.queryDistributors(request).stream().map(userMapper::mapToDto).toList();
         return new PageResponse<>(distributors, distributors.size(), 0, Math.max(distributors.size(), 1));
@@ -106,9 +106,10 @@ public class UserController {
     @NoCheck
     @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public ResponseEntity<UserDto> create(@RequestBody UserRequestDto request) {
+    public ResponseEntity<UserDto> create(@RequestBody UserRequestDto request,
+                                          @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(userMapper.mapToDto(userService.create(request)));
+                .body(userMapper.mapToDto(userService.create(request, authUser)));
     }
 
     @NoCheck

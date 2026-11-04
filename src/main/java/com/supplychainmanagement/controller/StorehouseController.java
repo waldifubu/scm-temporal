@@ -2,10 +2,9 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.storehouse.StorehouseResponse;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.service.StorehouseService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

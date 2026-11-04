@@ -50,6 +50,13 @@ class UserServiceRequestDtoTest {
         return role;
     }
 
+    private static org.springframework.security.core.userdetails.User actor(RoleEnum... roles) {
+        return new org.springframework.security.core.userdetails.User("actor", "x",
+                java.util.Arrays.stream(roles)
+                        .map(r -> new org.springframework.security.core.authority.SimpleGrantedAuthority(r.name()))
+                        .toList());
+    }
+
     private static UserRequestDto request(Set<RoleEnum> roles) {
         return new UserRequestDto("Ada", "Lovelace", "ada", "ada@example.com", "secret1", null, null, roles);
     }
@@ -105,7 +112,7 @@ class UserServiceRequestDtoTest {
         Role manager = role(RoleEnum.MANAGER);
         when(roleRepository.findByRolename(RoleEnum.MANAGER)).thenReturn(Optional.of(manager));
 
-        User created = service.create(request(Set.of(RoleEnum.MANAGER)));
+        User created = service.create(request(Set.of(RoleEnum.MANAGER)), actor(RoleEnum.ADMIN));
 
         assertThat(created).isInstanceOf(Manager.class);
         assertThat(created.getRoles()).containsExactly(manager);
@@ -120,9 +127,43 @@ class UserServiceRequestDtoTest {
         Role customer = role(RoleEnum.CUSTOMER);
         when(roleRepository.findByRolename(RoleEnum.CUSTOMER)).thenReturn(Optional.of(customer));
 
-        User created = service.create(request(null));
+        User created = service.create(request(null), actor(RoleEnum.ADMIN));
 
         assertThat(created.getRoles()).containsExactly(customer);
+    }
+
+    /** Only an ADMIN hands out ADMIN: a MANAGER (who may create users) gets a 403 and nothing is written. */
+    @Test
+    void aManagerCannotCreateAnAdmin() {
+        savesWhatItIsGiven();
+        when(roleRepository.findByRolename(RoleEnum.ADMIN)).thenReturn(Optional.of(role(RoleEnum.ADMIN)));
+
+        assertThatThrownBy(() -> service.create(request(Set.of(RoleEnum.ADMIN)), actor(RoleEnum.MANAGER)))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).save(any());
+    }
+
+    /** ADMIN next to another role is still ADMIN; and no caller at all is no ADMIN either. */
+    @Test
+    void refusesAdminAmongOtherRolesAndWithoutACaller() {
+        assertThatThrownBy(() -> service.create(request(Set.of(RoleEnum.WAREHOUSE, RoleEnum.ADMIN)), actor(RoleEnum.MANAGER)))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> service.create(request(Set.of(RoleEnum.ADMIN)), null))
+                .isInstanceOf(APIException.class);
+        verify(userRepository, never()).save(any());
+    }
+
+    /** An ADMIN may create an ADMIN; a MANAGER may still create the other roles. */
+    @Test
+    void anAdminCreatesAnAdminAndAManagerTheRest() {
+        savesWhatItIsGiven();
+        when(roleRepository.findByRolename(RoleEnum.ADMIN)).thenReturn(Optional.of(role(RoleEnum.ADMIN)));
+        when(roleRepository.findByRolename(RoleEnum.WAREHOUSE)).thenReturn(Optional.of(role(RoleEnum.WAREHOUSE)));
+
+        assertThat(service.create(request(Set.of(RoleEnum.ADMIN)), actor(RoleEnum.ADMIN)).getRoles()).hasSize(1);
+        assertThat(service.create(request(Set.of(RoleEnum.WAREHOUSE)), actor(RoleEnum.MANAGER)).getRoles()).hasSize(1);
     }
 
     /** A role the database does not hold is a 400, before anything is saved. */
@@ -131,7 +172,7 @@ class UserServiceRequestDtoTest {
         savesWhatItIsGiven();
         when(roleRepository.findByRolename(RoleEnum.LOGISTICS)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> service.create(request(Set.of(RoleEnum.LOGISTICS))))
+        assertThatThrownBy(() -> service.create(request(Set.of(RoleEnum.LOGISTICS)), actor(RoleEnum.ADMIN)))
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
                 .hasMessageContaining("Role LOGISTICS not found");

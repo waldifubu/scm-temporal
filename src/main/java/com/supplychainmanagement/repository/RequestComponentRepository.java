@@ -33,6 +33,22 @@ public interface RequestComponentRepository extends JpaRepository<RequestCompone
     List<RequestComponent> findBySupplierId(Long userId);
 
     /**
+     * The same list, newest first: {@code requestDate} descending, and the id after it because requests
+     * placed in one go share their date (the supplier's own list is not paged, but the order should still be
+     * the same on every call).
+     */
+    @EntityGraph(attributePaths = {"component", "assignedBy"})
+    List<RequestComponent> findBySupplierIdOrderByRequestDateDescIdDesc(Long userId);
+
+    /**
+     * The supplier's list without the requests of one status: what is {@code IN_STOCK} is booked and
+     * done - there is nothing left for the supplier to answer - so it drops out of their view. Newest
+     * first, like the list above.
+     */
+    @EntityGraph(attributePaths = {"component", "assignedBy"})
+    List<RequestComponent> findBySupplierIdAndRequestStatusNotOrderByRequestDateDescIdDesc(Long userId, RequestStatus status);
+
+    /**
      * One page of requests, newest state of each - the work list behind
      * {@code GET /components/requests}.
      * <p>
@@ -40,12 +56,13 @@ public interface RequestComponentRepository extends JpaRepository<RequestCompone
      * and name and the user's name, which initializes both proxies - one query per row without the
      * graph. {@code supplier} is deliberately left out, because only its id is read and a proxy
      * answers {@code getId()} unloaded. Both are to-one associations, so the graph is a join and the
-     * page is still paged in SQL - unlike a collection fetch, see the package lists.
+     * page is still paged in SQL - unlike a collection fetch, see the package lists. The supplier comes
+     * along as well: the answer names it, and a proxy would cost a query per row.
      */
-    @EntityGraph(attributePaths = {"component", "assignedBy"})
+    @EntityGraph(attributePaths = {"component", "assignedBy", "supplier"})
     Page<RequestComponent> findAllBy(Pageable pageable);
 
     /** The same page narrowed to one status - {@code DELIVERED} is what the warehouse works off. */
-    @EntityGraph(attributePaths = {"component", "assignedBy"})
+    @EntityGraph(attributePaths = {"component", "assignedBy", "supplier"})
     Page<RequestComponent> findAllByRequestStatus(RequestStatus status, Pageable pageable);
 }

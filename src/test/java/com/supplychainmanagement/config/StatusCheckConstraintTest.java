@@ -1,5 +1,6 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.config.migration.StatusCheckConstraintMigration;
 import com.supplychainmanagement.repository.ShipmentRepository;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.entity.Order;
@@ -7,7 +8,6 @@ import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.User;
-import com.supplychainmanagement.entity.users.Supplier;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RequestStatus;
@@ -18,8 +18,6 @@ import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.UserRepository;
-import org.junit.jupiter.api.Test;
-import org.hibernate.Hibernate;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;

@@ -7,9 +7,12 @@ import com.supplychainmanagement.dto.order.OrderSummaryDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.event.OrderCreatedEvent;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.dto.order.OrderHistoryResponse;
+import com.supplychainmanagement.dto.order.OrderShipmentResponse;
 import com.supplychainmanagement.service.OrderHistoryService;
+import com.supplychainmanagement.service.OrderShipmentService;
 import com.supplychainmanagement.service.OrderService;
 import com.supplychainmanagement.service.UserService;
 import lombok.AllArgsConstructor;
@@ -33,6 +36,7 @@ import com.supplychainmanagement.exception.APIException;
 public class OrderController {
     private final OrderService orderService;
     private final OrderHistoryService orderHistoryService;
+    private final OrderShipmentService orderShipmentService;
     private final UserService userService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -133,11 +137,17 @@ public class OrderController {
                 userService.getAuthenticatedUserId(authUser)));
     }
 
+    /**
+     * Closes a delivered order. ADMIN and MANAGER may close any order; the CUSTOMER may close their own - they are
+     * the one who confirms the goods arrived. The order is fetched through {@code findByOrderNoForUser}, the call
+     * {@code GET /orders/{orderNo}} makes, so a customer asking about somebody else's order gets the same 403.
+     * What has to hold for the order to close is checked in {@code OrderService.complete} whoever asks.
+     */
     @PostMapping(path = "/{orderNo}/complete", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
     public OrderSummaryDto completeOrder(@PathVariable Long orderNo,
                                          @AuthenticationPrincipal User authUser) {
-        Order order = orderService.findByOrderNo(orderNo);
+        Order order = orderService.findByOrderNoForUser(orderNo, authUser);
         return toSummaryDto(orderService.complete(order, userService.getAuthenticatedUserId(authUser)));
     }
 
@@ -168,6 +178,21 @@ public class OrderController {
     public List<OrderHistoryResponse> getOrderHistory(@PathVariable Long orderNo,
                                                       @AuthenticationPrincipal User authUser) {
         return orderHistoryService.findHistory(orderNo, authUser);
+    }
+
+    /**
+     * The shipments one order travels in, oldest first: status, tracking number, address, when it left and arrived,
+     * and which of the order's packages are in it. An empty list while none is in a shipment.
+     * <p>
+     * The same roles and the same access rule as {@code GET /orders/{orderNo}} (a customer reads their own order's
+     * shipments only, 403 otherwise). The carrier's name is for staff; a customer does not get the key, see
+     * {@link OrderShipmentResponse}. The planning side's {@code /shipments} is closed to most of these roles.
+     */
+    @GetMapping(path = "/{orderNo}/shipments", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','CUSTOMER','LOGISTICS')")
+    public List<OrderShipmentResponse> getOrderShipments(@PathVariable Long orderNo,
+                                                         @AuthenticationPrincipal User authUser) {
+        return orderShipmentService.findShipments(orderNo, authUser);
     }
 
     @PostMapping(path = "", version = "1.0")

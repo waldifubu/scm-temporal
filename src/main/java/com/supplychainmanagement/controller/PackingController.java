@@ -2,6 +2,7 @@ package com.supplychainmanagement.controller;
 
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.order.OrderItemListDto;
+import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.dto.shipping.CreatePackageFromItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageItemsRequest;
 import com.supplychainmanagement.dto.shipping.CreatePackageRequest;
@@ -12,7 +13,7 @@ import com.supplychainmanagement.dto.shipping.ShipmentPackageResponse;
 import com.supplychainmanagement.dto.shipping.UpdatePackageRequest;
 import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
-import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackageItemResponseAssembler;
@@ -22,6 +23,7 @@ import jakarta.validation.groups.Default;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
@@ -53,8 +55,25 @@ public class PackingController {
     private final OrderHandlingService orderHandlingService;
 
     /**
+     * {@code ALL} (any case) means every status, as {@code null}; anything else has to be a fulfillment status - an
+     * unknown one is a 400 naming the valid ones, not the 500 of {@code valueOf}.
+     */
+    private static FulfillmentStatus parseItemStatus(String status) {
+        String text = status.trim();
+        if (text.equalsIgnoreCase("ALL")) {
+            return null;
+        }
+        try {
+            return FulfillmentStatus.valueOf(text.toUpperCase());
+        } catch (IllegalArgumentException unknown) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Unknown status '" + status + "' - ALL or one of "
+                    + java.util.Arrays.toString(FulfillmentStatus.values()));
+        }
+    }
+
+    /**
      * Order lines in one fulfillment status across all orders - PICKED by default, the lines waiting
-     * to be packed. Paged like the order list in {@code OrderController.list}, down to the parameter
+     * to be packed; {@code status=ALL} lists every line whatever its status. Paged like the order list in {@code OrderController.list}, down to the parameter
      * names. Sorted by {@code updatedAt} by default, so the line that reached its status first comes
      * first. {@code sort} accepts the columns of the order line itself; a joined one such as the
      * product name fails, see {@code OrderItemRepository.findAllByFulfillmentStatus}.
@@ -65,11 +84,11 @@ public class PackingController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "updatedAt") String sort,
-            @RequestParam(defaultValue = "PICKED") FulfillmentStatus status,
+            @RequestParam(defaultValue = "PICKED") String status,
             @RequestParam(defaultValue = "ASC") String order) {
         Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_ITEM_SORTABLE);
 
-        return PageResponse.of(orderHandlingService.getOrderItems(status, pageable));
+        return PageResponse.of(orderHandlingService.getOrderItems(parseItemStatus(status), pageable));
     }
 
     /**

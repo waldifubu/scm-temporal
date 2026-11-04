@@ -1,5 +1,6 @@
 package com.supplychainmanagement.controller;
 
+import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.ProductRefDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
@@ -39,6 +40,7 @@ import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -66,21 +68,21 @@ class ComponentControllerTest {
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
 
-        when(componentService.requestComponents(any(), any(), any())).thenReturn(List.of(
+        when(componentService.requestComponents(any(), any())).thenReturn(List.of(
                 new RequestComponentResponse(1L, 5L, SCREW, "screw", 12L, "Notwendig",
-                        RequestStatus.OPEN, null, 12L, 77L, "Rita Rack", null)));
+                        RequestStatus.OPEN, null, 12L, "Ada Lovelace", 77L, "Rita Rack", null)));
     }
 
     private RequestComponentsRequest bound() {
         ArgumentCaptor<RequestComponentsRequest> captor = ArgumentCaptor.forClass(RequestComponentsRequest.class);
-        verify(componentService).requestComponents(eq(12L), captor.capture(), any());
+        verify(componentService).requestComponents(captor.capture(), any());
         return captor.getValue();
     }
 
-    /** The wrapped form, and the supplier from the path. */
+    /** The wrapped form; the supplier is not in the request any more, the rules give it. */
     @Test
     void placesARequestFromTheWrappedBody() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 { "items": [
                                     { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8",
@@ -101,7 +103,7 @@ class ComponentControllerTest {
     /** The bare array binds to the same record - the project's id lists accept both shapes as well. */
     @Test
     void placesARequestFromTheBareArray() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8", "qty": 12 } ]
                                 """))
@@ -116,7 +118,7 @@ class ComponentControllerTest {
     /** The comment is optional. */
     @Test
     void acceptsALineWithoutAComment() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8", "qty": 1 } ]
                                 """))
@@ -227,14 +229,14 @@ class ComponentControllerTest {
     }
 
     private static RequestComponentResponse answered(RequestStatus status) {
-        return new RequestComponentResponse(5L, 11L, SCREW, "Blech", 12L, null, status, null, 315L,
+        return new RequestComponentResponse(5L, 11L, SCREW, "Blech", 12L, null, status, null, 315L, "Ada Lovelace",
                 77L, "Rita Rack", null);
     }
 
     /** Nothing to order is not a request. */
     @Test
     void refusesAnEmptyList() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("[]"))
                 .andExpect(status().isBadRequest());
 
@@ -244,7 +246,7 @@ class ComponentControllerTest {
     /** A quantity below one would be an order for nothing. */
     @Test
     void refusesAQuantityBelowOne() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8", "qty": 0 } ]
                                 """))
@@ -259,7 +261,7 @@ class ComponentControllerTest {
      */
     @Test
     void refusesAQuantityAboveTheLimit() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8",
                                     "qty": 3000000000 } ]
@@ -272,7 +274,7 @@ class ComponentControllerTest {
     /** The limit itself still goes through - it is a maximum, not a boundary to stay under. */
     @Test
     void acceptsTheHighestAllowedQuantity() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "componentId": "706a99c3-944b-11f1-9b51-001e064520d8",
                                     "qty": 1000000 } ]
@@ -283,7 +285,7 @@ class ComponentControllerTest {
     /** Which component is asked for is not optional. */
     @Test
     void refusesALineWithoutAComponent() throws Exception {
-        mockMvc.perform(post("/api/1.0/components/request/12").contentType(APPLICATION_JSON)
+        mockMvc.perform(post("/api/1.0/components/request").contentType(APPLICATION_JSON)
                         .content("""
                                 [ { "qty": 3, "comment": "welches denn?" } ]
                                 """))
@@ -338,5 +340,30 @@ class ComponentControllerTest {
                 .andExpect(status().isBadRequest());
 
         verify(componentService, never()).findSuppliers(any());
+    }
+
+    /** The SKU comes from the path, the three fields from the body; a field left out arrives as null. */
+    @Test
+    void patchBindsTheSkuAndTheSentFields() throws Exception {
+        mockMvc.perform(patch("/api/1.0/components/706a99c3-944b-11f1-9b51-001e064520d8")
+                        .contentType(APPLICATION_JSON)
+                        .content("{ \"name\": \"Stahlblech\", \"qty\": 5 }"))
+                .andExpect(status().isOk());
+
+        ArgumentCaptor<ComponentPatchRequest> captor = ArgumentCaptor.forClass(ComponentPatchRequest.class);
+        verify(componentService).patch(eq(SCREW), captor.capture());
+        assertThat(captor.getValue()).isEqualTo(new ComponentPatchRequest("Stahlblech", null, null, null, null, 5));
+    }
+
+    /** Validation answers 400 before the service is asked. */
+    @Test
+    void patchRefusesABlankNameAndAZeroQuantity() throws Exception {
+        mockMvc.perform(patch("/api/1.0/components/706a99c3-944b-11f1-9b51-001e064520d8")
+                        .contentType(APPLICATION_JSON).content("{ \"name\": \"  \" }"))
+                .andExpect(status().isBadRequest());
+        mockMvc.perform(patch("/api/1.0/components/706a99c3-944b-11f1-9b51-001e064520d8")
+                        .contentType(APPLICATION_JSON).content("{ \"qty\": 0 }"))
+                .andExpect(status().isBadRequest());
+        verify(componentService, never()).patch(any(), any());
     }
 }

@@ -48,27 +48,10 @@ public class SpringSecurityConfig {
                     // after it, including anyRequest().authenticated(), dead code. Authorization happens
                     // on the REQUEST dispatch; the ASYNC pass merely delivers the finished response.
                     authorize.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
-                    // Role based
-/*
-                            authorize.requestMatchers(HttpMethod.POST, "/api/**").hasRole("ADMIN");
-                            authorize.requestMatchers(HttpMethod.PUT, "/api/**").hasRole("ADMIN");
-                            authorize.requestMatchers(HttpMethod.DELETE, "/api/**").hasRole("ADMIN");
-                            authorize.requestMatchers(HttpMethod.GET, "/api/**").hasAnyRole("USER", "ADMIN");
-                            authorize.requestMatchers(HttpMethod.PATCH, "/api/**").hasAnyRole("USER", "ADMIN");
-
-                                authorize.requestMatchers("/api/admin/**").hasRole("ADMIN")
-                authorize.requestMatchers("/api/manager/**").hasAnyRole("MANAGER", "ADMIN")
-                authorize.requestMatchers("/api/supplier/**").hasAnyRole("SUPPLIER", "ADMIN")
-                authorize.requestMatchers("/api/distributor/**").hasAnyRole("DISTRIBUTOR", "ADMIN")
-                authorize.requestMatchers("/api/customer/**").hasAnyRole("CUSTOMER", "ADMIN")
-                authorize.requestMatchers("/api/warehouse/**").hasAnyRole("WAREHOUSE", "ADMIN")
-*/
-//                            authorize.requestMatchers("/api/employees").permitAll();
                     authorize.requestMatchers("/api/auth/**").permitAll();
                     authorize.requestMatchers("/api/{version:[0-9]+\\.[0-9]+}/auth/**").permitAll();
                     authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();
                     authorize.anyRequest().authenticated();
-//                    authorize.anyRequest().permitAll();
                 })
                 // Make sure the session creation policy is stateless (required for JWT)
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -104,8 +87,8 @@ public class SpringSecurityConfig {
         // (the default) - Thymeleaf inserts the token automatically on th:action.
         http.authorizeHttpRequests((authorize) -> {
                     authorize.requestMatchers("/", "/login", "/register", "/css/**", "/js/**", "/images/**").permitAll();
-                    authorize.requestMatchers("/actuator", "/actuator/health", "/actuator/info").permitAll();
-//                    authorize.requestMatchers("/actuator/**").hasRole("ADMIN");
+//                    authorize.requestMatchers("/actuator", "/actuator/health", "/actuator/info").permitAll();
+                    authorize.requestMatchers("/actuator/**").hasRole("ADMIN");
                     authorize.anyRequest().permitAll();
                 })
 //                .httpBasic(Customizer.withDefaults())

@@ -1,13 +1,18 @@
 package com.supplychainmanagement.entity;
 
+import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 import org.hibernate.annotations.ColumnDefault;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.Random;
 import java.util.UUID;
 
@@ -23,7 +28,7 @@ public class Component {
 
     @ManyToOne
     @JoinColumn(name = "product_id", nullable = false)
-    //@JsonIgnoreProperties("components") //Product wíthout components will be displayed
+
     @JsonIgnore
     private Product product;
 
@@ -44,6 +49,14 @@ public class Component {
 
     @Column(nullable = false, unique = true)
     private UUID sku;
+
+    @CreationTimestamp
+    @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
+    private LocalDateTime createdAt;
+
+    @UpdateTimestamp
+    @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
+    private LocalDateTime updatedAt;
 
     /**
      * How many of this component go into one unit of the product - the bill-of-materials quantity.

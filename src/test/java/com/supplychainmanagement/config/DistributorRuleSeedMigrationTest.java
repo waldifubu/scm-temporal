@@ -1,5 +1,6 @@
 package com.supplychainmanagement.config;
 
+import com.supplychainmanagement.config.migration.DistributorRuleSeedMigration;
 import com.supplychainmanagement.entity.users.Customer;
 import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.repository.DistributorRuleRepository;
