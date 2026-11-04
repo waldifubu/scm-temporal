@@ -1016,7 +1016,7 @@ the entity (this has happened before: a `tinyint` + `CHECK` column left over fro
 `EnumType.ORDINAL` mapping after the entity switched to `EnumType.STRING`). When changing an
 enum's storage mapping or a column's type on an existing entity, migrate the DB manually — check
 `information_schema`/`SHOW CREATE TABLE` for the actual column type/constraints rather than
-assuming the entity mapping matches. A `MariaDBLegacyDialect` community dialect is in use, and
+assuming the entity mapping matches. The core `MariaDBDialect` is in use (server 11.8), and
 `DROP CHECK`/`DROP CONSTRAINT` on an inline Hibernate-auto-named column CHECK may not work directly
 on this MariaDB version — a direct `MODIFY COLUMN` to the correct type has been the reliable fix
 instead.

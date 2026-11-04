@@ -560,7 +560,7 @@ answering.
 |----------------|-----------------------------------------------------------------------------|
 | Language       | Java 25                                                                     |
 | Framework      | Spring Boot 4.1.0 (Web MVC), Spring Security 7                              |
-| Persistence    | Spring Data JPA / Hibernate ORM 7, MariaDB (`hibernate-community-dialects`) |
+| Persistence    | Spring Data JPA / Hibernate ORM 7, MariaDB (`MariaDBDialect`) |
 | JSON           | Jackson 3 (`tools.jackson`) — see the note below                            |
 | Auth           | JWT (`jjwt`), BCrypt/Argon2 via BouncyCastle                                 |
 | Mapping        | MapStruct, Lombok                                                           |
