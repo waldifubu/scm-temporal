@@ -60,6 +60,25 @@ Default port is 8080 (`server.port` in `application.properties`). Logs are writt
 `logs/app-${server.port}.log` in addition to stdout — tail that file to check startup status
 (look for `Started Application` vs `APPLICATION FAILED TO START`).
 
+**Faster startup: the AOT cache** (Project Leyden, JEP 483/514, JDK 25; `scripts/aot-cache.ps1`, Maven profile
+`aot-cache`; `scripts/aot-cache.sh` is the same for Linux/macOS, with `--profile`/`--verify` and the application's
+arguments after `--`). `scripts/aot-cache.ps1` packages the jar, extracts it (`-Djarmode=tools ... extract`, into `target/aot`),
+runs one training start (`-XX:AOTCacheOutput`, `spring.context.exit=onRefresh`, random port, no browser) and then
+starts with `-XX:AOTCache`. Measured 2026-11-09: "Started Application" after **3.4 s** with the cache, 5.8 s from the
+same jar without, 9.4 s with `mvn spring-boot:run`. `build` takes about 70 s, so it pays for repeated starts of an
+unchanged build, not for the edit-run cycle.
+<br>**The profile exists because the ordinary jar cannot start**: `vaadin-dev` is `optional` and is left out of it
+("'vaadin-dev-server' not found" - that jar would need a production frontend build, which this repository does not
+have). `aot-cache` sets `includeOptional`, so the jar runs in Vaadin's dev mode like `spring-boot:run` does. Dev mode
+looks for the Maven project in the **working directory**, so the jar is started from the project root, not from
+`target/aot` ("does not look like a Maven or Gradle project" otherwise).
+<br>**The cache belongs to one jar, its libraries and one JDK.** After any change it no longer matches and the JVM
+ignores it *silently* - a normal-speed start, no error. `run -Verify` adds `-Xlog:aot=info`; "Opened AOT cache" is the
+line to look for (one "Failed to link AdapterHandlerEntry" warning is JDK 25's own and harmless). Training starts the
+real context, so it needs the database. The cache only covers classes from jars - never `target/classes`, which is why
+`spring-boot:run` cannot use it - and the `--add-opens` in the plugin's `jvmArguments` is for `spring-boot:run` only;
+the jar starts without it. Not done: Spring's own AOT processing (`process-aot`) and a container image.
+
 **There is no JavaScript project in this repository.** No `package.json`, no `vite.config.ts`, no
 `src/main/frontend`, no `src/main/bundles`: they were removed on purpose, a React frontend is to live
 in a project of its own next to this one. The Vaadin views are plain Java (`vaadin/views`) and need
@@ -1000,6 +1019,7 @@ one - `Order.amountOfItems` was on the first draft of the order list and ended i
 the real queries, not only the typo. `password` is deliberately not on the user list.
 <br>`GET /orders?status=` is text and parsed by hand (`OrderController.parseStatus`): an unknown status is a 400
 naming the valid ones, no longer the 500 of `valueOf`.
+<br>**`status` also takes two groups**: `ALL` (every status) and `NOT_COMPLETED` (everything but `COMPLETED`; the manager's view of open work), resolved by `OrderController.statusGroup` and read through `OrderRepository.findAllByStatusIn` / `findAllByCustomerAndStatusIn` (`OrderService.findAllByUserAndStatuses`, same `canReadAnyOrder` rule). Held by `OrderListAccessTest`.
 
 Every list endpoint follows `OrderController.list`: request parameters `page` / `size` / `sort` /
 `order`, assembled into a `PageRequest`, answered with `PageResponse.of(page)` —

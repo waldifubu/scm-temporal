@@ -604,6 +604,32 @@ The app starts on `server.port` (default `8080`). Logs are written both to stdou
 `application.properties`) — tail that file to tell `Started Application` from
 `APPLICATION FAILED TO START`.
 
+### Run with the AOT cache (faster startup)
+
+JDK 25 can store loaded and linked classes of a training start in a cache (Project Leyden, JEP 483/514) and map
+it at the next start. One script does the three steps Spring Boot documents - package, extract, train - and starts:
+
+```powershell
+scripts/aot-cache.ps1                  # prints the help (Get-Help); 'all' builds the cache if there is none, then starts
+scripts/aot-cache.ps1 build            # package (-Paot-cache), extract into target/aot, training run
+scripts/aot-cache.ps1 run -Profile dev # start with -XX:AOTCache
+scripts/aot-cache.ps1 run -Verify      # with -Xlog:aot=info: "Opened AOT cache" means it is used
+```
+
+On Linux and macOS the same thing is `scripts/aot-cache.sh` (`build`, `run`, `--profile dev`, `--verify`;
+arguments for the application after `--`, e.g. `scripts/aot-cache.sh run -- --server.port=8091`).
+
+Measured on this project: `Started Application` after **3.4 s** with the cache, 5.8 s from the same jar without
+it, 9.4 s with `mvn spring-boot:run`. Building the cache takes about 70 s and needs the database (the training
+run starts the real context, then exits).
+
+- The cache fits exactly one jar, its libraries and one JDK. After a code or dependency change the JVM ignores it
+  **silently** and starts at normal speed - run `build` again.
+- It only covers classes loaded from jars, so `mvn spring-boot:run` (which runs from `target/classes`) cannot use it.
+- The Maven profile `aot-cache` packs the optional `vaadin-dev` into the jar. The ordinary jar leaves it out and
+  does not start (it would need a production frontend build).
+- Start from the project root: Vaadin's dev mode looks for the Maven project in the working directory.
+
 ### Run tests
 
 ```bash

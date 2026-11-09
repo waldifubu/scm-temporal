@@ -2,6 +2,8 @@ package com.supplychainmanagement.security;
 
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.users.User;
+import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.support.TestData;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,8 @@ class OrderListAccessTest {
     private TestData testData;
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
+    @Autowired
+    private OrderRepository orderRepository;
     @Autowired
     private ObjectMapper objectMapper;
 
@@ -121,6 +125,54 @@ class OrderListAccessTest {
         Order ofACustomer = testData.order(testData.customer());
 
         assertThat(listedBy(admin, "/orders" + NEWEST_FIRST)).contains(ofACustomer.getOrderNo());
+    }
+
+    private Order orderIn(User customer, OrderStatus status) {
+        Order order = testData.order(customer);
+        order.setStatus(status);
+        return orderRepository.saveAndFlush(order);
+    }
+
+    /**
+     * {@code status=ALL} is every order and {@code status=NOT_COMPLETED} every order but the closed ones - a
+     * manager works from the second. One page of both, not one request per status. A rejected or cancelled order
+     * is not completed, so it is in the second.
+     */
+    @Test
+    void allListsEveryOrderAndNotCompletedLeavesOutTheCompletedOnes() throws Exception {
+        User manager = testData.userWithRoles(RoleEnum.MANAGER);
+        User customer = testData.customer();
+        Order created = orderIn(customer, OrderStatus.CREATED);
+        Order inFulfillment = orderIn(customer, OrderStatus.IN_FULFILLMENT);
+        Order rejected = orderIn(customer, OrderStatus.REJECTED);
+        Order completed = orderIn(customer, OrderStatus.COMPLETED);
+
+        assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=ALL")).contains(
+                created.getOrderNo(), inFulfillment.getOrderNo(), rejected.getOrderNo(), completed.getOrderNo());
+        assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=NOT_COMPLETED"))
+                .contains(created.getOrderNo(), inFulfillment.getOrderNo(), rejected.getOrderNo())
+                .doesNotContain(completed.getOrderNo());
+        // The words are not case sensitive, like the statuses; a single status is still just that one.
+        assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=not_completed")).doesNotContain(completed.getOrderNo());
+        assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=COMPLETED"))
+                .contains(completed.getOrderNo())
+                .doesNotContain(created.getOrderNo(), inFulfillment.getOrderNo());
+    }
+
+    /** The groups obey the same rule on whose orders: a customer gets their own, whatever the word. */
+    @Test
+    void aCustomersGroupsHoldOnlyTheirOwnOrders() throws Exception {
+        User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
+        Order own = orderIn(customer, OrderStatus.APPROVED);
+        Order ownCompleted = orderIn(customer, OrderStatus.COMPLETED);
+        Order foreign = orderIn(testData.customer(), OrderStatus.APPROVED);
+
+        assertThat(listedBy(customer, "/orders" + NEWEST_FIRST + "&status=ALL"))
+                .contains(own.getOrderNo(), ownCompleted.getOrderNo())
+                .doesNotContain(foreign.getOrderNo());
+        assertThat(listedBy(customer, "/orders" + NEWEST_FIRST + "&status=NOT_COMPLETED"))
+                .contains(own.getOrderNo())
+                .doesNotContain(ownCompleted.getOrderNo(), foreign.getOrderNo());
     }
 
     /** The rule the other way round: a customer still sees their own and nobody else's. */

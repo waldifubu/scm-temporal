@@ -264,4 +264,29 @@
         </plugins>
     </build>
 
+    <profiles>
+        <!--
+            A jar that starts the way "mvn spring-boot:run" does, for the JVM's AOT cache (Project Leyden,
+            JEP 483/514): the cache only covers classes loaded from jars, never from target/classes.
+            vaadin-dev is optional and therefore left out of the ordinary jar - which cannot start without a
+            production frontend build - so this profile packs the optional dependencies in. devtools stays out
+            (the plugin excludes it), lombok is excluded above.
+            Used by scripts/aot-cache.ps1; see "Faster startup: the AOT cache" in CLAUDE.md.
+        -->
+        <profile>
+            <id>aot-cache</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.springframework.boot</groupId>
+                        <artifactId>spring-boot-maven-plugin</artifactId>
+                        <configuration>
+                            <includeOptional>true</includeOptional>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+
 </project>

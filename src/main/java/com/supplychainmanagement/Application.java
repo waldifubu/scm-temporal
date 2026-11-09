@@ -5,8 +5,10 @@ import com.vaadin.flow.component.page.AppShellConfigurator;
 import com.vaadin.flow.server.AppShellSettings;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Lazy;
 
 @SpringBootApplication
+@Lazy
 @StyleSheet("css/styles.css")
 public class Application implements AppShellConfigurator {
 

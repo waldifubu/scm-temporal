@@ -28,6 +28,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 import java.util.Set;
 import java.util.Arrays;
+import java.util.EnumSet;
 import com.supplychainmanagement.exception.APIException;
 
 @RestController
@@ -49,14 +50,33 @@ public class OrderController {
     static final Set<String> ORDER_SORTABLE = Set.of("id", "orderNo", "created", "updated", "dueDate",
             "deliveryDate", "status", "total");
 
+    /** {@code status=ALL} on {@code GET /orders}: every order, whatever its status. */
+    static final String ALL = "ALL";
+
+    /** {@code status=NOT_COMPLETED}: every order but the closed ones - what a manager works from. */
+    static final String NOT_COMPLETED = "NOT_COMPLETED";
+
     /** {@code status} arrives as text on {@code GET /orders}; an unknown one is a 400, not the 500 of {@code valueOf}. */
     private static OrderStatus parseStatus(String status) {
         try {
             return OrderStatus.valueOf(status.trim().toUpperCase());
         } catch (IllegalArgumentException unknown) {
             throw new APIException(HttpStatus.BAD_REQUEST,
-                    "Unknown order status '" + status + "' - one of " + Arrays.toString(OrderStatus.values()));
+                    "Unknown order status '" + status + "' - one of " + Arrays.toString(OrderStatus.values())
+                            + ", " + ALL + " or " + NOT_COMPLETED);
         }
+    }
+
+    /** The statuses a group word stands for, or {@code null} when {@code status} is not one. */
+    private static Set<OrderStatus> statusGroup(String status) {
+        String word = status.trim().toUpperCase();
+        if (ALL.equals(word)) {
+            return EnumSet.allOf(OrderStatus.class);
+        }
+        if (NOT_COMPLETED.equals(word)) {
+            return EnumSet.complementOf(EnumSet.of(OrderStatus.COMPLETED));
+        }
+        return null;
     }
 
     // CUSTOMER may see their own order list; ADMIN/MANAGER/WAREHOUSE are included because
@@ -72,7 +92,10 @@ public class OrderController {
             @AuthenticationPrincipal User authUser) {
         Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_SORTABLE);
 
-        return toSummaryPage(orderService.findAllByUserAndStatus(authUser, parseStatus(status), pageable));
+        Set<OrderStatus> group = statusGroup(status);
+        return toSummaryPage(group != null
+                ? orderService.findAllByUserAndStatuses(authUser, group, pageable)
+                : orderService.findAllByUserAndStatus(authUser, parseStatus(status), pageable));
     }
 
     @GetMapping(path = "/new", version = "1.0")

@@ -64,6 +64,14 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
     Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 
+    /** The orders in any of these statuses - the list for "all", or "all but the closed ones". */
+    @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
+    Page<Order> findAllByStatusIn(java.util.Collection<OrderStatus> statuses, Pageable pageable);
+
+    /** Those of one customer. */
+    @EntityGraph(attributePaths = {"orderItems", "orderItems.product", "orderItems.product.categories", "orderItems.product.components", "customer"})
+    Page<Order> findAllByCustomerAndStatusIn(User customer, java.util.Collection<OrderStatus> statuses, Pageable pageable);
+
     /**
      * Several orders in one query, with their lines fetched. For callers that work on the orders
      * after the session has closed - the expiry sweep hands them to releaseItems, which walks

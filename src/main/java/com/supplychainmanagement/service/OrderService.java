@@ -19,7 +19,18 @@ public interface OrderService {
 
     Page<Order> findAll(Pageable pageable);
 
+    /**
+     * The orders a user may see, by the same rule as {@code GET /orders} - a page, not one page per
+     * status.
+     */
     Page<Order> findAllByUserAndStatus(org.springframework.security.core.userdetails.User authUser, OrderStatus orderStatus, Pageable pageable);
+
+    /**
+     * The same list for several statuses at once, by the same rule on whose orders it shows
+     * ({@link #findAllByUserAndStatus}): a page, not one page per status.
+     */
+    Page<Order> findAllByUserAndStatuses(org.springframework.security.core.userdetails.User authUser,
+                                         java.util.Collection<OrderStatus> statuses, Pageable pageable);
 
     Page<Order> findAllByStatus(OrderStatus orderStatus, Pageable pageable);
 

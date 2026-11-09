@@ -99,6 +99,18 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    public Page<Order> findAllByUserAndStatuses(org.springframework.security.core.userdetails.User authUser,
+                                                java.util.Collection<OrderStatus> statuses, Pageable pageable) {
+        if (roleService.canReadAnyOrder(authUser)) {
+            return orderRepository.findAllByStatusIn(statuses, pageable);
+        }
+
+        var user = userRepository.findByUsernameOrEmail(authUser.getUsername(), authUser.getUsername())
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", 0L));
+        return orderRepository.findAllByCustomerAndStatusIn(user, statuses, pageable);
+    }
+
+    @Override
     public Page<Order> findAll(Pageable pageable) {
         return orderRepository.findAllBy(pageable);
     }
