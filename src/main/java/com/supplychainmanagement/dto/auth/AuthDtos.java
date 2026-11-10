@@ -28,6 +28,7 @@ public final class AuthDtos {
     /**
      * Answer of login and logout. {@code tokenType} never reaches the JSON; {@code cookie} is the
      * {@code Set-Cookie} value the controller moves into the header and is part of the body as before.
+     * {@code refreshCookie} is the second one, for the refresh token; it is a credential and never in the body.
      */
     @Builder
     public record AuthResponse(
@@ -39,5 +40,6 @@ public final class AuthDtos {
             long expireAfterSeconds,
             String role,
             String cookie,
+            @JsonIgnore String refreshCookie,
             Long lastLogin) {}
 }

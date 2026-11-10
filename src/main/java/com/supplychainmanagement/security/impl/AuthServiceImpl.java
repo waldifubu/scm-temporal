@@ -13,6 +13,7 @@ import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.security.AuthService;
 import com.supplychainmanagement.security.JwtTokenProvider;
 import com.supplychainmanagement.security.LoginAttemptService;
+import com.supplychainmanagement.security.RefreshTokenService;
 import io.jsonwebtoken.ExpiredJwtException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
@@ -23,6 +24,8 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -65,6 +68,7 @@ public class AuthServiceImpl implements AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider jwtTokenProvider;
     private final LoginAttemptService loginAttemptService;
+    private final RefreshTokenService refreshTokenService;
 
     @Value("${application.timezone:UTC}")
     private String applicationTimeZone;
@@ -159,22 +163,14 @@ public class AuthServiceImpl implements AuthService {
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String token = jwtTokenProvider.generateToken(authentication);
-//        System.out.println("Generated JWT Token: " + token);
 
-        Date expiresAt = jwtTokenProvider.getExpirationDate(token);
-        ResponseCookie cookie = jwtTokenProvider.generateJwtCookie(token);
-
-        ZoneId zone = ZoneId.of(applicationTimeZone);
-        Instant expiresAtInstant = expiresAt.toInstant();
-        ZonedDateTime expiresAtZoned = expiresAtInstant.atZone(zone);
-        System.out.println("Token expires at: " + expiresAtZoned);
-
-        String role = authentication.getAuthorities().iterator().next().getAuthority().toString().toLowerCase(Locale.ROOT);
+        String role = authentication.getAuthorities().iterator().next().getAuthority().toLowerCase(Locale.ROOT);
         var detailsUser = (org.springframework.security.core.userdetails.User) authentication.getPrincipal();
 
         assert detailsUser != null;
         String username = detailsUser.getUsername();
 
+        ZoneId zone = ZoneId.of(applicationTimeZone);
         Long lastLogin = dbUser.getLastLogin() != null
                 ? dbUser.getLastLogin().atZone(zone).toInstant().toEpochMilli()
                 : null;
@@ -183,22 +179,64 @@ public class AuthServiceImpl implements AuthService {
         userRepository.save(dbUser);
         loginAttemptService.loginSucceeded(dbUserUsername);
 
+        // The refresh token starts a session of its own: a family that ends at logout, at a password change,
+        // or when one of its tokens is shown twice.
+        String refreshToken = refreshTokenService.startSession(dbUser);
+
+        return answer(token, username, role, lastLogin, refreshTokenService.cookie(refreshToken));
+    }
+
+    // Deliberately not @Transactional: rotate() commits its own work, including a family revocation that has to
+    // survive the 401 it is followed by. A transaction around it here would roll that revocation back.
+    @Override
+    public AuthResponse refresh(String refreshToken) {
+        RefreshTokenService.Issued issued = refreshTokenService.rotate(refreshToken);
+
+        // Roles as the database has them now - a refresh is exactly the moment a changed role should reach
+        // the access token.
+        List<GrantedAuthority> authorities = issued.authorities().stream()
+                .<GrantedAuthority>map(SimpleGrantedAuthority::new)
+                .toList();
+        String token = jwtTokenProvider.generateToken(issued.username(), authorities);
+        String role = authorities.isEmpty() ? null : authorities.getFirst().getAuthority().toLowerCase(Locale.ROOT);
+        ZoneId zone = ZoneId.of(applicationTimeZone);
+        Long lastLogin = issued.lastLogin() != null
+                ? issued.lastLogin().atZone(zone).toInstant().toEpochMilli()
+                : null;
+
+        return answer(token, issued.username(), role, lastLogin, refreshTokenService.cookie(issued.token()));
+    }
+
+    /** The answer of a login or a refresh: the access token cookie, the refresh cookie, and when the first ends. */
+    private AuthResponse answer(String token, String username, String role, Long lastLogin,
+                                ResponseCookie refreshCookie) {
+        Date expiresAt = jwtTokenProvider.getExpirationDate(token);
+        ZonedDateTime expiresAtZoned = expiresAt.toInstant().atZone(ZoneId.of(applicationTimeZone));
+
         return AuthResponse.builder()
                 .tokenType("Bearer")
-                //.token(token)
                 .expiresAt(expiresAtZoned)
                 .expireAfterSeconds(expiresAt.getTime() / 1000)
                 .role(role)
                 .lastLogin(lastLogin)
                 .username(username)
-                .cookie(cookie.toString())
+                .cookie(jwtTokenProvider.generateJwtCookie(token).toString())
+                .refreshCookie(refreshCookie.toString())
                 .build();
     }
 
     @Override
     public AuthResponse logout() {
-        ResponseCookie cookie = jwtTokenProvider.removeJwtCookie();
-        return AuthResponse.builder().cookie(cookie.toString()).build();
+        return logout(null);
+    }
+
+    @Override
+    public AuthResponse logout(String refreshToken) {
+        refreshTokenService.revokeFamilyOf(refreshToken);
+        return AuthResponse.builder()
+                .cookie(jwtTokenProvider.removeJwtCookie().toString())
+                .refreshCookie(refreshTokenService.removalCookie().toString())
+                .build();
     }
 
     private User saveWithUserType(User user) {

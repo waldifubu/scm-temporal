@@ -13,6 +13,7 @@ import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.DistributorRepository;
 import com.supplychainmanagement.repository.DistributorRuleRepository;
 import com.supplychainmanagement.repository.RoleRepository;
+import com.supplychainmanagement.security.RefreshTokenService;
 import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.UserService;
@@ -49,6 +50,7 @@ public class UserServiceImpl implements UserService {
     private final DistributorRuleRepository distributorRuleRepository;
     private final SupplierRepository supplierRepository;
     private final PasswordEncoder passwordEncoder;
+    private final RefreshTokenService refreshTokenService;
     private final UserMapper userMapper;
 
     @Override
@@ -120,6 +122,8 @@ public class UserServiceImpl implements UserService {
 
         if (user.getPassword() != null && !user.getPassword().isBlank()) {
             existing.setPassword(passwordEncoder.encode(user.getPassword()));
+            // A new password ends the sessions the old one opened: the refresh tokens would keep them alive.
+            refreshTokenService.revokeAllOf(existing.getId());
         }
 
         // Deliberately NO saveWithUserType here: that method builds a new instance of the subclass

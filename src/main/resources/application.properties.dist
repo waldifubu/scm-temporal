@@ -44,8 +44,17 @@ app.mysqldatafile=/data-mysql.sql
 # which rejects anything shorter than 256 bits. Replace this placeholder with your own value;
 # keep it out of version control (the live application*.properties files are git-ignored).
 app.jwtSecret=CHANGE_ME_this_placeholder_only_exists_so_a_fresh_checkout_starts_replace_it_with_a_real_secret
-# 1800000 ms = 30 minutes
-app.jwtExpirationMs=1800000
+# 900000 ms = 15 minutes. Short on purpose: a client renews it with the refresh token (POST /auth/refresh)
+# instead of logging in again, so the part that travels with every request can expire quickly.
+app.jwtExpirationMs=900000
+
+# Refresh token (httpOnly cookie, path /api/<default version>/auth, SameSite=Strict). A token lives idleDays
+# from when it was issued; the session it belongs to ends maxDays after the login, however busy it is.
+# graceSeconds: how long a token that was just used may be used once more (two tabs refreshing together).
+app.refresh.idleDays=7
+app.refresh.maxDays=30
+app.refresh.graceSeconds=20
+#app.refresh.cookie.name=scmrefresh
 
 # Cookie carrying the JWT. secure=false for local http development; set it to true
 # wherever the app is served over https, otherwise the browser drops the cookie.

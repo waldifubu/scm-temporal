@@ -167,7 +167,7 @@
         </dependency>
 
         <!-- JWT stuff -->
-        <!-- https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-api -->
+        <!-- Source: https://mvnrepository.com/artifact/io.jsonwebtoken/jjwt-api -->
         <!-- Provides core JWT classes and interfaces, such as JwtBuilder, JwtParser, Claims, etc. -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

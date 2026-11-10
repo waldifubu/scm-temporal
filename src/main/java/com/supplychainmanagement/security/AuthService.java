@@ -11,4 +11,10 @@ public interface AuthService {
     AuthResponse login(LoginRequest request);
 
     AuthResponse logout();
+
+    /** Logout that also ends the session behind a refresh token; {@code null} when the caller sent none. */
+    AuthResponse logout(String refreshToken);
+
+    /** Trades a refresh token for a new access token and the next refresh token. */
+    AuthResponse refresh(String refreshToken);
 }

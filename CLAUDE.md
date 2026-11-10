@@ -149,6 +149,34 @@ is answered *before* the password is checked, so it does say that the account ex
 <br>For a client: a 401 from any endpoint except the login call means the session is over; a 401 *from*
 the login call means the credentials were wrong. The status does not tell them apart, the endpoint does.
 
+**A refresh token renews the session without a password** (`RefreshTokenService`, `RefreshToken`, `POST /auth/refresh`).
+The access token is short on purpose (`app.jwtExpirationMs`, **15 minutes**); login also sets a second `HttpOnly` cookie,
+`scmrefresh` (`app.refresh.cookie.name`), `SameSite=Strict`, with `Path=/api/<default version>/auth` - a browser sends it to
+the auth space and nowhere else, so **a client has to call the versioned `/api/1.0/auth/refresh`**; through the unversioned
+alias the cookie is not sent. It is never in a response body.
+<br>**Opaque, stored as a hash, rotated.** 256 random bits; the table `refresh_token` holds the SHA-256 only. Every refresh
+retires the token it was given (`usedAt`) and issues the next one into the same **family** (the chain of one login). A retired
+token shown again **after `app.refresh.graceSeconds` (20)** means a copy was kept: the whole family is revoked, the newest
+token included, and the answer is the same 401 as for any bad token ("Invalid refresh token" - one text for unknown, expired,
+revoked and replayed). Inside the grace window it is accepted once more (two tabs refreshing together) and forks the chain.
+The row is read `FOR UPDATE`. `rotate` is `noRollbackFor = APIException.class` because the replay branch revokes and *then*
+answers 401 - a default rollback would undo the revocation - and `AuthServiceImpl.refresh` is deliberately **not**
+`@Transactional` for the same reason (an outer transaction would roll the inner commit back as the exception passes it).
+`RefreshTokenEndpointTest` runs inside a test transaction and therefore **cannot see** that rollback; the two annotations are
+held by this note, not by a test.
+<br>**Two ends**: a token lives `app.refresh.idleDays` (7) from when it was issued, the family ends `app.refresh.maxDays` (30)
+after the login whatever the activity (`familyExpiresAt`, carried unchanged along the chain). A disabled account is a 403 at
+refresh, as at login; the lock from failed password attempts is not asked (nobody typed a password). The roles of the new
+access token are read from the database at that moment.
+<br>**Ended by**: logout (`POST /auth/logout`, the `GET` still works and does the same; both clear the two cookies and revoke
+the family of the cookie they carry), a changed password (`UserServiceImpl.update` revokes every session of that user), and a
+nightly sweep (`RefreshTokenService.sweep`) of expired rows and tokens retired more than a day ago.
+<br>For a client: a 401 from any endpoint except login and refresh means *try `/auth/refresh` once, repeat the call, and only if
+the refresh answers 401 as well the session is over*. Let parallel 401s share one refresh (single flight). Held by
+`RefreshTokenEndpointTest` (clock moved by hand: grace window, replay, idle end, absolute end, disabled, logout, cookie flags).
+**`application-prod.properties` still has `app.jwtExpirationMs=143856000` (40 hours)**, from before there was a refresh token -
+lower it to the 15 minutes of the template when the frontend uses the refresh.
+
 **The CORS origin is configuration, and empty means none.** `app.cors.allowedOrigins` is a comma
 separated list (`SecurityBeanConfig.parseOrigins`: trimmed, blanks dropped, a trailing slash removed -
 the `Origin` header never has one, so an origin written with it would never match and fail without

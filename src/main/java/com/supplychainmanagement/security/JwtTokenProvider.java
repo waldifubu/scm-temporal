@@ -18,6 +18,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.security.Key;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Date;
 import java.util.List;
 import java.util.Objects;
@@ -39,21 +40,28 @@ public class JwtTokenProvider {
     private boolean secure;
 
     public String generateToken(Authentication authentication) {
-        String username = authentication.getName();
+        return generateToken(authentication.getName(), authentication.getAuthorities());
+    }
+
+    /**
+     * An access token for {@code username}. A refresh has no {@code Authentication} - nobody typed a password -
+     * so it names the user and the authorities it read from the database itself.
+     */
+    public String generateToken(String username, Collection<? extends GrantedAuthority> authorities) {
         Date currentDate = new Date();
         Date expiryDate = new Date(currentDate.getTime() + jwtExpirationInMs);
 
-        List<String> list = new ArrayList<>();
-        for (GrantedAuthority grantedAuthority : authentication.getAuthorities()) {
+        List<String> authoritiesList = new ArrayList<>();;
+        for (GrantedAuthority grantedAuthority : authorities) {
             if (!Objects.equals(grantedAuthority.getAuthority(), "FACTOR_PASSWORD")) {
                 String authority = grantedAuthority.getAuthority();
-                list.add(authority);
+                authoritiesList.add(authority);
             }
         }
 
         return Jwts.builder()
                 .subject(username)
-                .claim("authorities", list)
+                .claim("authorities", authoritiesList)
                 .issuedAt(currentDate)
                 .expiration(expiryDate)
                 .signWith(key())
