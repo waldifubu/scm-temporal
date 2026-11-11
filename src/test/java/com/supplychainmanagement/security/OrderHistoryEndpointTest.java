@@ -64,7 +64,7 @@ class OrderHistoryEndpointTest {
         Order order = testData.order(customer);
         testData.historyRow(order, null, OrderStatus.CREATED, customer.getId());
         testData.historyRow(order, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, actorOfSecondStep);
-        testData.historyRow(order, OrderStatus.ACKNOWLEDGED, OrderStatus.APPROVED, null);
+        testData.historyRow(order, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, null);
         return order;
     }
 
@@ -85,7 +85,7 @@ class OrderHistoryEndpointTest {
         assertThat(response.getStatus()).as("answered: %s", response.getContentAsString()).isEqualTo(200);
         String body = response.getContentAsString();
         List<String> newStatuses = read(body, "$[*].newStatus");
-        assertThat(newStatuses).containsExactly("APPROVED", "ACKNOWLEDGED", "CREATED");
+        assertThat(newStatuses).containsExactly("REVIEW", "ACKNOWLEDGED", "CREATED");
         List<String> previous = read(body, "$[:2].previousStatus");
         assertThat(previous).containsExactly("ACKNOWLEDGED", "CREATED");
         List<String> changedAt = read(body, "$[*].changedAt");
@@ -162,7 +162,7 @@ class OrderHistoryEndpointTest {
 
         Map<String, Object> automatic = read(history(order.getOrderNo(), manager).getContentAsString(), "$[0]");
 
-        assertThat(automatic.get("newStatus")).isEqualTo("APPROVED");
+        assertThat(automatic.get("newStatus")).isEqualTo("REVIEW");
         assertThat(automatic).doesNotContainKeys("changedById", "changedByName");
     }
 
@@ -181,7 +181,7 @@ class OrderHistoryEndpointTest {
         assertThat(response.getStatus()).isEqualTo(200);
         String body = response.getContentAsString();
         List<String> newStatuses = read(body, "$[*].newStatus");
-        assertThat(newStatuses).containsExactly("APPROVED", "ACKNOWLEDGED", "CREATED");
+        assertThat(newStatuses).containsExactly("REVIEW", "ACKNOWLEDGED", "CREATED");
         assertThat(body).doesNotContain("changedBy").doesNotContain(DisplayNames.of(actor));
     }
 

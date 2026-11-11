@@ -38,14 +38,16 @@ stateDiagram-v2
 
     state "Pre-fulfillment" as pre {
         [*] --> CREATED
-        CREATED --> ACKNOWLEDGED : POST /orders/{orderNo}/acknowledge
-        ACKNOWLEDGED --> REVIEW
-        REVIEW --> APPROVED
+        CREATED --> REVIEW : POST /orders/{orderNo}/review
+        CREATED --> ACKNOWLEDGED : POST /orders/{orderNo}/accept
+        REVIEW --> ACKNOWLEDGED : POST /orders/{orderNo}/accept
+        CREATED --> WAIT_SUPPLY : accept - stock does not cover every line
+        REVIEW --> WAIT_SUPPLY : accept - stock does not cover every line
     }
 
     pre --> REJECTED : POST /orders/{orderNo}/reject
     pre --> IN_FULFILLMENT : POST /orders/{orderId}/reserve
-    IN_FULFILLMENT --> APPROVED : POST /orders/{orderId}/release - nothing held, no line picked
+    IN_FULFILLMENT --> REVIEW : POST /orders/{orderId}/release - nothing held, no line picked
 
     IN_FULFILLMENT --> READY_FOR_DISPATCH : PUT /shipments/{id}/ready
     READY_FOR_DISPATCH --> IN_FULFILLMENT : POST /shipments/{id}/cancel
@@ -66,8 +68,8 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
 `FulfillmentServiceImpl`):
 
 - **`CREATED`** is the default status set by `Order`'s `@PrePersist` hook when an order is created.
-- **`ACKNOWLEDGED`** is set by `POST /orders/{orderNo}/acknowledge` and only from `CREATED`. The
-  call also confirms a **delivery date**: `OrderServiceImpl.acknowledge` asks
+- **`ACKNOWLEDGED`** is set by `POST /orders/{orderNo}/accept` and only from `CREATED` or `REVIEW`. The
+  call also confirms a **delivery date**: `OrderServiceImpl.accept` asks
   `ProductionService.checkItems` whether every line is covered by stock today and adds the matching
   lead time in working days (`app.order.leadDays.inStock`, default 2, vs.
   `app.order.leadDays.replenishment`, default 10), skipping weekends. A `dueDate` the customer asked
@@ -77,7 +79,7 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   `/reject`. It used to happen as a side effect of `GET /orders/{orderNo}`, which made a read change
   state and let anyone opening the detail view, warehouse staff included, commit the company to the
   order.
-- **`REVIEW`** and **`APPROVED`** are modeled in the enum but not yet driven by any endpoint.
+- **`REVIEW`** is set by `POST /orders/{orderNo}/review` (from `CREATED`; a repeat on `REVIEW` is a no-op) and by the fallback below: a manager has picked the order up, or an order that held reservations lost all of them again. `accept` or `reject` takes it from there. There is no `APPROVED` any more — it was reached only by that fallback, and `ACKNOWLEDGED` already says "accepted, date confirmed"; `ApprovedOrderStatusMigration` moves old rows to `REVIEW`.
 - **`REJECTED`** can be set from any pre-fulfillment status via `POST /orders/{orderNo}/reject`
   (the only check is that the order isn't already rejected — a repeat is a **400**). It is
   `OrderService.reject()`, not a status the controller sets: an entity changed before a service
@@ -85,25 +87,25 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   2026-09-23. See [Timestamps and audit](#order-status-flow) — the rule is that no caller writes
   `order.setStatus(...)` itself.
 - **`IN_FULFILLMENT`** is set by `FulfillmentServiceImpl.reserveItems()` — but **only** when the
-  order is currently in one of `CREATED`, `ACKNOWLEDGED`, `REVIEW`, or `APPROVED`
+  order is currently in one of `CREATED`, `ACKNOWLEDGED`, `REVIEW` or `WAIT_SUPPLY`
   (`PRE_FULFILLMENT_STATUSES`) **and** at least one line is covered by an active reservation. This
   makes the reserve call idempotent: calling it again on an order that already advanced past this
   point does not regress its status. A *partial* reservation counts — fulfillment has started for at
   least one line.
-- **Back to `APPROVED`** is the one backwards transition: `releaseItems` returns an order to
-  `APPROVED` once the release leaves it holding no reservation at all — the mirror image of the
+- **Back to `REVIEW`** is the one backwards transition: `releaseItems` returns an order to
+  `REVIEW` once the release leaves it holding no reservation at all — the mirror image of the
   `IN_FULFILLMENT` step. It does **not** when any line is already past `RESERVED`: a picked line
   holds only a `CONSUMED` reservation, which does not count as active, but its stock has left the
   shelf. A partial release leaves the status alone. Like every other transition it publishes an
   event, and it does so even when the acting user cannot be resolved (a scheduled sweep runs as
   `"system"`), writing the audit row with a null `user_id`.
-- **`WAIT_SUPPLY`** is set by `acknowledge` when `checkItems` does not cover every line — the order is
+- **`WAIT_SUPPLY`** is set by `accept` when `checkItems` does not cover every line — the order is
   confirmed all the same, with the replenishment lead time, and the status says why the date is so
   far out. A successful reservation takes it out again (`PRE_FULFILLMENT_STATUSES`), and
   `tryToReserve` retries those orders next to the `IN_FULFILLMENT` ones.
 - **`READY_FOR_DISPATCH` → `IN_TRANSIT` → `DELIVERED`** come from the shipment the order's packages
   travel in, see [Packages and shipments](#packages-and-shipments). A cancelled shipment takes its
-  orders back to `IN_FULFILLMENT` — the second backwards step besides the fallback to `APPROVED`, and
+  orders back to `IN_FULFILLMENT` — the second backwards step besides the fallback to `REVIEW`, and
   only while no line of that order travels in another shipment. From `IN_FULFILLMENT` on the status
   is *computed* from the quantities of the order's lines that sit in shipments
   (`OrderProgressService.recompute`), never pushed: `PARTIALLY_DELIVERED` means something has arrived
@@ -119,8 +121,8 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   shipment - the link runs over the packages.
 - **Every status change goes through `OrderProgressService.changeStatus()`** — it writes the status,
   saves and publishes the `OrderStatusChangedEvent` in one place. `OrderServiceImpl` (create, update,
-  and with them acknowledge and reject), `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to
-  `APPROVED`) and the shipment side all call it; `recompute()` is the variant that works the target
+  and with them accept and reject), `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to
+  `REVIEW`) and the shipment side all call it; `recompute()` is the variant that works the target
   out from the shipped quantities itself, `recordCreated()` the first row of a new order.
   `OrderStatusChangedListener` picks the event up `AFTER_COMMIT` and writes an immutable
   `OrderHistory` row (previous status, new status, acting user). Do not write `order.setStatus(...)`
@@ -324,13 +326,13 @@ enough. `tryToReserve()`, `tryToRelease()` and `tryToDelete()` are active; only 
 
 | Routine | Does | Interval |
 |---------|------|----------|
-| `checkCreatedOrders()` | checks coverage per `CREATED` order and acknowledges the ones whose every line is coverable | every 300 s |
+| `checkCreatedOrders()` | checks coverage per `CREATED` order and accepts the ones whose every line is coverable | every 300 s |
 | `tryToReserve()` | calls `reserveItems` for every order in `IN_FULFILLMENT`, `WAIT_SUPPLY`, `READY_FOR_DISPATCH`, `IN_TRANSIT` or `PARTIALLY_DELIVERED` — the last three because an order is computed from its shipments, so one with a line still `WAITING` can read as shipped; without them that line was never reserved and the order never reached `DELIVERED` | every 150 s |
 | `tryToRelease()` | calls `releaseItems` for every order holding a reservation past `expiresAt` (`findOrdersWithExpiredReservations()`) — **all** of that order's active reservations | every 150 s |
 | `tryToDelete()` | deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders two days after `consumedAt` (`expiresAt` for rows consumed before that column existed) | every 150 s |
 
 All four change state; each works the first 100 orders of its status. `checkItems` itself still
-writes nothing — it is the `acknowledge` call after it that does.
+writes nothing — it is the `accept` call after it that does.
 
 `AutomaticProductionService.assemble()` is active: every 150 s it runs `produce()`, which builds
 products from component stock.
@@ -339,7 +341,7 @@ products from component stock.
 expired, still active reservation, each order once. `expiresAt` only decides *which* orders the sweep
 picks: the release itself is per order, so `releaseItems` hands back all of that order's active
 reservations, including ones reserved later that have not run out yet. A full release takes the
-order back to `APPROVED`, and `tryToReserve()` takes it up again from there.
+order back to `REVIEW`, and `tryToReserve()` takes it up again from there.
 
 There is no open-in-view session out here, so every order these routines work on has to arrive with
 its `orderItems` already fetched — otherwise it turns into a `LazyInitializationException`.
@@ -929,7 +931,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 |----------|-----------|-------|
 | Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
 | | `GET /me` — who is logged in, **every** role (`UserDto`, role names as the enum: `WAREHOUSE`, ...). Works with the `HttpOnly` session cookie alone, which is what a browser has after a reload | any authenticated role |
-| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change)*, `GET /orders/{orderNo}/shipments` *(the shipments the order travels in; the carrier's name for staff only)*, `POST /orders`, `POST /orders/{orderNo}/acknowledge`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, WAREHOUSE, CUSTOMER for `GET /orders` (a customer sees only their own orders, the other three all of them); `/new` ADMIN, MANAGER and WAREHOUSE (read-only), `/acknowledge`, `/reject` and `/cancel` ADMIN and MANAGER only, `/complete` ADMIN, MANAGER and the order's own CUSTOMER; the lines of an order (`OrderItemDto`) name their product by `articleNo` and `sku`, `GET /{orderNo}`, `GET /history/{orderNo}` and `GET /{orderNo}/shipments` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
+| Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change)*, `GET /orders/{orderNo}/shipments` *(the shipments the order travels in; the carrier's name for staff only)*, `POST /orders`, `POST /orders/{orderNo}/accept`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, WAREHOUSE, CUSTOMER for `GET /orders` (a customer sees only their own orders, the other three all of them); `/new` ADMIN, MANAGER and WAREHOUSE (read-only), `/accept`, `/reject` and `/cancel` ADMIN and MANAGER only, `/complete` ADMIN, MANAGER and the order's own CUSTOMER; the lines of an order (`OrderItemDto`) name their product by `articleNo` and `sku`, `GET /{orderNo}`, `GET /history/{orderNo}` and `GET /{orderNo}/shipments` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
@@ -1052,12 +1054,12 @@ part of them.
 | `ProductionServiceCheckItemsTest` | storehouse selection, that `checkItems` writes nothing and issues one query per line |
 | `ProductionServiceProduceTest`, `ProductionPageResponseTest` | the page total of `produce()` and the `produced` count |
 | `FulfillmentServiceReserveItemsTest` | partial reservation, continuation on repeat, the `CREATED`/`COMPLETE`/`PENDING` outcomes, that only newly created reservations are reported, user attribution |
-| `FulfillmentServiceReleaseItemsTest` | status reset only after a successful release and only for the released lines, no fallback to `APPROVED` once a line is picked, an order holding nothing is a no-op |
+| `FulfillmentServiceReleaseItemsTest` | status reset only after a successful release and only for the released lines, no fallback to `REVIEW` once a line is picked, an order holding nothing is a no-op |
 | `FulfillmentServiceExpiredReservationsTest` | that `findOrdersWithExpiredReservations` names every order once and loads them in one query |
 | `FulfillmentServiceConsumedReservationsTest` | that consumed reservations are asked for per order in the database |
 | `InventoryReservationTransactionServiceTest` | the idempotency guard per order line; that `consume` returns only what it consumed |
 | `OrderHandlingTransactionServicePickTest` | that `pick` aborts when nothing was consumed and does not write the reservation itself |
-| `OrderServiceAcknowledgeTest` | the CREATED guard, both lead times, weekend skipping, the customer's `dueDate` |
+| `OrderServiceAcceptTest` | the CREATED guard, both lead times, weekend skipping, the customer's `dueDate` |
 | `OrderServiceAccessTest`, `RoleServiceCanReadAnyOrderTest`, `OrderReadAccessTest` | that a customer reaches only their own order and ADMIN, MANAGER, WAREHOUSE and LOGISTICS reach any - the last one against a real order, because the first two cannot see a role the service refuses after `@PreAuthorize` let it through |
 | `OrderHistoryServiceImplTest`, `OrderHistoryEndpointTest`, `DisplayNamesTest` | the history as a timeline, who may read it, and that a customer is not told which employee made a change |
 | `OpenApiDocumentTest`, `OpenApiDisabledTest`, `ApiDocumentCustomizerTest`, `ApiOperationCustomizerTest` | the OpenAPI description from the real application (literal versioned paths, one operation per path, roles as `x-roles`, error answers, public `/auth`, every `$ref` resolved), that it is off by default, and each customizer rule on its own |

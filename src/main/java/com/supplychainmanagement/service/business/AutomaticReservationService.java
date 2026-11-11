@@ -58,9 +58,9 @@ public class AutomaticReservationService {
      * <p>
      * The value is the signal. An order in CREATED has not been acknowledged yet, and whether it is
      * coverable today is exactly what decides whether it can be confirmed - and with which delivery
-     * date, see {@code OrderService.acknowledge}.
+     * date, see {@code OrderService.accept}.
      */
-//    @Scheduled(initialDelay = 60, fixedDelay = 300, timeUnit = TimeUnit.SECONDS)
+    @Scheduled(initialDelay = 120, fixedDelay = 300, timeUnit = TimeUnit.SECONDS)
     public void checkCreatedOrders() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
 
@@ -75,8 +75,8 @@ public class AutomaticReservationService {
                 if (items.isEmpty()) {
                     log.warn("Order {} has no line left to check", order.getOrderNo());
                 } else if (covered == items.size()) {
-                    log.info("Order {}: all {} line(s) coverable - ready to acknowledge", order.getOrderNo(), items.size());
-                    orderService.acknowledge(order, null);
+                    log.info("Order {}: all {} line(s) coverable - ready to accept", order.getOrderNo(), items.size());
+                    orderService.accept(order, null);
                 } else {
                     log.info("Order {}: {} of {} line(s) coverable, missing {}",
                             order.getOrderNo(), covered, items.size(), describeUncovered(items));

@@ -234,16 +234,17 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
-     * The guard is {@code != CREATED} rather than "not already acknowledged": unlike a rejection,
-     * which stays possible right up to fulfillment, a confirmation only makes sense from the
-     * incoming state. Acknowledging an order that is already reserved or picked would throw it back.
+     * The guard is "CREATED or REVIEW" rather than "not already acknowledged": unlike a rejection,
+     * which stays possible right up to fulfillment, a confirmation only makes sense while the order is
+     * still being decided - freshly incoming, or taken up for review. Acknowledging an order that is
+     * already reserved or picked would throw it back.
      */
     @Override
     @Transactional
-    public Order acknowledge(Order order, Long userId) {
-        if (order.getStatus() != OrderStatus.CREATED) {
+    public Order accept(Order order, Long userId) {
+        if (order.getStatus() != OrderStatus.CREATED && order.getStatus() != OrderStatus.REVIEW) {
             throw new APIException(HttpStatus.BAD_REQUEST,
-                    "Only an order in CREATED can be acknowledged, this one is " + order.getStatus());
+                    "Only an order in CREATED or REVIEW can be accepted, this one is " + order.getStatus());
         }
 
         // Asked once and used twice: the same answer decides the promised date and the status, and
@@ -260,10 +261,28 @@ public class OrderServiceImpl implements OrderService {
         // Not order.setStatus(...): update() below compares the status it reloads against the one it
         // is handed, and with open-in-view that is the same instance - the change would look like
         // none and no audit row would be written.
-        orderProgress.changeStatus(order,
-                everyLineCovered ? OrderStatus.ACKNOWLEDGED : OrderStatus.WAIT_SUPPLY, userId);
+        orderProgress.changeStatus(order, everyLineCovered ? OrderStatus.ACKNOWLEDGED : OrderStatus.WAIT_SUPPLY, userId);
 
         return update(order.getId(), order, userId);
+    }
+
+    @Override
+    @Transactional
+    public Order review(Order order, Long userId) {
+        if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.COMPLETED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be put under review");
+        }
+
+        if (order.getStatus() != OrderStatus.CREATED && order.getStatus() != OrderStatus.REVIEW) {
+            throw new APIException(HttpStatus.CONFLICT, "Only an order in CREATED or REVIEW can be put under review, order "
+                    + order.getOrderNo() + " is " + order.getStatus());
+        }
+
+        // Through OrderProgressService and not order.setStatus(...): see accept - a status set on the
+        // entity first looks like no change to the code that records it, and the history row is lost.
+        orderProgress.changeStatus(order, OrderStatus.REVIEW, userId);
+        return findById(order.getId());
     }
 
     /**
@@ -339,6 +358,18 @@ public class OrderServiceImpl implements OrderService {
     public Order reject(Order order, Long userId) {
         if (order.getStatus() == OrderStatus.REJECTED) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Order is already rejected");
+        }
+        if (order.getStatus() == OrderStatus.COMPLETED || order.getStatus() == OrderStatus.CANCELLED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be rejected");
+        }
+        if (order.getStatus() == OrderStatus.DELIVERED || order.getStatus() == OrderStatus.PARTIALLY_DELIVERED) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be rejected");
+        }
+        if (order.getStatus() == OrderStatus.IN_TRANSIT || order.getStatus() == OrderStatus.READY_FOR_DISPATCH) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be rejected");
         }
 
         orderProgress.changeStatus(order, OrderStatus.REJECTED, userId);

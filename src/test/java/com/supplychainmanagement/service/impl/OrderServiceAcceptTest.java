@@ -40,7 +40,7 @@ import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
-class OrderServiceAcknowledgeTest {
+class OrderServiceAcceptTest {
 
     private static final int IN_STOCK_LEAD_DAYS = 2;
     private static final int REPLENISHMENT_LEAD_DAYS = 10;
@@ -123,7 +123,7 @@ class OrderServiceAcknowledgeTest {
         Order order = orderInStatus(OrderStatus.CREATED);
         availability(true);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         // The status is written by OrderProgressService, so what is checked here is that it is asked
         // - OrderStatusHistoryTest covers that the change then really reaches the audit trail.
@@ -132,13 +132,41 @@ class OrderServiceAcknowledgeTest {
                 .isEqualTo(IN_STOCK_LEAD_DAYS);
     }
 
+    /** An order taken up for review is answered the same way as a fresh one - REVIEW is not a dead end. */
+    @Test
+    void acceptsAnOrderThatIsUnderReview() {
+        Order order = orderInStatus(OrderStatus.REVIEW);
+        availability(true);
+
+        var acknowledged = service.accept(order, 99L);
+
+        verify(orderProgress).changeStatus(order, OrderStatus.ACKNOWLEDGED, 99L);
+        assertThat(acknowledged.getDeliveryDate()).isNotNull();
+    }
+
+    /** Every other status stays refused: the guard is the two incoming ones, not "anything not yet acknowledged". */
+    @Test
+    void refusesEveryStatusButCreatedAndReview() {
+        for (OrderStatus status : OrderStatus.values()) {
+            if (status == OrderStatus.CREATED || status == OrderStatus.REVIEW) {
+                continue;
+            }
+            Order order = orderInStatus(status);
+
+            assertThatThrownBy(() -> service.accept(order, 99L))
+                    .as(status.name())
+                    .isInstanceOf(APIException.class)
+                    .hasMessageContaining(status.name());
+        }
+    }
+
     /** A line that has to be replenished first cannot be promised for the day after tomorrow. */
     @Test
     void promisesTheLongLeadTimeWhenALineIsNotCovered() {
         Order order = orderInStatus(OrderStatus.CREATED);
         availability(false);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         assertThat(workingDaysBetween(LocalDate.now(), acknowledged.getDeliveryDate().toLocalDate()))
                 .isEqualTo(REPLENISHMENT_LEAD_DAYS);
@@ -146,7 +174,7 @@ class OrderServiceAcknowledgeTest {
 
     /**
      * The order is confirmed either way - the customer has a date. What the status adds is why that
-     * date is so far out: the stock is not there, and WAIT_SUPPLY is the counterpart to APPROVED.
+     * date is so far out: the stock is not there, and WAIT_SUPPLY is the counterpart to ACKNOWLEDGED.
      * A reservation takes the order out of it again, see PRE_FULFILLMENT_STATUSES.
      */
     @Test
@@ -154,7 +182,7 @@ class OrderServiceAcknowledgeTest {
         Order order = orderInStatus(OrderStatus.CREATED);
         availability(false);
 
-        service.acknowledge(order, 99L);
+        service.accept(order, 99L);
 
         verify(orderProgress).changeStatus(order, OrderStatus.WAIT_SUPPLY, 99L);
     }
@@ -165,7 +193,7 @@ class OrderServiceAcknowledgeTest {
         Order order = orderInStatus(OrderStatus.CREATED);
         availability(true);
 
-        service.acknowledge(order, 99L);
+        service.accept(order, 99L);
 
         verify(productionService).checkItems(order);
     }
@@ -176,7 +204,7 @@ class OrderServiceAcknowledgeTest {
         Order order = orderInStatus(OrderStatus.CREATED);
         availability(true);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         assertThat(acknowledged.getDeliveryDate().getDayOfWeek())
                 .isNotIn(DayOfWeek.SATURDAY, DayOfWeek.SUNDAY);
@@ -191,7 +219,7 @@ class OrderServiceAcknowledgeTest {
         order.setDueDate(requested);
         availability(true);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         assertThat(acknowledged.getDeliveryDate().toLocalDate()).isEqualTo(requested);
     }
@@ -203,7 +231,7 @@ class OrderServiceAcknowledgeTest {
         order.setDueDate(LocalDate.now());
         availability(false);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         assertThat(workingDaysBetween(LocalDate.now(), acknowledged.getDeliveryDate().toLocalDate()))
                 .isEqualTo(REPLENISHMENT_LEAD_DAYS);
@@ -217,7 +245,7 @@ class OrderServiceAcknowledgeTest {
     void refusesAnOrderThatIsNoLongerInCreated() {
         Order order = orderInStatus(OrderStatus.IN_FULFILLMENT);
 
-        assertThatThrownBy(() -> service.acknowledge(order, 99L))
+        assertThatThrownBy(() -> service.accept(order, 99L))
                 .isInstanceOf(APIException.class)
                 .hasMessageContaining("IN_FULFILLMENT");
 
@@ -245,7 +273,7 @@ class OrderServiceAcknowledgeTest {
         order.setOrderItems(new LinkedHashSet<>(List.of(first, repeated)));
         availability(true);
 
-        var acknowledged = service.acknowledge(order, 99L);
+        var acknowledged = service.accept(order, 99L);
 
         assertThat(acknowledged.getOrderItems()).hasSize(1);
         assertThat(acknowledged.getOrderItems().iterator().next().getQuantity()).isEqualTo(5);
@@ -267,7 +295,7 @@ class OrderServiceAcknowledgeTest {
         order.setOrderItems(new LinkedHashSet<>(List.of(first, repeated)));
         availability(true);
 
-        service.acknowledge(order, 99L);
+        service.accept(order, 99L);
 
         assertThat(order.getOrderItems().iterator().next().getId()).isEqualTo(11L);
     }

@@ -43,8 +43,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
      * is not missing any more - without it the order would sit there for good.
      */
     private static final Set<OrderStatus> PRE_FULFILLMENT_STATUSES = EnumSet.of(
-            OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, OrderStatus.APPROVED,
-            OrderStatus.WAIT_SUPPLY);
+            OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, OrderStatus.WAIT_SUPPLY);
 
 
     private final ProductRepository productRepository;
@@ -234,7 +233,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
      * all - a plain repository call would have its own, and anything lazy touched around it fails.
      * <p>
      * It deliberately does <strong>not</strong> touch the order status. That call was copied from
-     * {@link #releaseItems}, where giving stock back really can take an order to APPROVED, and it was
+     * {@link #releaseItems}, where giving stock back really can take an order back to REVIEW, and it was
      * wrong in two ways here: {@code revertOrderStatus} only acts on IN_FULFILLMENT while this sweep
      * works on READY_FOR_DISPATCH orders, so it never did anything - and if it had, it would have
      * been nonsense. The order status follows the shipments its lines travel in
@@ -326,7 +325,8 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     /**
      * The counterpart to the IN_FULFILLMENT transition in {@link #reserveItems}, and it fires under
      * the mirrored condition: only once the order holds no reservation at all any more does
-     * fulfillment count as not started, and the order goes back to APPROVED. A partial release
+     * fulfillment count as not started, and the order goes back to REVIEW, where a manager
+     * decides again (accept it once more, or reject it). A partial release
      * leaves the status alone - the remaining lines are still being fulfilled.
      * <p>
      * A line that is already past RESERVED keeps the order where it is as well: a picked line holds
@@ -343,7 +343,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
             return;
         }
 
-        orderProgress.changeStatus(order, OrderStatus.APPROVED, userIdOf(username));
+        orderProgress.changeStatus(order, OrderStatus.REVIEW, userIdOf(username));
     }
 
     /**

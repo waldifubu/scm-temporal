@@ -235,15 +235,15 @@ new endpoint, follow the existing pattern: `@RequestMapping({"/api/{version}/...
 This is the most involved part of the codebase, spread across several services with distinct
 responsibilities — read all of them together before changing reservation/fulfillment logic:
 
-- **`Order`** has a coarse-grained `OrderStatus` (`CREATED → ACKNOWLEDGED → REVIEW → APPROVED →
+- **`Order`** has a coarse-grained `OrderStatus` (`CREATED → [REVIEW →] ACKNOWLEDGED →
   IN_FULFILLMENT → READY_FOR_DISPATCH → IN_TRANSIT → DELIVERED → COMPLETED`, plus
   `REJECTED`/`CANCELLED`). Driven by code up to `IN_FULFILLMENT`, and from there on by the shipment
   the order's packages travel in: `READY_FOR_DISPATCH` when the shipment is reported ready - the
   warehouse is done with it, which is what that status says - then `IN_TRANSIT` and `DELIVERED` with
   the carrier's steps. A cancelled shipment takes its orders back to `IN_FULFILLMENT` - the one
-  backwards step besides the fallback to `APPROVED` in `releaseItems`. `PARTIALLY_DELIVERED` is for
+  backwards step besides the fallback to `REVIEW` in `releaseItems`. `PARTIALLY_DELIVERED` is for
   an order of which something has arrived while the rest is still out, and `COMPLETED` comes from
-  `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `acknowledge` parks an order whose stock
+  `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `accept` parks an order whose stock
   is not there, and `CANCELLED` comes from `POST /orders/{orderNo}/cancel` (both below).
 - **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
   (`OrderProgressService.recompute`). The shipment side says only *which orders were touched*; where
@@ -325,14 +325,14 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   `releaseItems(order, username)` releases every active reservation the order holds - there is no
   variant for a subset any more - and returns what the inventory layer reports actually released.
   An order holding nothing yields an empty list, not an error, so the endpoint answers `200 []`
-  rather than 404. It takes the acting user because a release takes the order back to `APPROVED`
+  rather than 404. It takes the acting user because a release takes the order back to `REVIEW`
   once nothing is held any more, and that transition wants an audit row. "Nothing held" includes
   the lines: once any line is past `RESERVED` (a picked line holds only a `CONSUMED` reservation,
   which does not count as active) the order stays `IN_FULFILLMENT`.
 - **Never set a status on an entity a service will reload.** `update` compares the status it
   reloads against the one it is handed, and with `open-in-view` (default `true`) both are the same
   instance for the whole request - the change looks like none, so the status is written and the audit
-  row is not. `acknowledge` and `OrderController`'s reject did exactly that and lost their history
+  row is not. `accept` and `OrderController`'s reject did exactly that and lost their history
   rows; both now go through `OrderProgressService.changeStatus`, and `reject` is a service method of
   its own (`OrderService.reject`) rather than a status the controller sets. `OrderStatusHistoryTest`
   guards it - a unit test cannot, because with mocked repositories the two loads are whatever the
@@ -364,14 +364,14 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   creation event firing on an unfinished row. The sequence is read before the insert. It is
   deliberately not transactional, so a rolled-back order keeps its counter and MariaDB's cache of
   1000 can skip a block on restart; gaps do not matter, reuse would.
-- **`OrderService.acknowledge`** accepts an incoming order and confirms a delivery date for it: two
+- **`OrderService.accept`** accepts an incoming order and confirms a delivery date for it: two
   lead times in working days (`app.order.leadDays.inStock` / `.replenishment`, defaulted inline)
   depending on whether `checkItems` covers every line, weekends skipped, and a `dueDate` the
-  customer asked for later than that wins. Only from `CREATED` - confirming an order already being
+  customer asked for later than that wins. Only from `CREATED` or `REVIEW` - confirming an order already being
   fulfilled would throw it back.
   <br>The same answer also picks the status: `ACKNOWLEDGED` when every line is covered, `WAIT_SUPPLY`
   when it is not. The order is confirmed either way - the customer has a date - and the status says
-  why that date is so far out. `checkItems` is asked **once** in `acknowledge` and handed to
+  why that date is so far out. `checkItems` is asked **once** in `accept` and handed to
   `confirmDeliveryDate`; it costs a query per line.
   <br>The way out of `WAIT_SUPPLY` is a reservation: it is in `PRE_FULFILLMENT_STATUSES`, so
   `reserveItems` lifts such an order to `IN_FULFILLMENT` as soon as stock can be held, and
@@ -636,7 +636,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   <br>It undoes what the order held: every active reservation goes back to stock through
   `releaseItems`, and every line ends on `FulfillmentStatus.CANCELLED`. **Order of operations**: the
   status is written *before* the release, which looks backwards and is not - `releaseItems` takes an
-  `IN_FULFILLMENT` order to `APPROVED` on its way out (`revertOrderStatus`, which bails out for any
+  `IN_FULFILLMENT` order back to `REVIEW` on its way out (`revertOrderStatus`, which bails out for any
   other status), so releasing first would leave a step in the history that never happened. The lines
   are set *after* it, because the release puts them back to `WAITING`.
   <br>`linesPastReservation` and the existing `hasLineBeyondReservation` share one predicate, so the
@@ -669,7 +669,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
 - **An order status is written in one place**: `OrderProgressService.changeStatus` sets it, saves
   and publishes the event - `recompute` is the variant that works the target out for itself, and
   `recordCreated` is the first row of a new order. `OrderServiceImpl` (create, update, and with
-  it `acknowledge` and `reject`) and `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to `APPROVED`)
+  it `accept` and `reject`) and `FulfillmentServiceImpl` (`IN_FULFILLMENT`, back to `REVIEW`)
   all go through it. Do not write `order.setStatus(...)` and publish by hand - every caller that did had
   its own idea of what to do when the user could not be resolved, and one of them dropped the audit
   row. `changeStatus` ignores a `null` target and one the order already has, so a CRUD update
@@ -702,14 +702,14 @@ are commented out; the intervals below are the ones they carry. Each works the f
 its status. `AutomaticProductionService.assemble()` on the other hand is active and runs `produce()`
 every 150 s.
 
-- `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and acknowledges the ones
-  whose every line is coverable (`orderService.acknowledge(order, null)`). It writes.
-- `tryToReserve()` (every 150 s) calls `reserveItems` for every `IN_FULFILLMENT` order.
+- `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and accepts the ones
+  whose every line is coverable (`orderService.accept(order, null)`). It writes.
+- `tryToReserve()` (every 150 s) calls `reserveItems` for every order in `RESERVABLE_STATUSES` (`IN_FULFILLMENT`, `WAIT_SUPPLY` and the shipment statuses; not `REVIEW`, where a manager decides).
 - `tryToRelease()` (every 150 s) takes its orders from
   `FulfillmentService.findOrdersWithExpiredReservations()` - every order holding at least one
   reservation past `expiresAt`, each once - and calls `releaseItems` for each. `expiresAt` only
   decides which orders are picked: the release then covers *all* active reservations of the order,
-  a fresh one next to an expired one included. A full release takes the order back to `APPROVED`.
+  a fresh one next to an expired one included. A full release takes the order back to `REVIEW`.
 - `tryToDelete()` (every 150 s) deletes the `CONSUMED` reservations of `READY_FOR_DISPATCH` orders
   two days after they were consumed. A `CONSUMED` row holds no stock but it does hold the line's one
   slot (`uk_reservation_order_item`), so the line can never be reserved again while it is there.

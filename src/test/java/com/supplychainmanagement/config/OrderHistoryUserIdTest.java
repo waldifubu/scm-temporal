@@ -69,7 +69,7 @@ class OrderHistoryUserIdTest {
                 .userId(null)
                 .order(saved)
                 .previousStatus(OrderStatus.IN_FULFILLMENT)
-                .newStatus(OrderStatus.APPROVED)
+                .newStatus(OrderStatus.REVIEW)
                 .build();
 
         assertThatCode(() -> orderHistoryRepository.saveAndFlush(entry)).doesNotThrowAnyException();

@@ -33,7 +33,7 @@ public interface OrderProgressService {
      * <p>
      * Only ever writes within {@code IN_FULFILLMENT … DELIVERED}, and only for an order already in
      * that range. Everything before it belongs to the order side - {@code CREATED} through
-     * {@code APPROVED} and {@code WAIT_SUPPLY}, which is about stock and not about shipments - and
+     * {@code REVIEW} and {@code WAIT_SUPPLY}, which is about stock and not about shipments - and
      * {@code REJECTED}, {@code CANCELLED} and {@code COMPLETED} are ends, not steps. An order outside
      * the range is skipped, deliberately and not as a side effect.
      * <p>

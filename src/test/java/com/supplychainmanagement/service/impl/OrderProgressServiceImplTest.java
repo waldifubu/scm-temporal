@@ -242,7 +242,7 @@ class OrderProgressServiceImplTest {
      */
     @ParameterizedTest
     @EnumSource(value = OrderStatus.class,
-            names = {"CREATED", "ACKNOWLEDGED", "REVIEW", "APPROVED", "WAIT_SUPPLY", "REJECTED", "CANCELLED", "COMPLETED"})
+            names = {"CREATED", "ACKNOWLEDGED", "REVIEW", "WAIT_SUPPLY", "REJECTED", "CANCELLED", "COMPLETED"})
     void leavesAnOrderOutsideTheShipmentRangeAlone(OrderStatus status) {
         Order order = order(status, line(11L, 10));
         shipped(in(11L, ShipmentStatus.DELIVERED, 10));
@@ -346,9 +346,9 @@ class OrderProgressServiceImplTest {
     /** A write that changes nothing would read in the history as a step that never happened. */
     @Test
     void changeStatusIgnoresTheStatusTheOrderAlreadyHas() {
-        Order order = order(OrderStatus.APPROVED);
+        Order order = order(OrderStatus.REVIEW);
 
-        service.changeStatus(order, OrderStatus.APPROVED, 7L);
+        service.changeStatus(order, OrderStatus.REVIEW, 7L);
 
         verify(orderRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
@@ -360,11 +360,11 @@ class OrderProgressServiceImplTest {
      */
     @Test
     void changeStatusIgnoresAMissingTarget() {
-        Order order = order(OrderStatus.APPROVED);
+        Order order = order(OrderStatus.REVIEW);
 
         service.changeStatus(order, null, 7L);
 
-        assertThat(order.getStatus()).isEqualTo(OrderStatus.APPROVED);
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.REVIEW);
         verify(orderRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }

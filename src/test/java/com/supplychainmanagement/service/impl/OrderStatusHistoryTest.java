@@ -75,7 +75,7 @@ class OrderStatusHistoryTest {
         order.setOrderNo(orderNo);
         order.setCustomer(customer);
         order.setStatus(OrderStatus.CREATED);
-        // Empty rather than null: acknowledge asks the availability check about every line.
+        // Empty rather than null: accept asks the availability check about every line.
         order.setOrderItems(new LinkedHashSet<>());
         orderRepository.saveAndFlush(order);
         events.clear();
@@ -105,10 +105,10 @@ class OrderStatusHistoryTest {
 
     /** The same for acknowledging, which confirms a delivery date and then goes through update. */
     @Test
-    void recordsAnAcknowledgement() {
+    void recordsAnAcceptance() {
         Order order = orderService.findByOrderNo(orderNo);
 
-        orderService.acknowledge(order, 1L);
+        orderService.accept(order, 1L);
 
         assertThat(statusChanges())
                 .extracting(OrderStatusChangedEvent::newStatus)

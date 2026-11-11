@@ -163,9 +163,9 @@ class OrderListAccessTest {
     @Test
     void aCustomersGroupsHoldOnlyTheirOwnOrders() throws Exception {
         User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
-        Order own = orderIn(customer, OrderStatus.APPROVED);
+        Order own = orderIn(customer, OrderStatus.REVIEW);
         Order ownCompleted = orderIn(customer, OrderStatus.COMPLETED);
-        Order foreign = orderIn(testData.customer(), OrderStatus.APPROVED);
+        Order foreign = orderIn(testData.customer(), OrderStatus.REVIEW);
 
         assertThat(listedBy(customer, "/orders" + NEWEST_FIRST + "&status=ALL"))
                 .contains(own.getOrderNo(), ownCompleted.getOrderNo())

@@ -217,7 +217,7 @@ class ListParametersTest {
     @Test
     void stillTakesTheStatusInAnyCase() throws Exception {
         assertThat(get("/orders?status=created", token()).getStatus()).isEqualTo(200);
-        assertThat(get("/orders?status=Approved", token()).getStatus()).isEqualTo(200);
+        assertThat(get("/orders?status=Review", token()).getStatus()).isEqualTo(200);
     }
 
     /** The error says which parameter and what is allowed - the point of a 400 over a 500. */

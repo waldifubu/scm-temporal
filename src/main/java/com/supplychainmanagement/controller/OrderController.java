@@ -119,15 +119,27 @@ public class OrderController {
      * Deliberately a POST of its own and not a side effect of reading the order: acknowledging is a
      * commercial commitment, and it must not happen because someone opened the detail view.
      */
-    @PostMapping(path = "/{orderNo}/acknowledge", version = "1.0")
+    @PostMapping(path = "/{orderNo}/accept", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
-    public OrderSummaryDto acknowledgeOrder(@PathVariable Long orderNo,
+    public OrderSummaryDto acceptOrder(@PathVariable Long orderNo,
                                             @AuthenticationPrincipal User authUser) {
         Order order = orderService.findByOrderNo(orderNo);
 
         // Status guard and delivery date both live in the service: confirming a date needs the
         // availability check, which is not a controller's business.
-        return toSummaryDto(orderService.acknowledge(order, userService.getAuthenticatedUserId(authUser)));
+        return toSummaryDto(orderService.accept(order, userService.getAuthenticatedUserId(authUser)));
+    }
+
+    /**
+     * A manager takes an incoming order up for review. Only from CREATED; the answer to the customer
+     * (accept or reject) is a separate step.
+     */
+    @PostMapping(path = "/{orderNo}/review", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    public OrderSummaryDto reviewOrder(@PathVariable Long orderNo,
+                                       @AuthenticationPrincipal User authUser) {
+        Order order = orderService.findByOrderNo(orderNo);
+        return toSummaryDto(orderService.review(order, userService.getAuthenticatedUserId(authUser)));
     }
 
     @PostMapping(path = "/{orderNo}/reject", version = "1.0")

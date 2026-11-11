@@ -140,12 +140,12 @@ class FulfillmentServiceReleaseItemsTest {
 
     /**
      * The mirror image of the IN_FULFILLMENT transition in reserveItems: with the last reservation
-     * gone, fulfillment has not started any more and the order drops back to APPROVED - recorded in
+     * gone, fulfillment has not started any more and the order drops back to REVIEW - recorded in
      * the audit trail under the caller who released it. The write and the event are
      * OrderProgressService's, so what is checked here is the step being handed over.
      */
     @Test
-    void takesTheOrderBackToApprovedWhenNothingIsHeldAnyMore() {
+    void takesTheOrderBackToReviewWhenNothingIsHeldAnyMore() {
         Order order = orderWithActiveReservation();
         order.setStatus(OrderStatus.IN_FULFILLMENT);
 
@@ -155,7 +155,7 @@ class FulfillmentServiceReleaseItemsTest {
 
         service.releaseItems(order, USERNAME);
 
-        verify(orderProgress).changeStatus(order, OrderStatus.APPROVED, 99L);
+        verify(orderProgress).changeStatus(order, OrderStatus.REVIEW, 99L);
     }
 
     /**
@@ -195,7 +195,7 @@ class FulfillmentServiceReleaseItemsTest {
 
         service.releaseItems(order, "system");
 
-        verify(orderProgress).changeStatus(order, OrderStatus.APPROVED, null);
+        verify(orderProgress).changeStatus(order, OrderStatus.REVIEW, null);
     }
 
     /**

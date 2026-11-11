@@ -52,7 +52,7 @@ class OrderHistoryOrderTest {
             Order order = testData.order(customer);
             OrderHistory created = testData.historyRow(order, null, OrderStatus.CREATED, null);
             OrderHistory acknowledged = testData.historyRow(order, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, null);
-            OrderHistory approved = testData.historyRow(order, OrderStatus.ACKNOWLEDGED, OrderStatus.APPROVED, null);
+            OrderHistory approved = testData.historyRow(order, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, null);
             entityManager.clear();
 
             List<OrderHistory> rows = repository.findByOrderIdOrderByChangedAtDescIdDesc(order.getId());

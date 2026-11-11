@@ -103,7 +103,7 @@ class OrderServiceCancelTest {
 
     /**
      * The status is written before the release, and that is not cosmetic: releaseItems takes an
-     * IN_FULFILLMENT order to APPROVED on its way out, so the other order would leave a step in the
+     * IN_FULFILLMENT order back to REVIEW on its way out, so the other order would leave a step in the
      * history that never happened.
      */
     @Test

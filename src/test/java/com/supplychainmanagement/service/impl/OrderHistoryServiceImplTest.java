@@ -106,14 +106,14 @@ class OrderHistoryServiceImplTest {
         theOrder();
         when(roleService.canReadAnyOrder(caller)).thenReturn(false);
         when(historyRepository.findByOrderIdOrderByChangedAtDescIdDesc(ORDER_ID)).thenReturn(List.of(
-                row(3L, OrderStatus.ACKNOWLEDGED, OrderStatus.APPROVED, null),
+                row(3L, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, null),
                 row(2L, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, null),
                 row(1L, null, OrderStatus.CREATED, null)));
 
         var history = service.findHistory(ORDER_NO, caller);
 
         assertThat(history).extracting("newStatus")
-                .containsExactly(OrderStatus.APPROVED, OrderStatus.ACKNOWLEDGED, OrderStatus.CREATED);
+                .containsExactly(OrderStatus.REVIEW, OrderStatus.ACKNOWLEDGED, OrderStatus.CREATED);
         assertThat(history.getLast().previousStatus()).as("the creation comes from nowhere").isNull();
         assertThat(history).allSatisfy(entry -> assertThat(entry.changedAt()).isNotNull());
     }
@@ -136,7 +136,7 @@ class OrderHistoryServiceImplTest {
         when(historyRepository.findByOrderIdOrderByChangedAtDescIdDesc(ORDER_ID)).thenReturn(List.of(
                 row(1L, null, OrderStatus.CREATED, 7L),
                 row(2L, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, 8L),
-                row(3L, OrderStatus.ACKNOWLEDGED, OrderStatus.APPROVED, 7L)));
+                row(3L, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, 7L)));
         when(userRepository.findAllById(Set.of(7L, 8L))).thenReturn(List.of(
                 warehouseUser(7L, "Rita", "Rack"), warehouseUser(8L, null, null)));
 
@@ -175,7 +175,7 @@ class OrderHistoryServiceImplTest {
         theOrder();
         when(roleService.canReadAnyOrder(caller)).thenReturn(true);
         when(historyRepository.findByOrderIdOrderByChangedAtDescIdDesc(ORDER_ID)).thenReturn(List.of(
-                row(1L, OrderStatus.APPROVED, OrderStatus.IN_FULFILLMENT, null)));
+                row(1L, OrderStatus.REVIEW, OrderStatus.IN_FULFILLMENT, null)));
 
         var history = service.findHistory(ORDER_NO, caller);
 

@@ -48,11 +48,25 @@ public interface OrderService {
 
     /**
      * Accepts an incoming order and confirms a delivery date for it - the commercial answer a
-     * customer waits for, the equivalent of an EDIFACT ORDRSP / X12 855.
+     * customer waits for, the equivalent of an EDIFACT ORDRSP / X12 855. From CREATED or from REVIEW
+     * (400 otherwise).
      *
      * @param userId the acting user for the audit trail, may be null
      */
-    Order acknowledge(Order order, Long userId);
+    Order accept(Order order, Long userId);
+
+    /**
+     * Puts an incoming order under review: a manager has picked it up and is looking at it, but has not
+     * answered the customer yet. Only from CREATED, or from REVIEW where it is a no-op (409 otherwise) - an order further along is past
+     * the point where it can still be "picked up".
+     * <p>
+     * Writes nothing but the status, through {@code OrderProgressService} like every other status change,
+     * so the history gets its row. No availability check and no date: those belong to
+     * {@link #accept}.
+     *
+     * @param userId the acting user for the audit trail, may be null
+     */
+    Order review(Order order, Long userId);
 
     /**
      * Turns an incoming order down - possible right up to fulfillment, unlike acknowledging, which
@@ -96,7 +110,7 @@ public interface OrderService {
      * <p>
      * What it undoes: every active reservation goes back to stock, and every line ends on
      * {@code FulfillmentStatus.CANCELLED}. The status is written <em>before</em> the release, which
-     * looks backwards and is not - {@code releaseItems} would otherwise take the order to APPROVED on
+     * looks backwards and is not - {@code releaseItems} would otherwise take the order back to REVIEW on
      * its way out and the history would carry a step that never happened.
      *
      * @param username the acting user for the release, which resolves the id itself
