@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.order;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
@@ -12,7 +13,7 @@ public record OrderSummaryDto(
         Integer amountOfProducts,
         BigDecimal totalPrice,
         @JsonFormat(pattern = "yyyy-MM-dd")
-        LocalDate dueDate,
+        @Nullable LocalDate dueDate,
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
         LocalDateTime created,
         OrderStatus status

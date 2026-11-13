@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.model.enums.ShipmentPackageStatus;
 import com.supplychainmanagement.model.enums.ShipmentPackageType;
@@ -9,14 +10,14 @@ import java.util.List;
 
 public record ShipmentPackageResponse(
         Long id,
-        String packageNumber,
+        @Nullable String packageNumber,
         ShipmentPackageStatus status,
-        ShipmentPackageType type,
+        @Nullable ShipmentPackageType type,
         BigDecimal weight,
         BigDecimal packageWeight,
-        BigDecimal length,
-        BigDecimal width,
-        BigDecimal height,
+        @Nullable BigDecimal length,
+        @Nullable BigDecimal width,
+        @Nullable BigDecimal height,
         List<PackageItemResponse> items
 ) {
     /**

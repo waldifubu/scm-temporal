@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.reservation.ReservationDto;
 import com.supplychainmanagement.dto.reservation.ReservationOutcome;
@@ -79,6 +80,9 @@ class FulfillmentServiceReserveItemsTest {
 
     @Mock
     private OrderProgressService orderProgress;
+    /** Only here so the constructor of the service can be filled; {@code reserveItems} does not ask it. */
+    @Mock
+    private StockService stockService;
 
     @InjectMocks
     private FulfillmentServiceImpl service;

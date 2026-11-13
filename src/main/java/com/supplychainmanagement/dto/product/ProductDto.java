@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.product;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.math.BigDecimal;
@@ -18,17 +19,17 @@ import java.util.UUID;
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ProductDto(
-        Long id,
+        @Nullable Long id,
         Long articleNo,
         String name,
-        String description,
+        @Nullable String description,
         BigDecimal unitPrice,
         Double weight,
         UUID sku,
         boolean active,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt,
-        Set<ProductCategoryDto> categories,
-        List<ProductComponentDto> components
+        @Nullable LocalDateTime updatedAt,
+        @Nullable Set<ProductCategoryDto> categories,
+        @Nullable List<ProductComponentDto> components
 ) {
 }

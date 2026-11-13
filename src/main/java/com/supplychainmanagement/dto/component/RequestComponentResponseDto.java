@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.component;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.RequestStatus;
 
 import java.time.LocalDateTime;
@@ -26,11 +27,11 @@ import java.time.LocalDateTime;
  */
 public record RequestComponentResponseDto(
         Long id,
-        String comment,
-        LocalDateTime requestDate,
-        RequestStatus requestStatus,
-        LocalDateTime updated,
-        Long qty,
-        ComponentResponseDto component
+        @Nullable String comment,
+        @Nullable LocalDateTime requestDate,
+        @Nullable RequestStatus requestStatus,
+        @Nullable LocalDateTime updated,
+        @Nullable Long qty,
+        @Nullable ComponentResponseDto component
 ) {
 }

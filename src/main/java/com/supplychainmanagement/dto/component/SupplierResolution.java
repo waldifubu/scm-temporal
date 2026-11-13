@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.component;
 
+import org.jspecify.annotations.Nullable;
 import java.util.UUID;
 
 /**
@@ -8,5 +9,6 @@ import java.util.UUID;
  * {@code ruleId} are {@code null} when no active supplier rule applies - the same component
  * {@code POST /components/request} would refuse.
  */
-public record SupplierResolution(UUID componentId, Long supplierId, String supplierName, Long ruleId) {
+public record SupplierResolution(UUID componentId, @Nullable Long supplierId, @Nullable String supplierName,
+                                 @Nullable Long ruleId) {
 }

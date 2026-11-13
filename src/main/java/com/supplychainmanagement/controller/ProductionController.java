@@ -60,7 +60,7 @@ public class ProductionController {
     @PostMapping(path = "/produce", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'WAREHOUSE')")
     public ProductionPageResponse produce() {
-        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
+        Pageable pageable = PageRequest.of(0, 900, Sort.unsorted());
         Page<ProductionResultDto> productionPage = productionService.produce(pageable);
         return ProductionPageResponse.of(productionPage);
     }

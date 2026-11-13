@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.order;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.OrderStatus;
 
 import java.math.BigDecimal;
@@ -11,7 +12,7 @@ public record OrderDetailsDto(
         Long orderNo,
         BigDecimal total,
         OrderStatus status,
-        LocalDate dueDate,
+        @Nullable LocalDate dueDate,
         LocalDateTime created,
         String customerName,
         List<OrderItemDto> items

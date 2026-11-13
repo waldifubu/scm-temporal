@@ -59,10 +59,10 @@ public interface RequestComponentRepository extends JpaRepository<RequestCompone
      * page is still paged in SQL - unlike a collection fetch, see the package lists. The supplier comes
      * along as well: the answer names it, and a proxy would cost a query per row.
      */
-    @EntityGraph(attributePaths = {"component", "assignedBy", "supplier"})
+    @EntityGraph(attributePaths = {"component", "component.product", "assignedBy", "supplier"})
     Page<RequestComponent> findAllBy(Pageable pageable);
 
     /** The same page narrowed to one status - {@code DELIVERED} is what the warehouse works off. */
-    @EntityGraph(attributePaths = {"component", "assignedBy", "supplier"})
+    @EntityGraph(attributePaths = {"component", "component.product", "assignedBy", "supplier"})
     Page<RequestComponent> findAllByRequestStatus(RequestStatus status, Pageable pageable);
 }

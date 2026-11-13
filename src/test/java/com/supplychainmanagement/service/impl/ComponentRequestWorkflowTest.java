@@ -388,6 +388,29 @@ class ComponentRequestWorkflowTest {
                 .extracting(RequestComponent::getRequestStatus).containsOnly(RequestStatus.IN_STOCK);
     }
 
+    /**
+     * No storehouse named: the part goes where it is already kept. The first receipt (named) creates the stock row;
+     * the delivery after it, with no storehouse, lands in the same one - and so does a single receipt with none.
+     */
+    @Test
+    void bookingWithoutAStorehouseGoesWhereThePartIsKept() {
+        Component component = component();
+        Long storehouseId = storehouse().getId();
+        Long keeper = supplier().getId();
+        componentService.receiveRequest(delivered(3L).getId(), storehouseId, keeper);
+        int before = onHand(component.getSku(), storehouseId);
+
+        List<RequestComponentResponse> booked = componentService.bookRequests(
+                List.of(delivered(7L).getId(), delivered(5L).getId()), null, keeper);
+        RequestComponentResponse single = componentService.receiveRequest(delivered(2L).getId(), null, keeper);
+        assertThat(booked).extracting(RequestComponentResponse::storehouseId).containsOnly(storehouseId);
+        assertThat(single.storehouseId()).isEqualTo(storehouseId);
+        entityManager.flush();
+        entityManager.clear();
+
+        assertThat(onHand(component.getSku(), storehouseId)).isEqualTo(before + 14);
+    }
+
     /** One request that is not DELIVERED refuses the whole delivery: no stock, and the delivered one stays as it was. */
     @Test
     void bookingIsAllOrNothing() {

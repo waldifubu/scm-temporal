@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.order;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 
 import java.time.LocalDateTime;
@@ -15,7 +16,7 @@ import java.time.LocalDateTime;
 public record OrderItemListDto(
         Long orderItemId,
         // Null while the line holds no reservation - WAITING, or released again.
-        Long reservationId,
+        @Nullable Long reservationId,
         Long orderNo,
         Long articleNo,
         String productName,

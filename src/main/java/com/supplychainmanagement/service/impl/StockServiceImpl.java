@@ -7,6 +7,7 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.repository.StockInventoryRepository;
 import com.supplychainmanagement.repository.StockRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
+import com.supplychainmanagement.service.StockService;
 import lombok.AllArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
@@ -15,12 +16,20 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Collection;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 @AllArgsConstructor
-public class StockService {
+public class StockServiceImpl implements StockService {
 
     private final StockRepository stockRepository;
     private final StorehouseRepository storehouseRepository;
@@ -28,6 +37,7 @@ public class StockService {
 
     /** What the warehouse holds per article, every storehouse added up. */
     @Transactional(readOnly = true)
+    @Override
     public Page<InventoryRow> findInventory(Pageable pageable) {
         return stockInventoryRepository.findInventory(pageable);
     }
@@ -54,6 +64,7 @@ public class StockService {
      * commit, so it surfaces as a 409 saying what happened rather than as a 500 from somewhere else.
      */
     @Transactional
+    @Override
     public Stock add(UUID sku, Long storehouseId, Integer quantity) {
         if (quantity == null || quantity <= 0) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Quantity must be greater than zero");
@@ -84,14 +95,13 @@ public class StockService {
         return stockRepository.save(stock);
     }
 
+    @Override
     public List<Stock> findAllBySku(UUID sku) {
         return stockRepository.findBySku(sku);
     }
 
+    @Override
     public boolean isAvailable(UUID sku, int quantity, Long storehouseId) {
-        if (quantity <= 0) {
-            throw new IllegalArgumentException("Quantity must be greater than zero");
-        }
 
         return stockRepository.findByStorehouseIdAndSku(storehouseId, sku)
                 .map(stock -> stock.getAvailable() >= quantity)
@@ -99,6 +109,7 @@ public class StockService {
     }
 
     @Transactional
+    @Override
     public Stock transferItemToStock(UUID sku, Long storehouseFrom, Long storehouseTo, Integer quantity) {
         if (quantity == null || quantity <= 0) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Quantity must be greater than zero");
@@ -150,20 +161,51 @@ public class StockService {
         return targetStock;
     }
 
+    @Override
     public Page<Stock> findAllByStorehouseId(Long id, Pageable pageable) {
         return stockRepository.findByStorehouseId(id, pageable);
     }
 
-    private List<Storehouse> getAllStorehouses() {
-        return storehouseRepository.findAll();
+    /**
+     * Where goods of this SKU should be booked in when nobody said: the storehouse that already holds the most of it
+     * (a tie goes to the lower id), otherwise the one with the lowest id. Empty only when there is no storehouse at all.
+     */
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Storehouse> suggestReceivingStorehouse(UUID sku) {
+        return stockRepository.findBySku(sku).stream()
+                .max(Comparator.comparingInt(Stock::getOnHand)
+                        .thenComparing(stock -> stock.getStorehouse().getId(), Comparator.reverseOrder()))
+                .map(Stock::getStorehouse)
+                .or(() -> storehouseRepository.findAll().stream().min(Comparator.comparing(Storehouse::getId)));
     }
 
-    private Storehouse getAvailableStorehouse(UUID sku, Integer requiredQuantity) {
-        for (Storehouse storehouse : getAllStorehouses()) {
-            if (isAvailable(sku, requiredQuantity, storehouse.getId())) {
-                return storehouse;
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Storehouse> suggestReceivingStorehouseForPart(UUID sku, Collection<UUID> recipeSkus) {
+        // per storehouse: which recipe parts it holds (distinct) and how many units of them
+        Map<Long, Set<UUID>> partsHeld = new HashMap<>();
+        Map<Long, Integer> unitsHeld = new HashMap<>();
+        Map<Long, Storehouse> storehouses = new HashMap<>();
+        for (UUID recipeSku : new LinkedHashSet<>(recipeSkus)) {
+            if (recipeSku == null) {
+                continue;
+            }
+            for (Stock stock : stockRepository.findBySku(recipeSku)) {
+                if (stock.getOnHand() <= 0) {
+                    continue;
+                }
+                Long id = stock.getStorehouse().getId();
+                storehouses.putIfAbsent(id, stock.getStorehouse());
+                partsHeld.computeIfAbsent(id, key -> new HashSet<>()).add(recipeSku);
+                unitsHeld.merge(id, stock.getOnHand(), Integer::sum);
             }
         }
-        return null;
+        return storehouses.keySet().stream()
+                .max(Comparator.<Long>comparingInt(id -> partsHeld.get(id).size())
+                        .thenComparingInt(unitsHeld::get)
+                        .thenComparing(Comparator.reverseOrder()))
+                .map(storehouses::get)
+                .or(() -> suggestReceivingStorehouse(sku));
     }
 }

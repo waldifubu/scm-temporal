@@ -1,5 +1,7 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.entity.Storehouse;
+import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
@@ -32,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -105,6 +108,7 @@ class ComponentServiceReceiveTest {
         verify(stockService).add(SKU, STOREHOUSE_ID, 12);
         assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.IN_STOCK);
         assertThat(response.requestStatus()).isEqualTo(RequestStatus.IN_STOCK);
+        assertThat(response.storehouseId()).isEqualTo(STOREHOUSE_ID);
     }
 
     /**
@@ -149,6 +153,66 @@ class ComponentServiceReceiveTest {
 
         assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.DELIVERED);
         verify(stockService, never()).add(any(), any(), any());
+    }
+
+    /** The answer names the product the part belongs to, so two parts of one name can be told apart. */
+    @Test
+    void namesTheProductOfThePart() {
+        RequestComponent request = request(RequestStatus.DELIVERED, 12L);
+        com.supplychainmanagement.entity.Product product = new com.supplychainmanagement.entity.Product();
+        product.setName("Regal");
+        request.getComponent().setProduct(product);
+
+        assertThat(service.receiveRequest(REQUEST_ID, STOREHOUSE_ID, 99L).productName()).isEqualTo("Regal");
+    }
+
+    /** No storehouse named: the one {@code suggestReceivingStorehouseForPart} picks gets the goods. */
+    @Test
+    void booksIntoTheSuggestedStorehouseWhenNoneIsNamed() {
+        RequestComponent request = request(RequestStatus.DELIVERED, 12L);
+        Storehouse suggested = new Storehouse();
+        suggested.setId(4L);
+        when(stockService.suggestReceivingStorehouseForPart(eq(SKU), any())).thenReturn(Optional.of(suggested));
+
+        RequestComponentResponse response = service.receiveRequest(REQUEST_ID, null, 99L);
+
+        verify(stockService).add(SKU, 4L, 12);
+        assertThat(response.storehouseId()).isEqualTo(4L);
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.IN_STOCK);
+    }
+
+    /** A storehouse that was named is used as it is; nobody is asked for a suggestion. */
+    @Test
+    void doesNotSuggestAnythingWhenAStorehouseIsNamed() {
+        request(RequestStatus.DELIVERED, 12L);
+
+        service.receiveRequest(REQUEST_ID, STOREHOUSE_ID, 99L);
+
+        verify(stockService, never()).suggestReceivingStorehouseForPart(any(), any());
+    }
+
+    /** No storehouse named and none exists: a 409 saying so, nothing booked, the status stays. */
+    @Test
+    void refusesWith409WhenThereIsNoStorehouseToSuggest() {
+        RequestComponent request = request(RequestStatus.DELIVERED, 12L);
+        when(stockService.suggestReceivingStorehouseForPart(eq(SKU), any())).thenReturn(Optional.empty());
+
+        assertStatus(catchThrowable(() -> service.receiveRequest(REQUEST_ID, null, 99L)), HttpStatus.CONFLICT);
+
+        assertThat(request.getRequestStatus()).isEqualTo(RequestStatus.DELIVERED);
+        verify(stockService, never()).add(any(), any(), any());
+    }
+
+    /** A named storehouse that does not exist is not replaced by a suggestion - that would book somewhere unmeant. */
+    @Test
+    void doesNotReplaceAnUnknownNamedStorehouseByASuggestion() {
+        request(RequestStatus.DELIVERED, 12L);
+        when(storehouseRepository.existsById(99L)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.receiveRequest(REQUEST_ID, 99L, 99L))
+                .isInstanceOf(ResourceNotFoundException.class);
+
+        verify(stockService, never()).suggestReceivingStorehouseForPart(any(), any());
     }
 
     /** Nothing bookable, nothing booked - and the status stays where it is. */

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.product;
 
+import org.jspecify.annotations.Nullable;
 import java.util.UUID;
 
 /**
@@ -11,11 +12,11 @@ import java.util.UUID;
  */
 public record ProductComponentDto(
         Long id,
-        String manufacturer,
-        String name,
-        String articleNo,
-        String description,
-        Double weight,
+        @Nullable String manufacturer,
+        @Nullable String name,
+        @Nullable String articleNo,
+        @Nullable String description,
+        @Nullable Double weight,
         UUID sku,
         Integer qty
 ) {

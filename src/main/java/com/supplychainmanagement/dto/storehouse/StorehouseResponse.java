@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.storehouse;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.Storehouse;
 
 /**
@@ -17,9 +18,9 @@ import com.supplychainmanagement.entity.Storehouse;
 public record StorehouseResponse(
         Long id,
         String name,
-        String address,
-        String city,
-        String country
+        @Nullable String address,
+        @Nullable String city,
+        @Nullable String country
 ) {
 
     public static StorehouseResponse from(Storehouse storehouse) {

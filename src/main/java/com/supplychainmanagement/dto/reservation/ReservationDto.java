@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.reservation;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Reservation;
 import com.supplychainmanagement.entity.Storehouse;
@@ -26,12 +27,12 @@ import java.util.UUID;
 public record ReservationDto(
         Long id,
         Long orderId,
-        Long orderItemId,
+        @Nullable Long orderItemId,
         UUID sku,
         int quantity,
         Long storehouseId,
         ReservationStatus status,
-        LocalDateTime expiresAt
+        @Nullable LocalDateTime expiresAt
 ) {
 
     public static ReservationDto of(Reservation reservation, Long orderId) {
@@ -45,7 +46,7 @@ public record ReservationDto(
                 orderItem != null ? orderItem.getId() : null,
                 reservation.getSku(),
                 reservation.getQuantity(),
-                storehouse != null ? storehouse.getId() : null,
+                storehouse.getId(),
                 reservation.getStatus(),
                 reservation.getExpiresAt());
     }

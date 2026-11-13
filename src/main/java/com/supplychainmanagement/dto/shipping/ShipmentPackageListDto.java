@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
@@ -16,9 +17,9 @@ import java.util.Objects;
 
 public record ShipmentPackageListDto(
         Long id,
-        String packageNumber,
+        @Nullable String packageNumber,
         ShipmentPackageStatus status,
-        ShipmentPackageType type,
+        @Nullable ShipmentPackageType type,
         /*
          * When the package was made, and when it was completed (OPEN to PACKED) - null until then, and
          * null for a package completed before the column existed. The same pattern as the items in the
@@ -27,7 +28,7 @@ public record ShipmentPackageListDto(
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
         LocalDateTime createdAt,
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
-        LocalDateTime packedAt,
+        @Nullable LocalDateTime packedAt,
         BigDecimal weight,
         BigDecimal packageWeight,
         /*
@@ -35,17 +36,17 @@ public record ShipmentPackageListDto(
          * (length, width, height). Null where none were given - a new package fills them with 0 on
          * insert, so null is only an older row. volume is worked out from them.
          */
-        BigDecimal length,
-        BigDecimal width,
-        BigDecimal height,
-        BigDecimal volume,
-        LocalDate dueDate,
+        @Nullable BigDecimal length,
+        @Nullable BigDecimal width,
+        @Nullable BigDecimal height,
+        @Nullable BigDecimal volume,
+        @Nullable LocalDate dueDate,
         /*
          * The customer the package goes to, read off the order of its first item - a package holds the items of one
          * order only, so it has exactly one. Null for an empty package. Only the id: the customer is a LAZY
          * reference, and its id is served by the proxy without loading it.
          */
-        Long customerId,
+        @Nullable Long customerId,
         int packages,
         /*
          * DTOs, never the PackageItem entities: an entity serializes its shipmentPackage, whose items

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.fullfillment;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 
 public record AvailableOrderItemDto(
@@ -8,7 +9,7 @@ public record AvailableOrderItemDto(
         Integer orderQuantity,
         Integer availableQuantity,
         boolean available,
-        Long storehouseId,
+        @Nullable Long storehouseId,
         FulfillmentStatus fulfillmentStatus
 ) {
 }

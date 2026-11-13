@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.order;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
@@ -21,8 +22,8 @@ public record OrderShipmentResponse(
         ShipmentStatus status,
         @JsonInclude(JsonInclude.Include.NON_NULL) String trackingNumber,
         @JsonInclude(JsonInclude.Include.NON_NULL) String shippingAddress,
-        LocalDateTime shippedAt,
-        LocalDateTime deliveredAt,
+        @Nullable LocalDateTime shippedAt,
+        @Nullable LocalDateTime deliveredAt,
         @JsonInclude(JsonInclude.Include.NON_NULL) String distributorName,
         List<String> packageNumbers
 ) {

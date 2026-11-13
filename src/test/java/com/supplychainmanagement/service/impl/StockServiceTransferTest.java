@@ -35,7 +35,7 @@ class StockServiceTransferTest {
     private StockRepository stockRepository;
 
     @InjectMocks
-    private StockService service;
+    private StockServiceImpl service;
 
     private Stock stock(long storehouseId, int onHand) {
         Storehouse storehouse = new Storehouse();

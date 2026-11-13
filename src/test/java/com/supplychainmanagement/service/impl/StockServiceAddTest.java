@@ -47,7 +47,7 @@ class StockServiceAddTest {
     private StorehouseRepository storehouseRepository;
 
     @InjectMocks
-    private StockService service;
+    private StockServiceImpl service;
 
     private Stock existing(int onHand) {
         Stock stock = new Stock();

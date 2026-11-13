@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.order;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.model.enums.OrderStatus;
@@ -22,7 +23,7 @@ import java.util.Map;
  */
 public record OrderHistoryResponse(
         Long id,
-        OrderStatus previousStatus,
+        @Nullable OrderStatus previousStatus,
         OrderStatus newStatus,
         LocalDateTime changedAt,
         @JsonInclude(JsonInclude.Include.NON_NULL) Long changedById,

@@ -166,7 +166,8 @@ public interface ComponentService {
 
     /**
      * Books several delivered requests into stock in one transaction: for each, its quantity is added
-     * to the stock of its component's SKU in {@code storehouseId}, and every request ends
+     * to the stock of its component's SKU in {@code storehouseId} (optional: without one, each request goes where
+     * {@code StockService.suggestReceivingStorehouse} puts its part), and every request ends
      * {@code IN_STOCK}. All or nothing - an unknown request or storehouse is a 404, a request that is
      * not {@code DELIVERED} a 409, and either leaves everything as it was.
      */

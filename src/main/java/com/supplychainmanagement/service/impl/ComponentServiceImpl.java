@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
@@ -33,13 +34,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.EnumSet;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -270,6 +265,8 @@ public class ComponentServiceImpl implements ComponentService {
      * {@code Component.qty}: that is the bill-of-materials quantity - how many go into one product -
      * and adding a delivery to it would silently rewrite the recipe.
      * <p>
+     * The storehouse is optional: without one, {@code StockService.suggestReceivingStorehouseForPart} picks it.
+     * <p>
      * One transaction: if booking the stock fails, the status does not move either.
      */
     @Override
@@ -287,14 +284,36 @@ public class ComponentServiceImpl implements ComponentService {
                     + " can be booked in");
         }
 
-        // Checked here rather than left to StockService, whose IllegalArgumentException would end as
-        // a 500 for what is simply a wrong path variable.
+        // Nobody said where the goods arrived: the storehouse that already holds most of this part, otherwise the
+        // first one. A storehouse that *was* named but does not exist stays a 404 - guessing another one would
+        // book the goods somewhere the caller did not mean.
+        Long targetStorehouseId = storehouseId == null ? suggestStorehouse(request) : requireStorehouse(storehouseId);
+
+        bookIn(request, targetStorehouseId, RequestStatus.IN_STOCK, userId);
+        return RequestComponentResponse.from(request, targetStorehouseId);
+    }
+
+    /** The named storehouse, or a 404: guessing another one would book the goods somewhere the caller did not mean. */
+    private Long requireStorehouse(Long storehouseId) {
         if (!storehouseRepository.existsById(storehouseId)) {
             throw new ResourceNotFoundException("Storehouse", "id", storehouseId);
         }
+        return storehouseId;
+    }
 
-        bookIn(request, storehouseId, RequestStatus.IN_STOCK, userId);
-        return RequestComponentResponse.from(request);
+    /**
+     * Where a request is booked when nobody named a storehouse: where the rest of the part's product is kept
+     * ({@code StockService.suggestReceivingStorehouseForPart}), 409 when no storehouse exists at all.
+     */
+    private Long suggestStorehouse(RequestComponent request) {
+        Component part = request.getComponent();
+        List<UUID> recipe = part.getProduct() == null || part.getProduct().getComponents() == null
+                ? List.of()
+                : part.getProduct().getComponents().stream().map(Component::getSku).toList();
+        return stockService.suggestReceivingStorehouseForPart(part.getSku(), recipe)
+                .map(com.supplychainmanagement.entity.Storehouse::getId)
+                .orElseThrow(() -> new APIException(HttpStatus.CONFLICT,
+                        "No storehouse exists to book request " + request.getId() + " into"));
     }
 
     @Override
@@ -309,13 +328,16 @@ public class ComponentServiceImpl implements ComponentService {
         // Ascending ids and each once: the rows are locked in the same order by every caller, so two
         // deliveries booked at the same time cannot wait on each other's rows, and a repeated id is
         // the same request, not two receipts.
-        List<Long> ids = new java.util.TreeSet<>(requestIds).stream().toList();
+        List<Long> ids = new TreeSet<>(requestIds).stream().toList();
 
-        com.supplychainmanagement.entity.Storehouse storehouse = storehouseRepository.findById(storehouseId)
-                .orElseThrow(() -> new ResourceNotFoundException("Storehouse", "id", storehouseId));
+        // A named storehouse is checked once, before any row is locked; without one, every request is booked where
+        // the rest of its part's product is kept (see suggestStorehouse).
+        if (storehouseId != null) {
+            requireStorehouse(storehouseId);
+        }
 
-        List<RequestComponent> requests = new java.util.ArrayList<>();
-        List<Long> missing = new java.util.ArrayList<>();
+        List<RequestComponent> requests = new ArrayList<>();
+        List<Long> missing = new ArrayList<>();
         for (Long id : ids) {
             requestComponentRepository.findForUpdateById(id).ifPresentOrElse(requests::add, () -> missing.add(id));
         }
@@ -334,14 +356,21 @@ public class ComponentServiceImpl implements ComponentService {
                     + " requests can be booked in, not: " + String.join(", ", notDelivered));
         }
 
-        requests.forEach(request -> bookIn(request, storehouseId, RequestStatus.IN_STOCK, userId));
+        // Resolved one request at a time, in the order they are booked: a booking raises the stock of its SKU in that
+        // storehouse, so a second request for the same part is suggested the same storehouse.
+        List<String> booked = new java.util.ArrayList<>();
+        List<RequestComponentResponse> answers = new java.util.ArrayList<>();
+        for (RequestComponent request : requests) {
+            Long target = storehouseId != null ? storehouseId : suggestStorehouse(request);
+            bookIn(request, target, RequestStatus.IN_STOCK, userId);
+            booked.add(request.getQty() + " x " + request.getComponent().getName()
+                    + " [" + request.getComponent().getSku() + "] (request " + request.getId()
+                    + ") -> storehouse " + target);
+            answers.add(RequestComponentResponse.from(request, target));
+        }
 
-        log.info("Booked {} request(s) into storehouse {} ({}): {}", requests.size(), storehouseId, storehouse.getName(),
-                requests.stream()
-                        .map(request -> request.getQty() + " x " + request.getComponent().getName()
-                                + " [" + request.getComponent().getSku() + "] (request " + request.getId() + ")")
-                        .collect(Collectors.joining("; ")));
-        return requests.stream().map(RequestComponentResponse::from).toList();
+        log.info("Booked {} request(s): {}", requests.size(), String.join("; ", booked));
+        return answers;
     }
 
     /**

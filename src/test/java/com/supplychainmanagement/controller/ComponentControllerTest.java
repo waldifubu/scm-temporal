@@ -70,7 +70,7 @@ class ComponentControllerTest {
 
         when(componentService.requestComponents(any(), any())).thenReturn(List.of(
                 new RequestComponentResponse(1L, 5L, SCREW, "screw", 12L, "Notwendig",
-                        RequestStatus.OPEN, null, 12L, "Ada Lovelace", 77L, "Rita Rack", null)));
+                        RequestStatus.OPEN, null, 12L, "Ada Lovelace", 77L, "Rita Rack", null, null, null)));
     }
 
     private RequestComponentsRequest bound() {
@@ -209,6 +209,17 @@ class ComponentControllerTest {
                         "Request 5 is IN_TRANSIT, only DELIVERED can be booked in"));
     }
 
+    /** The storehouse is optional in the path: without it the service gets {@code null} and chooses itself. */
+    @Test
+    void acceptsTheReceiptWithoutAStorehouse() throws Exception {
+        when(componentService.receiveRequest(any(), isNull(), any())).thenReturn(answered(RequestStatus.IN_STOCK));
+
+        mockMvc.perform(post("/api/1.0/components/warehouse/5/in-stock"))
+                .andExpect(status().isOk());
+
+        verify(componentService).receiveRequest(eq(5L), isNull(), any());
+    }
+
     /** A wrong storehouse in the path is a 404, not the 500 StockService would have produced. */
     @Test
     void answersAnUnknownStorehouseWith404() throws Exception {
@@ -230,7 +241,7 @@ class ComponentControllerTest {
 
     private static RequestComponentResponse answered(RequestStatus status) {
         return new RequestComponentResponse(5L, 11L, SCREW, "Blech", 12L, null, status, null, 315L, "Ada Lovelace",
-                77L, "Rita Rack", null);
+                77L, "Rita Rack", null, null, null);
     }
 
     /** Nothing to order is not a request. */

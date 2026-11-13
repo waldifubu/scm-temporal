@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.PackageItem;
@@ -21,7 +22,7 @@ public record PackageItemResponse(
         Integer totalQuantity,
         List<Long> siblings,
         UUID runNo,
-        Long shipmentPackageId,
+        @Nullable Long shipmentPackageId,
         FulfillmentStatus fulfillmentStatus
 ) {
     /**

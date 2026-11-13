@@ -5,25 +5,36 @@ import com.supplychainmanagement.entity.Role;
 import com.supplychainmanagement.entity.users.Distributor;
 import com.supplychainmanagement.entity.users.User;
 import org.mapstruct.Mapper;
-import org.mapstruct.Mapping;
-import org.mapstruct.Named;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
 
+/** Written by hand, see {@link ComponentMapper}. */
 @Mapper(componentModel = "spring")
 public interface UserMapper {
 
-    @Mapping(target = "roles", source = "roles", qualifiedByName = "rolesToNames")
-    @Mapping(target = "ruleId", source = "user", qualifiedByName = "ruleIdOf")
-    UserDto mapToDto(User user);
+    default UserDto mapToDto(User user) {
+        if (user == null) {
+            return null;
+        }
+        return new UserDto(
+                user.getId(),
+                user.getFirstName(),
+                user.getLastName(),
+                user.getUsername(),
+                user.getEmail(),
+                user.getColor(),
+                // a missing flag counts as not active, as everywhere else
+                Boolean.TRUE.equals(user.getIsActive()),
+                rolesToNames(user.getRoles()),
+                ruleIdOf(user));
+    }
 
     /**
      * The rule that named a carrier in a {@code queryDistributors} answer. It lives on {@code Distributor} only, so a
-     * mapping by property name finds nothing on {@code User} and leaves it {@code null} - this reads it off the carrier.
+     * mapping by property name finds nothing on {@code User} - this reads it off the carrier.
      * {@code null} for every other user, and for a carrier that was not looked up through a rule.
      */
-    @Named("ruleIdOf")
     default Long ruleIdOf(User user) {
         return user instanceof Distributor distributor ? distributor.getRuleId() : null;
     }
@@ -31,9 +42,8 @@ public interface UserMapper {
     /**
      * Expose role names only, not the Role entities: through {@code Role.users} those drag along
      * the entire user list (kept out of the JSON by @JsonIgnore, but still a lazy collection that
-     * mapping would touch).
+     * mapping would touch). Never null: no roles is an empty set.
      */
-    @Named("rolesToNames")
     default Set<String> rolesToNames(Set<Role> roles) {
         if (roles == null) {
             return Set.of();

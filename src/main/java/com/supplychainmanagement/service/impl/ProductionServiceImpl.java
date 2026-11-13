@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.fullfillment.ProductionResultDto;
 import com.supplychainmanagement.entity.*;
@@ -106,7 +107,11 @@ public class ProductionServiceImpl implements ProductionService {
             stockRepository.save(componentStock);
         }
 
-        stockService.add(product.getSku(), selectedStorehouseId, 1);
+        // The finished unit goes where this article is kept (or the first storehouse), not necessarily where its parts were.
+        Long bookingStorehouseId = stockService.suggestReceivingStorehouse(product.getSku())
+                .map(com.supplychainmanagement.entity.Storehouse::getId)
+                .orElse(selectedStorehouseId);
+        stockService.add(product.getSku(), bookingStorehouseId, 1);
 
         return new ProductionResultDto(
                 product.getName(),
@@ -144,6 +149,15 @@ public class ProductionServiceImpl implements ProductionService {
         return requiredBySku;
     }
 
+    /**
+     * Finds a storehouse that has enough available stock for all required components.
+     * <p>
+     * The caller has already checked that the storehouse has enough of at least one component, so
+     * this is a second pass to check all of them. It locks each row in turn while it reads the
+     * current available quantity, so if another thread is producing against the same storehouse and
+     * components, one of them will fail with "Component stock changed while producing" and have to
+     * retry.
+     */
     private Long findEligibleStorehouse(Map<UUID, Integer> requiredComponents) {
         for (Map.Entry<UUID, Integer> required : requiredComponents.entrySet()) {
             List<Stock> oldestFirstStocks = stockRepository.findAvailableBySkuOrderByUpdatedAtAsc(required.getKey());
@@ -157,6 +171,15 @@ public class ProductionServiceImpl implements ProductionService {
         return null;
     }
 
+    /**
+     * Checks whether the given storehouse has enough available stock for all required components.
+     * <p>
+     * The caller has already checked that the storehouse has enough of at least one component, so
+     * this is a second pass to check all of them. It locks each row in turn while it reads the
+     * current available quantity, so if another thread is producing against the same storehouse and
+     * components, one of them will fail with "Component stock changed while producing" and have to
+     * retry.
+     */
     private boolean canProduceInStorehouse(Long storehouseId, Map<UUID, Integer> requiredComponents) {
         for (Map.Entry<UUID, Integer> required : requiredComponents.entrySet()) {
             Stock stock = stockRepository.findByStorehouseIdAndSku(storehouseId, required.getKey()).orElse(null);

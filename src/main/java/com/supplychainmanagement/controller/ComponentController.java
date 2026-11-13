@@ -168,10 +168,10 @@ public class ComponentController {
      * WAREHOUSE and ADMIN: it is a physical receipt at the dock, which the supplier cannot report and
      * which belongs to the role that owns the stock. Unknown storehouse 404, any other status 409.
      */
-    @PostMapping(path = "/warehouse/{requestId}/in-stock/{storehouseId}", version = "1.0")
+    @PostMapping(path = {"/warehouse/{requestId}/in-stock", "/warehouse/{requestId}/in-stock/{storehouseId}"}, version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
     public RequestComponentResponse receiveRequest(@PathVariable Long requestId,
-                                                   @PathVariable Long storehouseId,
+                                                   @PathVariable(required = false) Long storehouseId,
                                                    @AuthenticationPrincipal User authUser) {
         return componentService.receiveRequest(requestId, storehouseId,
                 userService.getAuthenticatedUserId(authUser));

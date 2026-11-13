@@ -100,6 +100,21 @@ class AuthStatusCodesTest {
         assertThat(login(user.getUsername(), "secret").getStatus()).isEqualTo(200);
     }
 
+    /** A body without the password is a malformed request (400, naming the field), not a failed login. */
+    @Test
+    void answersAMissingPasswordWith400() throws Exception {
+        User user = userWithPassword();
+
+        MockHttpServletResponse response = mockMvc.perform(MockMvcRequestBuilders.post("/api/1.0/auth/login")
+                        .header("X-API-KEY", "auth-status-" + CALLS.incrementAndGet())
+                        .contentType(APPLICATION_JSON)
+                        .content("{\"usernameOrEmail\": \"" + user.getUsername() + "\"}"))
+                .andReturn().getResponse();
+
+        assertThat(response.getStatus()).isEqualTo(400);
+        assertThat(response.getContentAsString()).contains("password");
+    }
+
     /** A wrong password is the credentials not being accepted: 401, not a malformed request. */
     @Test
     void answersAWrongPasswordWith401() throws Exception {

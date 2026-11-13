@@ -71,6 +71,13 @@ public class User implements Serializable {
             inverseJoinColumns = {@JoinColumn(name = "role_id", referencedColumnName = "id")})
     private Set<Role> roles;
 
+    @PrePersist
+    private void onCreate() {
+        if (this.isActive == null) {
+            this.isActive = true;
+        }
+    }
+
     @PreRemove
     private void clearRolesBeforeDelete() {
         if (roles != null) {

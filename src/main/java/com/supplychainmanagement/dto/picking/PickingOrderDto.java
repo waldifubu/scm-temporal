@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.picking;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.entity.Product;
@@ -31,7 +32,7 @@ public record PickingOrderDto(
         Long storehouseId,
         String storehouseName,
         FulfillmentStatus fulfillmentStatus,
-        LocalDateTime expiresAt
+        @Nullable LocalDateTime expiresAt
 ) {
 
     /**

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.Shipment;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
@@ -17,12 +18,12 @@ public record ShipmentListDto(
         Long id,
         Long customerId,
         String customerName,
-        Long distributorId,
-        String distributorName,
+        @Nullable Long distributorId,
+        @Nullable String distributorName,
         ShipmentStatus status,
-        String shippingAddress,
-        String shippingMethod,
-        LocalDate requestedDeliveryDate,
+        @Nullable String shippingAddress,
+        @Nullable String shippingMethod,
+        @Nullable LocalDate requestedDeliveryDate,
         LocalDateTime createdAt,
         int packageCount,
         List<Long> shipmentPackageIds
@@ -32,7 +33,7 @@ public record ShipmentListDto(
         List<Long> packageIds = shipment.getPackages().stream().map(ShipmentPackage::getId).sorted().toList();
         return new ShipmentListDto(
                 shipment.getId(),
-                shipment.getCustomer() != null ? shipment.getCustomer().getId() : null,
+                shipment.getCustomer().getId(),
                 ShipmentResponse.nameOf(shipment.getCustomer()),
                 shipment.getDistributor() != null ? shipment.getDistributor().getId() : null,
                 ShipmentResponse.nameOf(shipment.getDistributor()),

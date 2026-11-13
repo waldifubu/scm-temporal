@@ -61,7 +61,6 @@ public class AuthApiController {
     }
 
     @PostMapping(value = "/login", version = "1.0")
-    @Deprecated
     public ResponseEntity<?> login(@Valid @RequestBody LoginRequest request) {
         AuthResponse response = authService.login(request);
 
@@ -85,6 +84,7 @@ public class AuthApiController {
                 .body(response);
     }
 
+    @Deprecated
     @PostMapping(value = "/login", version = "2.0")
     public ResponseEntity<?> login20(@RequestBody LoginRequest request) {
         try {

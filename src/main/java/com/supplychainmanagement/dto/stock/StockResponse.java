@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.stock;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.entity.Stock;
 
 import java.time.LocalDateTime;
@@ -23,7 +24,7 @@ public record StockResponse(
         int reserved,
         int available,
         Long storehouseId,
-        String storehouseName,
+        @Nullable String storehouseName,
         LocalDateTime updatedAt
 ) {
 
@@ -37,8 +38,8 @@ public record StockResponse(
                 stock.getOnHand(),
                 stock.getReserved(),
                 stock.getAvailable(),
-                storehouse != null ? storehouse.getId() : null,
-                storehouse != null ? storehouse.getName() : null,
+                storehouse.getId(),
+                storehouse.getName(),
                 stock.getUpdatedAt()
         );
     }

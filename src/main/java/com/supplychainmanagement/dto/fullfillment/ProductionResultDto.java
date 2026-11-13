@@ -1,12 +1,13 @@
 package com.supplychainmanagement.dto.fullfillment;
 
+import org.jspecify.annotations.Nullable;
 import java.util.UUID;
 
 public record ProductionResultDto(
         String productName,
         UUID sku,
-        Long storehouseId,
+        @Nullable Long storehouseId,
         boolean produced,
-        String message
+        @Nullable String message
 ) {
 }

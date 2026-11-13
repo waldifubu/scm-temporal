@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.component;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.math.BigDecimal;
@@ -13,16 +14,16 @@ import java.time.LocalDateTime;
  */
 public record ComponentDetailDto(
         Long id,
-        String manufacturer,
-        String name,
-        String description,
+        @Nullable String manufacturer,
+        @Nullable String name,
+        @Nullable String description,
         String sku,
-        String articleNo,
-        String externalId,
-        BigDecimal weight,
+        @Nullable String articleNo,
+        @Nullable String externalId,
+        @Nullable BigDecimal weight,
         Integer qty,
         @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime createdAt,
-        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") LocalDateTime updatedAt,
+        @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss") @Nullable LocalDateTime updatedAt,
         ProductRefDto product
 ) {
 }

@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.user;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 import java.util.Set;
@@ -17,7 +18,7 @@ public record UserDto(
         String lastName,
         String username,
         String email,
-        String color,
+        @Nullable String color,
         Boolean isActive,
         Set<String> roles,
         @JsonInclude(JsonInclude.Include.NON_NULL)

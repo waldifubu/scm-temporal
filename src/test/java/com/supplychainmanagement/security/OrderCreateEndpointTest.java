@@ -72,4 +72,36 @@ class OrderCreateEndpointTest {
         assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(201);
         assertThat(response.getContentAsString()).contains("orderNo");
     }
+    /** What the entity used to take and now must not: a client cannot choose the number, the status or the total. */
+    @Test
+    void ignoresWhatOnlyTheServerDecides() throws Exception {
+        User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
+        Product product = testData.product();
+        String json = "{\"orderNo\":12345,\"status\":\"COMPLETED\",\"total\":1,\"id\":99999999,"
+                + "\"orderItems\":[{\"quantity\":2,\"product\":{\"articleNo\":" + product.getArticleNo() + "}}]}";
+
+        MockHttpServletResponse response = post("/orders", customer, json);
+
+        assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(201);
+        assertThat(response.getContentAsString()).doesNotContain("12345").contains("CREATED");
+    }
+
+    @Test
+    void aLineWithoutAQuantityIsA400NamingTheField() throws Exception {
+        User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
+        Product product = testData.product();
+        String json = "{\"orderItems\":[{\"product\":{\"articleNo\":" + product.getArticleNo() + "}}]}";
+
+        MockHttpServletResponse response = post("/orders", customer, json);
+
+        assertThat(response.getStatus()).isEqualTo(400);
+        assertThat(response.getContentAsString()).contains("quantity");
+    }
+
+    @Test
+    void aLineWithoutAProductIsA400() throws Exception {
+        User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
+
+        assertThat(post("/orders", customer, "{\"orderItems\":[{\"quantity\":1}]}").getStatus()).isEqualTo(400);
+    }
 }

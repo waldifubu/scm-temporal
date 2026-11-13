@@ -203,6 +203,7 @@ correct it (each rule has a unit test and a mutation that turns it red):
   the operation) - `POST /auth/login` in 1.0 and 2.0 had merged into one operation made of mixed halves;
   and `@PreAuthorize` is read into `x-roles` and the description, which is how a client builds its menu.
   "Any logged-in user" is the *absence* of `x-roles`, not an empty list.
+<br>**`required` and `null` are stated** (`RecordSchemaNullability`, converter and customizer in one; added 2026-11-12), because springdoc lists every record component as optional and never as nullable - a generator then writes `field?: T` for everything. *Answer* (a schema no request body reaches): every component is always written, so `required`, unless `@JsonInclude(NON_NULL|NON_EMPTY|NON_ABSENT)` leaves it out while empty (then neither required nor null); its value is `["T","null"]` unless it is a primitive or carries `@NotNull`/`@NonNull`/`@NotBlank`/`@NotEmpty`. That default is the honest one - a boxed `Long id` can be null as far as the type says - so most DTO fields read as nullable until somebody annotates them; annotating is the way to a tighter description. *Request* (a schema a request body refers to, and everything below it): required only what validation demands, nothing nullable but by `@Nullable`. A component named `id` is never null (the identity of what the record describes). Only records are read. `POST /orders` binds `OrderRequestDto` (`dueDate`, `customer.id`, `orderItems[{quantity, product.articleNo}]` - the wire the order form always sent), no longer the `Order` entity, so a client can no longer set `orderNo`, `status`, `total` or an id; `@Valid` makes a line without `quantity` or `product.articleNo` a 400 naming the field. `RecordSchemaNullabilityTest` holds the rules, `OpenApiDocumentTest` the result. `@NullMarked` (JSpecify) on a package, class or record flips the *answer* default: a value is then non-null unless `@Nullable` (type-use, `@Nullable Long x`); a request is unaffected. **The `@Nullable`s follow the entity, not the defensive code around it**: a component is nullable only if the column/association behind it is (or a left join / documented "not yet" state makes it so); a `x != null ? ... : null` in a mapper is not evidence (`Reservation.storehouse`, `Shipment.customer`, `OrderItem.product`, `Order.customer`, `Stock.storehouse` are all NOT NULL). Applied to every `dto` package with answers (all but `auth`, 2026-11-12), the genuinely nullable components marked. MapStruct treats `@NullMarked` as `@NonNull` and refuses to map an unannotated entity property into it ("potentially nullable source property"), so the **answer direction of `ComponentMapper`, `RequestComponentMapper`, `ProductMapper` and `UserMapper` is written by hand** as `default` methods (an absent entity gives an absent DTO, `UserDto.roles` is never null, a missing `isActive` counts as false); MapStruct still generates the `mapToEntity` directions. Held by `RecordSchemaNullabilityTest.underNullMarked...`. **The description goes to the frontend as a file**: `OpenApiExportTest` writes `/v3/api-docs` (indented) to `-Dopenapi.export=<file>` and does nothing without it; the frontend checks it in as `openapi/api.json` and generates `schema.d.ts` with `openapi-typescript` (`pnpm api:export`, `pnpm api:types`).
 <br>The description is of **one** version, `spring.mvc.apiversion.default`. Authentication is the session
 cookie (`cookieAuth`, name from `app.cookie.name`) or the same token as a bearer header.
 <br>**It is also an audit.** `OpenApiDocumentTest.everyOperationBehindALoginNamesItsRolesExceptTheKnownOnes`
@@ -1044,7 +1045,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   `assignedBy` recorded. No body: there is no column for a reason, and `comment` belongs to whoever
   ordered the part - overwriting it would throw away why it was needed. Note the ordering side cannot
   withdraw a request; only the supplier and ADMIN can end one.
-- **The goods receipt** (`POST /components/warehouse/{requestId}/in-stock/{storehouseId}`, ADMIN and
+- **The goods receipt** (`POST /components/warehouse/{requestId}/in-stock[/{storehouseId}]`, ADMIN and
   WAREHOUSE, `ComponentServiceImpl.receiveRequest`): `DELIVERED → IN_STOCK`, and the requested
   quantity is added to `Stock.onHand` for that component's SKU in the receiving storehouse through
   `StockService.add`. A physical receipt at the dock, which the supplier cannot report and which
@@ -1061,7 +1062,19 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   <br>**The quantity goes to `Stock`, never to `Component.qty`** - that one is the bill of materials,
   how many go into *one* product, and adding a delivery to it would silently rewrite the recipe of
   every product using the part. `ComponentServiceReceiveTest` holds both halves.
-  <br>The storehouse comes from the path because the request has no such field: booked in is where
+  <br>**The storehouse is optional** (since 2026-11-13): without one `StockService.suggestReceivingStorehouseForPart(sku, recipeSkus)`
+  chooses. The parts of a product have to lie in **one** storehouse for `produce()` to build it, so a delivered component goes
+  to the storehouse holding the most *different* parts of its product's recipe (stock with `onHand > 0`; a tie: more units,
+  then the lower id). Nothing of the recipe on stock anywhere falls back to `suggestReceivingStorehouse(sku)`: the storehouse
+  holding most of that SKU, otherwise the lowest id; no storehouse at all is a 409. (Choosing per SKU alone would drift the
+  parts of one product apart over time.) A storehouse that *is* named but unknown stays a 404 and is never replaced by a suggestion
+  (`ComponentServiceImpl.receivingStorehouse`). `POST /stock/book` takes the same optional `storehouseId`; without it **each
+  request is resolved on its own** in booking order, so two requests for one part end in the same storehouse (the first
+  booking raises its stock). `produce()` books the finished unit through the same method (the components are still
+  consumed where they lie; `ProductionResultDto.storehouseId` stays that storehouse). `StockService` is an interface now,
+  `StockServiceImpl` its one implementation. Held by `StockServiceSuggestTest` (both methods), `ComponentServiceReceiveTest`,
+  `ComponentRequestWorkflowTest`, `ProductionServiceProduceTest`.
+  <br>The storehouse used to come only from the path because the request has no such field: booked in is where
   the goods actually arrived. All or nothing per row - a request of 12 arriving as 8 + 4 cannot be
   expressed by one status, which would need a received quantity on the row.
   <br>**This is the only place component stock grows** other than `StockController` by hand. Without

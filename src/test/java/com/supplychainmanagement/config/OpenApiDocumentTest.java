@@ -60,6 +60,33 @@ class OpenApiDocumentTest {
         assertThat((String) JsonPath.read(document, "$.info.version")).isEqualTo("1.0");
     }
 
+    /**
+     * A client may rely on the keys of an answer and is told which values can be null: {@code UserDto.ruleId}
+     * is left out while empty, {@code firstName} is always there and never null ({@code @NullMarked}), {@code color}
+     * is always there and can be null ({@code @Nullable}).
+     */
+    @Test
+    void saysWhichKeysAreRequiredAndWhichValuesCanBeNull() throws Exception {
+        List<String> required = JsonPath.read(document(), "$.components.schemas.UserDto.required");
+        assertThat(required).contains("id", "username", "firstName").doesNotContain("ruleId");
+
+        Object firstName = JsonPath.read(document(), "$.components.schemas.UserDto.properties.firstName.type");
+        assertThat(firstName).isEqualTo("string");
+
+        List<String> color = JsonPath.read(document(), "$.components.schemas.UserDto.properties.color.type");
+        assertThat(color).contains("string", "null");
+    }
+
+    /** The order is placed with a request of its own, not with the entity and everything hanging off it. */
+    @Test
+    void placesAnOrderWithARequestDtoAndNotTheEntity() throws Exception {
+        String ref = JsonPath.read(document(), "$.paths['/api/1.0/orders'].post.requestBody.content['application/json'].schema['$ref']");
+        assertThat(ref).endsWith("/OrderRequestDto");
+
+        Map<String, Object> schemas = JsonPath.read(document(), "$.components.schemas");
+        assertThat(schemas).doesNotContainKeys("Order", "OrderItem", "Product", "Component", "ProductCategory");
+    }
+
     /** Every path is versioned and literal: no placeholder nobody declares, no unversioned twin. */
     @Test
     void describesOneVersionWithLiteralPaths() throws Exception {

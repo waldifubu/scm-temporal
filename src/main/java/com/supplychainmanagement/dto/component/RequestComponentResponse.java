@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.common.DisplayNames;
 import com.supplychainmanagement.entity.RequestComponent;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RequestStatus;
+import org.jspecify.annotations.Nullable;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -41,16 +42,28 @@ public record RequestComponentResponse(
         String assignedByName,
         /** When that last change happened - stamped by Hibernate, not written by hand. */
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        LocalDateTime updated
+        LocalDateTime updated,
+        /** Where the goods were booked in - only in the answer of the goods receipt, left out everywhere else. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        Long storehouseId,
+        /** The product the component is a part of, so a list can tell two parts of the same name apart. */
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        String productName
 ) {
 
     /**
-     * Mapped inside the transaction, like every other answer - the references are LAZY.
+     * Mapped inside the transaction, like every other answer - the references are LAZY. No storehouse: the request
+     * has not been booked in (or the caller does not say where) - the key is left out.
      * <p>
      * {@code assignedBy} is read for its name, which initializes that proxy: a finder feeding this
      * has to fetch the user along, or it costs a query per row.
      */
     public static RequestComponentResponse from(RequestComponent request) {
+        return from(request, null);
+    }
+
+    /** As {@link #from(RequestComponent)}, with the storehouse the goods were booked into (the goods receipt). */
+    public static RequestComponentResponse from(RequestComponent request, @Nullable Long storehouseId) {
         var component = request.getComponent();
         var supplier = request.getSupplier();
         var assignedBy = request.getAssignedBy();
@@ -68,7 +81,9 @@ public record RequestComponentResponse(
                 supplier != null ? nameOf(supplier) : null,
                 assignedBy != null ? assignedBy.getId() : null,
                 assignedBy != null ? nameOf(assignedBy) : null,
-                request.getUpdated()
+                request.getUpdated(),
+                storehouseId,
+                component != null && component.getProduct() != null ? component.getProduct().getName() : null
         );
     }
 

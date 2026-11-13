@@ -184,7 +184,7 @@ class InboundControllerTest {
     /** One request as the API answers it, in the given status. */
     private static RequestComponentResponse answered(RequestStatus status) {
         return new RequestComponentResponse(5L, 11L, SCREW, "Blech", 12L, null, status, null, 315L, "Ada Lovelace",
-                77L, "Rita Rack", null);
+                77L, "Rita Rack", null, null, null);
     }
 
 }

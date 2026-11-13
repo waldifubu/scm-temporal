@@ -13,7 +13,10 @@ public final class AuthDtos {
     private AuthDtos() {}
 
     /** Body of {@code POST /auth/login}; {@code usernameOrEmail} is matched against both columns. */
-    public record LoginRequest(String usernameOrEmail, String password) {}
+    public record LoginRequest(
+            @NotEmpty(message = "Username or email is required") String usernameOrEmail,
+            @NotEmpty(message = "Password is required") String password
+    ) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record RegisterRequest(

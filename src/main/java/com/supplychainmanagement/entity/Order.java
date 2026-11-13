@@ -29,7 +29,8 @@ public class Order {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = true, unique = true)
+    /** Handed out by {@code OrderServiceImpl.nextOrderNo} before the insert; every order has one. */
+    @Column(unique = true, nullable = false)
     private Long orderNo;
 
     /**
@@ -50,7 +51,7 @@ public class Order {
     private LocalDate dueDate;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "order_status")
+    @Column(name = "order_status", nullable = false)
     private OrderStatus status;
 
     @ManyToOne
@@ -64,6 +65,8 @@ public class Order {
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss")
     private LocalDateTime deliveryDate;
 
+    /** Worked out from the lines; 0 for an order without any (see {@link #onCreate}). */
+    @Column(nullable = false)
     private BigDecimal total;
 
     @Transient
@@ -73,6 +76,9 @@ public class Order {
     void onCreate() {
         if (status == null) {
             status = OrderStatus.CREATED;
+        }
+        if (total == null) {
+            total = BigDecimal.ZERO;
         }
     }
 }

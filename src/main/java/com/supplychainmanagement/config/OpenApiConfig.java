@@ -76,6 +76,12 @@ public class OpenApiConfig {
         return new ApiDocumentCustomizer(version);
     }
 
+    /** Both halves of one object: it is registered as a model converter and as a document customizer. */
+    @Bean
+    public RecordSchemaNullability recordSchemaNullability() {
+        return new RecordSchemaNullability();
+    }
+
     @Bean
     public OperationCustomizer apiOperationCustomizer(@Value("${spring.mvc.apiversion.default}") String version) {
         return new ApiOperationCustomizer(version);

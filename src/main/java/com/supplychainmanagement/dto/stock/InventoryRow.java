@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.stock;
 
+import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonFormat;
 
 import java.time.LocalDateTime;
@@ -17,7 +18,7 @@ import java.util.UUID;
  */
 public record InventoryRow(
         UUID sku,
-        String name,
+        @Nullable String name,
         long onHand,
         long reserved,
         long available,

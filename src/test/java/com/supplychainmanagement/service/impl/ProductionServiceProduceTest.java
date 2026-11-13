@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.Stock;
@@ -99,6 +100,30 @@ class ProductionServiceProduceTest {
         producing(productOf(component(SCREW, 4)));
 
         assertThat(screws.getOnHand()).isEqualTo(6);
+        verify(stockService).add(any(UUID.class), eq(STOREHOUSE_ID), eq(1));
+    }
+
+    /** The finished unit is booked where the article is kept, which need not be where its parts were. */
+    @Test
+    void booksTheFinishedUnitIntoTheSuggestedStorehouse() {
+        stocked(SCREW, 10);
+        Storehouse elsewhere = new Storehouse();
+        elsewhere.setId(3L);
+        when(stockService.suggestReceivingStorehouse(any(UUID.class))).thenReturn(Optional.of(elsewhere));
+
+        producing(productOf(component(SCREW, 4)));
+
+        verify(stockService).add(any(UUID.class), eq(3L), eq(1));
+    }
+
+    /** No suggestion (no storehouse known): fall back to the one the parts came from. */
+    @Test
+    void fallsBackToTheComponentStorehouseWithoutASuggestion() {
+        stocked(SCREW, 10);
+        when(stockService.suggestReceivingStorehouse(any(UUID.class))).thenReturn(Optional.empty());
+
+        producing(productOf(component(SCREW, 4)));
+
         verify(stockService).add(any(UUID.class), eq(STOREHOUSE_ID), eq(1));
     }
 

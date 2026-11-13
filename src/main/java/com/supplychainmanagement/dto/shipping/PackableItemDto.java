@@ -1,5 +1,6 @@
 package com.supplychainmanagement.dto.shipping;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
 
 import java.time.LocalDateTime;
@@ -22,7 +23,7 @@ public record PackableItemDto(
         /** The id {@code PackItem.orderItemId} takes. */
         Long orderItemId,
         /** The consumed reservation behind the pick; null for a row that predates the link. */
-        Long reservationId,
+        @Nullable Long reservationId,
         Long orderNo,
         Long articleNo,
         String productName,
@@ -35,10 +36,10 @@ public record PackableItemDto(
         /** {@code PICKED} (nothing packed yet) or {@code PACKING} (some of it). */
         FulfillmentStatus fulfillmentStatus,
         /** The storehouse the goods were picked from; null with the reservation. */
-        Long storehouseId,
-        String storehouseName,
+        @Nullable Long storehouseId,
+        @Nullable String storehouseName,
         /** When the pick consumed the reservation; null for rows consumed before the column existed. */
-        LocalDateTime pickedAt
+        @Nullable LocalDateTime pickedAt
 ) {
 
     /**

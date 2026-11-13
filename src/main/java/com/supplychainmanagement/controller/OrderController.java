@@ -3,6 +3,9 @@ package com.supplychainmanagement.controller;
 import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.order.OrderDetailsDto;
 import com.supplychainmanagement.dto.order.OrderItemDto;
+import com.supplychainmanagement.dto.mapper.OrderRequestMapper;
+import com.supplychainmanagement.dto.order.OrderRequestDto;
+import jakarta.validation.Valid;
 import com.supplychainmanagement.dto.order.OrderSummaryDto;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
@@ -40,6 +43,7 @@ public class OrderController {
     private final OrderShipmentService orderShipmentService;
     private final UserService userService;
     private final ApplicationEventPublisher eventPublisher;
+    private final OrderRequestMapper orderRequestMapper;
 
     /**
      * What {@code sort} may name on the order lists: the order's own columns, under the entity's names
@@ -232,8 +236,9 @@ public class OrderController {
 
     @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','CUSTOMER')")
-    public ResponseEntity<OrderDetailsDto> createOrder(@RequestBody(required = true) Order order,
+    public ResponseEntity<OrderDetailsDto> createOrder(@Valid @RequestBody OrderRequestDto request,
                                                        @AuthenticationPrincipal User authUser) {
+        Order order = orderRequestMapper.mapToEntity(request);
         OrderDetailsDto createdOrder = toDetailsDto(orderService.create(order, authUser));
         eventPublisher.publishEvent(new OrderCreatedEvent(String.valueOf(order.getOrderNo()), authUser.getUsername(), order.getCreated()));
         return ResponseEntity.status(HttpStatus.CREATED).body(createdOrder);
@@ -264,7 +269,7 @@ public class OrderController {
                     order.getStatus(),
                     order.getDueDate(),
                     order.getCreated(),
-                    order.getCustomer() != null ? order.getCustomer().getLastName() : null,
+                    order.getCustomer().getLastName(),
                     java.util.Collections.emptyList()
             );
         }
@@ -273,9 +278,9 @@ public class OrderController {
                 .map(item -> new OrderItemDto(
                         item.getId(),
                         item.getQuantity(),
-                        item.getProduct() != null ? item.getProduct().getName() : null,
-                        item.getProduct() != null ? item.getProduct().getArticleNo() : null,
-                        item.getProduct() != null ? item.getProduct().getSku() : null,
+                        item.getProduct().getName(),
+                        item.getProduct().getArticleNo(),
+                        item.getProduct().getSku(),
                         item.getFulfillmentStatus()
                 ))
                 .toList();
@@ -286,7 +291,7 @@ public class OrderController {
                 order.getStatus(),
                 order.getDueDate(),
                 order.getCreated(),
-                order.getCustomer() != null ? order.getCustomer().getLastName() : null,
+                order.getCustomer().getLastName(),
                 items
         );
     }
