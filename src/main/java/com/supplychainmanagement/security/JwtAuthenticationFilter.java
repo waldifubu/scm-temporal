@@ -35,6 +35,12 @@ import java.util.regex.Pattern;
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
+    /**
+     * {@code POST /auth/register} is the one call under {@code /auth} that needs a login (an administrator's), so
+     * the filter must read the token there - everything else of that space is public and skipped.
+     */
+    private static final Pattern ADMIN_REGISTRATION_PATTERN =
+            Pattern.compile("^/api/(?:v?[0-9\\.]+/)?auth/register/?$");
     private static final Pattern PUBLIC_API_PATTERN = Pattern.compile("^/api/(?:v?[0-9\\.]+/)?auth(/.*)?$");
     private final JwtTokenProvider jwtTokenProvider; // You can implement this class to handle JWT token operations
     private final UserDetailsService userDetailsService; // You can use this to load user details based on the token
@@ -80,6 +86,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        if (ADMIN_REGISTRATION_PATTERN.matcher(path).matches() && !"OPTIONS".equalsIgnoreCase(request.getMethod())) {
+            return false;
+        }
         return !path.startsWith("/api/")
                 || path.startsWith("/api/auth/")
                 || PUBLIC_API_PATTERN.matcher(path).matches()
@@ -148,6 +157,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             userDetails = userDetailsService.loadUserByUsername(username); // Load user details based on the username
         } catch (UsernameNotFoundException ex) {
             throw new BadCredentialsException(ex.getMessage(), ex);
+        }
+
+        // A token outlives the deactivation of its account (up to app.jwtExpirationMs), so the account is asked
+        // on every request. 403 like login and refresh: the account exists, it is switched off.
+        if (!userDetails.isEnabled()) {
+            throw new APIException(HttpStatus.FORBIDDEN, "Account is disabled!");
         }
 
         // Create an authentication token with the user details and authorities

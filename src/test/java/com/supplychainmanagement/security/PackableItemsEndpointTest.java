@@ -278,7 +278,7 @@ class PackableItemsEndpointTest {
         Map<String, Object> first = read(body, "$.content[0]");
 
         assertThat(((Number) first.get("orderItemId")).longValue()).isEqualTo(picked.getId());
-        assertThat(first).containsKeys("orderItemId", "reservationId", "orderNo", "articleNo", "productName",
+        assertThat(first).containsKeys("orderItemId", "reservationId", "orderNo", "externalId", "productName",
                 "quantity", "packed", "remaining", "fulfillmentStatus", "storehouseId", "storehouseName", "pickedAt");
     }
 }

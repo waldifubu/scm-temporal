@@ -6,7 +6,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>4.2.0-RC1</version>
+        <version>4.2.0</version>
         <relativePath/> <!-- lookup parent from repository -->
     </parent>
     <groupId>org.example</groupId>
@@ -64,12 +64,6 @@
             <artifactId>thymeleaf-extras-springsecurity6</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-devtools</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
-        </dependency>
         <dependency>
             <groupId>org.mariadb.jdbc</groupId>
             <artifactId>mariadb-java-client</artifactId>
@@ -160,10 +154,11 @@
         </dependency>
 
         <!-- Argon2PasswordEncoder needs BouncyCastle -->
+        <!-- Source: https://mvnrepository.com/artifact/org.bouncycastle/bcprov-jdk18on -->
         <dependency>
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.84</version>
+            <version>1.87</version>
         </dependency>
 
         <!-- JWT stuff -->
@@ -265,6 +260,30 @@
     </build>
 
     <profiles>
+        <!--
+            devtools only off the prod profile: active unless the run is started with
+            -Dspring-boot.run.profiles=prod (a missing property counts as "not prod", so plain
+            "mvn spring-boot:run" keeps them). The repackaged jar never contains devtools anyway;
+            application-prod.properties switches them off as well, for runs that bypass this profile
+            (an IDE launch with the prod profile, for instance).
+        -->
+        <profile>
+            <id>devtools</id>
+            <activation>
+                <property>
+                    <name>spring-boot.run.profiles</name>
+                    <value>!prod</value>
+                </property>
+            </activation>
+            <dependencies>
+                <dependency>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-devtools</artifactId>
+                    <scope>runtime</scope>
+                    <optional>true</optional>
+                </dependency>
+            </dependencies>
+        </profile>
         <!--
             A jar that starts the way "mvn spring-boot:run" does, for the JVM's AOT cache (Project Leyden,
             JEP 483/514): the cache only covers classes loaded from jars, never from target/classes.

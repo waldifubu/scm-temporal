@@ -407,6 +407,13 @@ from then on its contents are fixed and it can go into a shipment. A package wit
 refused with **400** — it would go to no customer and could not be filled any more. Not `OPEN` is a
 **409**.
 
+### Recycling an empty package
+
+`DELETE /packing/shipment/{id}` deletes a package that holds nothing — the "Recycle" button of the
+frontend. Only an **`OPEN`** package without items qualifies (**409** otherwise: a package with
+contents has to be emptied first, one that is `PACKED` or already in a shipment is not packing work
+any more). The package is read `FOR UPDATE`, like every other change to it.
+
 ### Package weight
 
 A package's `weight` is **computed, never sent** — no request carries a weight. It is the weight of
@@ -883,8 +890,9 @@ erDiagram
   HashSet-backed collection with arbitrary iteration order.
 - **`Product`** has a unique `sku` (`UUID`) and `articleNo` (`Long`), belongs to zero or more
   `ProductCategory`, and is built from `Component`s. Its weight is computed from the component
-  weights on persist; without components (or components without a weight) it is 0 rather than a
-  failed insert.
+  weights on persist and **refreshed whenever a component is created, patched or deleted**
+  (`ComponentServiceImpl.refreshProductWeight`); without components (or components without a weight)
+  it is 0 rather than a failed insert.
 - **`Stock`** tracks `onHand`/`reserved` quantity per `(storehouse, sku)` pair (unique constraint),
   with optimistic locking (`@Version`) and domain methods `reserve()`/`release()`/`consume()` that
   enforce non-negative availability. `available` is derived as `onHand - reserved`.
@@ -929,14 +937,16 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 
 | Resource | Endpoints | Roles |
 |----------|-----------|-------|
-| Auth | `POST /auth/register`, `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout` | public |
+| Auth | `POST /auth/login` (`1.0` and `2.0`), `GET /auth/logout`, `POST /auth/refresh` (new access token from the `scmrefresh` cookie) | public |
+| | `POST /auth/userregister` — self-registration, **any role except `ADMIN`** (403 for `ADMIN`, nothing written) | public |
+| | `POST /auth/register` — the administrator's registration, takes any role | ADMIN |
 | | `GET /me` — who is logged in, **every** role (`UserDto`, role names as the enum: `WAREHOUSE`, ...). Works with the `HttpOnly` session cookie alone, which is what a browser has after a reload | any authenticated role |
 | Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change)*, `GET /orders/{orderNo}/shipments` *(the shipments the order travels in; the carrier's name for staff only)*, `POST /orders`, `POST /orders/{orderNo}/accept`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, WAREHOUSE, CUSTOMER for `GET /orders` (a customer sees only their own orders, the other three all of them); `/new` ADMIN, MANAGER and WAREHOUSE (read-only), `/accept`, `/reject` and `/cancel` ADMIN and MANAGER only, `/complete` ADMIN, MANAGER and the order's own CUSTOMER; the lines of an order (`OrderItemDto`) name their product by `articleNo` and `sku`, `GET /{orderNo}`, `GET /history/{orderNo}` and `GET /{orderNo}/shipments` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
 | Picking | `GET /picking-orders` *(paged, by reservation status, default `ACTIVE`; `CONSUMED` is what has been picked)*, `POST /picking/{reservationId}`, `POST /picking/order/{orderNo}`, `POST /release/{reservationId}` *(takes a pick back)* | ADMIN, WAREHOUSE; the `GET` also MANAGER |
-| Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`, `status=ALL` lists every line)*, `GET /order-items/packable` *(paged, optional `orderNo`: picked lines with `packed` and `remaining` - what package items are made from)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST /packing/shipment/from-items` (a package made of existing package items, by id), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete` | ADMIN, WAREHOUSE; the two `GET /order-items...` lists also MANAGER |
+| Packing | `GET /order-items` *(paged, by fulfillment status, default `PICKED`, `status=ALL` lists every line)*, `GET /order-items/packable` *(paged, optional `orderNo`: picked lines with `packed` and `remaining` - what package items are made from)*, `POST /packing/{orderNo}` (`items[]` required), `POST /packing` (`{"items": [...]}` or the bare array - loose items of one run, paged response), `POST /packing/shipment` (`items` optional), `POST /packing/shipment/from-items` (a package made of existing package items, by id), `POST`/`PUT /packing/shipment/{id}/items`, `DELETE /packing/shipment/{id}/items/{itemId}`, `PUT /packing/shipment/{id}`, `PUT /packing/shipment/{id}/complete`, `DELETE /packing/shipment/{id}` *(recycle: deletes an empty `OPEN` package)* | ADMIN, WAREHOUSE; the two `GET /order-items...` lists also MANAGER |
 | Packages | `GET /packages` *(paged, all package items - loose ones have no `shipmentPackageId`; optional `fulfillmentStatus` narrows it to the items whose order line is in that status, unknown value 400, same on `/lonely-packages`; without `sort` ordered by `created`, then by order number; sortable by the columns the table shows, among them `orderItem.order.orderNo`)*, `GET /packages/{id}`, `GET /lonely-packages` *(paged, only the loose items)* | ADMIN, WAREHOUSE |
 | | `GET /shipment-packages` *(paged, by `ShipmentPackageStatus`, default `OPEN`, optional `packageNumber`)* | ADMIN, WAREHOUSE, LOGISTICS (read) |
 | | `GET /shipment-packages/{id}` | ADMIN, WAREHOUSE, LOGISTICS (read) |
@@ -945,7 +955,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | Products | `GET /products` *(paged, default sort `id`; `sort` one of `id`, `articleNo`, `name`, `unitPrice`, `weight`, `createdAt`, `updatedAt`, `active`, else 400; ADMIN and MANAGER rows carry components and categories)*, `GET /products/{articleNo}`, `GET /products/sku/{sku}` | ADMIN, MANAGER, CUSTOMER, WAREHOUSE |
 | | `POST /products`, `PUT /products/{id}`, `DELETE /products/{id}` | ADMIN, MANAGER |
 | Components | `POST /components/`, `PUT /components/{id}`, `DELETE /components/{id}` | ADMIN, MANAGER |
-| | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` | ADMIN, MANAGER, WAREHOUSE |
+| | `GET /components`, `GET /components/{sku}`, `GET /components/article/{articleNo}` — the last one looks a component up by its unique **`externalId`** (404 for none); a component answers `externalId`, not `articleNo` (that field is the bill-of-materials reference and is not unique) | ADMIN, MANAGER, WAREHOUSE |
 | | `POST /components/request` — orders components, one `request_components` row per entry, body as bare array or `{"items": [...]}`, `componentId` is the **SKU**, `qty` at most 1,000,000. **No supplier in the request**: the `supplier_rule` table picks it per component (most specific rule, then `priority`, then lower id; rules of a deactivated supplier are skipped). A component no rule covers refuses the whole request with a 409 naming every such SKU | ADMIN, MANAGER, WAREHOUSE |
 | | `GET /components/suppliers/resolve?sku=a&sku=b` — which supplier each SKU would go to (`supplierId`, `supplierName`, `ruleId`; all `null` when no rule covers it), so a form can show it before sending. `PATCH /components/{sku}` changes name, manufacturer, description, externalId, weight or qty (only the keys sent) | ADMIN, MANAGER, WAREHOUSE |
 | | `GET /components/suppliers` *(paged, default sort `lastName`; `sort` one of `id`, `firstName`, `lastName`, else 400)* — whom a request can be placed with: **id and name only**, active suppliers only. The warehouse may order but may not read `/users` | ADMIN, MANAGER, WAREHOUSE |
@@ -988,6 +998,11 @@ Notable response-code conventions:
 
 ## Authentication & authorization
 
+- **Two ways to register.** `POST /auth/register` is the administrator's call (ADMIN only, any role);
+  `POST /auth/userregister` is public and refuses `ADMIN` with a 403. Everything under `/auth` is public
+  and skipped by the JWT filter, so `/auth/register` is the one carve-out: the filter reads the token
+  there, the chain demands `hasAuthority("ADMIN")` before the `/auth/**` permit, and the method carries
+  `@PreAuthorize` as a second line. Before this, `/auth/register` was public with a free `role` field.
 - Login (`AuthApiController` → `AuthService`) issues a JWT (`JwtTokenProvider`) and sets it as a
   cookie (`app.cookie.name`, configurable secure flag).
 - `JwtAuthenticationFilter` runs before `UsernamePasswordAuthenticationFilter` on the `/api/**`
@@ -1099,6 +1114,9 @@ part of them.
 | `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line, `ShipmentStatus` on the shipment (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
+| `ComponentProductCrudEndpointTest` | the product's weight following a component being created, patched and deleted, and the component answering `externalId` |
+| `RecycleEmptyPackageEndpointTest` | recycling: only an empty `OPEN` package is deleted, every other state a 409, unknown id a 404, who may call it |
+| `RegisterEndpointsTest` | `/auth/register` for ADMIN only (and public login unaffected), `/auth/userregister` for every role but `ADMIN` |
 | `UserControllerTest`, `UserServiceRequestDtoTest` | `UserRequestDto` binding, roles by name, entity-only fields ignored |
 | `UserMapperTest`, `ProductMapperTest` | that no password hash or internal field reaches the response; field suppression for non-privileged callers |
 | `GlobalExceptionHandlerTest` | that a `@PreAuthorize` denial routes to the 403 handler, and that the catch-all keeps a status the exception carries |
@@ -1130,9 +1148,9 @@ all.
   rejection).
 - **No history for shipments** the way `OrderHistory` records orders: who cancelled a shipment and
   why is only the free text in `comment`.
-- **Role assignment through `/users` is unchecked.** The endpoint is open to `MANAGER` and takes the
-  roles from the request as they are — a manager can grant themselves or others `ADMIN`.
-- **`POST /auth/register` is public and takes the role from the request** — an anonymous caller can create an `ADMIN`.
+- **Role assignment through `/users` is only half closed.** `PUT`/`DELETE` are ADMIN-only and `POST /users`
+  grants `ADMIN` only to an `ADMIN` caller; whether a `MANAGER` may grant `MANAGER` is not decided.
+  Registration is closed (see above).
 - The order number range `90000..199999` holds **110000 orders**, and the next one is refused. That is
   the ceiling of `OrderNumberScrambler`, and it can only be widened while no numbers are in use — a
   different range is a different permutation. (It replaced a `Math.random()` loop whose ceiling was

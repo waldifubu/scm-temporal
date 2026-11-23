@@ -49,6 +49,9 @@ public interface PackingService {
     /** The package's own data - type, weight, dimensions, number. Its contents stay as they are. */
     ShipmentPackage updatePackageData(Long shipmentPackageId, UpdatePackageRequest updatePackageRequest);
 
+    /** Deletes an OPEN package that holds no item and travels in no shipment ("recycling" a container). */
+    void deleteEmptyPackage(Long shipmentPackageId);
+
     /** Puts loose package items into the package; items already in it are left as they are. */
     ShipmentPackage addPackageItems(Long shipmentPackageId, PackageItemIdsRequest packageItemIdsRequest);
 

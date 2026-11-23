@@ -44,7 +44,9 @@ class OrderHistoryServiceImplTest {
     private final UserRepository userRepository = mock(UserRepository.class);
     private final RoleService roleService = mock(RoleService.class);
     private final OrderHistoryServiceImpl service =
-            new OrderHistoryServiceImpl(orderService, historyRepository, userRepository, roleService);
+            new OrderHistoryServiceImpl(orderService, historyRepository, userRepository, roleService,
+                    org.mapstruct.factory.Mappers.getMapper(
+                            com.supplychainmanagement.dto.mapper.OrderHistoryEntryMapper.class));
 
     private final User caller = new User("caller", "x", List.of());
 

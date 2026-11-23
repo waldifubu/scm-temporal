@@ -34,6 +34,9 @@ public class CustomUserDetailsService implements UserDetailsService {
         Set<GrantedAuthority> authorities = user.getRoles().stream()
                 .map(CustomUserDetailsService::apply)
                 .collect(Collectors.toSet());
-        return new User(usernameOrEmail, user.getPassword(), authorities);
+        // A missing flag counts as not active, like everywhere else. The filter reads isEnabled() on every
+        // request, so deactivating an account also ends the access tokens it already holds.
+        boolean enabled = Boolean.TRUE.equals(user.getIsActive());
+        return new User(usernameOrEmail, user.getPassword(), enabled, true, true, true, authorities);
     }
 }

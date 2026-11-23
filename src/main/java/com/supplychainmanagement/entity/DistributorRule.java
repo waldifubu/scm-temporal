@@ -6,8 +6,11 @@ import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 
 /**
  * One row of the table that says which carrier a shipment goes to: the step after the fixed customer
@@ -64,6 +67,13 @@ public class DistributorRule {
     /** Breaks a tie between rules that are equally specific; the higher one wins. */
     @Column(nullable = false)
     private int priority = 0;
+
+    @CreationTimestamp
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt;
+
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
 
     /**
      * How many dimensions the rule sets: the customer, a weight range, a volume range (a range counts once,

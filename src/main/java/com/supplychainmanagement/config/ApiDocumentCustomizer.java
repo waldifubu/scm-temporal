@@ -100,7 +100,8 @@ public class ApiDocumentCustomizer implements OpenApiCustomizer {
     }
 
     private void customise(String path, Operation operation) {
-        boolean isPublic = PUBLIC_PATH.matcher(path).matches();
+        // Register is the administrator's call (it names its role); only userregister, login, logout... are open.
+        boolean isPublic = PUBLIC_PATH.matcher(path).matches() && !path.endsWith("/auth/register");
         if (isPublic) {
             operation.setSecurity(new ArrayList<>());
         }

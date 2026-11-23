@@ -76,7 +76,7 @@ class ProductMapperTest {
                 .doesNotContain("\"id\"")
                 .doesNotContain("categories")
                 .doesNotContain("components");
-        assertThat(json).contains("\"articleNo\":1001", "\"name\":\"Zahnriemen\"");
+        assertThat(json).contains("\"externalId\":1001", "\"name\":\"Zahnriemen\"");
     }
 
     /**

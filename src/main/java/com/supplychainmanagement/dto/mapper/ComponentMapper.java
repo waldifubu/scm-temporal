@@ -58,7 +58,7 @@ public interface ComponentMapper {
                 component.getManufacturer(),
                 component.getName(),
                 component.getSku() != null ? component.getSku().toString() : null,
-                component.getArticleNo(),
+                component.getExternalId(),
                 component.getQty(),
                 toRef(component.getProduct()));
     }

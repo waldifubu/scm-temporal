@@ -1,6 +1,9 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.storehouse.StorehouseRequest;
 import com.supplychainmanagement.dto.storehouse.StorehouseResponse;
+import com.supplychainmanagement.entity.Storehouse;
+import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.repository.StorehouseRepository;
 import com.supplychainmanagement.service.StorehouseService;
 import lombok.RequiredArgsConstructor;
@@ -23,5 +26,33 @@ public class StorehouseServiceImpl implements StorehouseService {
     @Transactional(readOnly = true)
     public Page<StorehouseResponse> findStorehouses(Pageable pageable) {
         return storehouseRepository.findAll(pageable).map(StorehouseResponse::from);
+    }
+
+    @Override
+    @Transactional
+    public StorehouseResponse create(StorehouseRequest request) {
+        Storehouse storehouse = new Storehouse();
+        apply(storehouse, request);
+        return StorehouseResponse.from(storehouseRepository.save(storehouse));
+    }
+
+    @Override
+    @Transactional
+    public StorehouseResponse update(Long id, StorehouseRequest request) {
+        Storehouse storehouse = storehouseRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Storehouse", "id", id));
+        apply(storehouse, request);
+        return StorehouseResponse.from(storehouse);
+    }
+
+    private static void apply(Storehouse storehouse, StorehouseRequest request) {
+        storehouse.setName(request.name().trim());
+        storehouse.setAddress(blankToNull(request.address()));
+        storehouse.setCity(blankToNull(request.city()));
+        storehouse.setCountry(blankToNull(request.country()));
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 }

@@ -74,6 +74,14 @@ public class AuthServiceImpl implements AuthService {
     private String applicationTimeZone;
 
     @Override
+    public User registerUser(RegisterRequest request) {
+        if (RoleEnum.ADMIN == RoleEnum.valueOfLabel(request.role())) {
+            throw new APIException(HttpStatus.FORBIDDEN, "The ADMIN role cannot be chosen at registration");
+        }
+        return register(request);
+    }
+
+    @Override
     public User register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.username())) {
             throw new APIException(

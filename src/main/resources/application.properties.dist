@@ -77,3 +77,7 @@ app.cookie.secure=false
 # application is reachable by people who are not developers. OPENAPI_ENABLED in the environment wins.
 springdoc.api-docs.enabled=${OPENAPI_ENABLED:false}
 springdoc.swagger-ui.enabled=${OPENAPI_ENABLED:false}
+
+# Devtools: when the app is running in an IDE, it can restart on code changes and reload the browser.
+#spring.devtools.add-properties=false
+#spring.devtools.restart.enabled=false

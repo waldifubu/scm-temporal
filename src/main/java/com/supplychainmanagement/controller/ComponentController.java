@@ -178,10 +178,10 @@ public class ComponentController {
     }
 
     /**
-     * Creates a component - a bill-of-materials line of one product, named by its {@code articleNo}.
+     * Creates a component - a bill-of-materials line of one product, named by its {@code externalId}.
      * See {@link ComponentRequestDto} for what a client may send, and why it is not the entity.
      */
-    @PostMapping(path = "/", version = "1.0")
+    @PostMapping(path = "", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
     public ComponentResponseDto createComponent(@Valid @RequestBody ComponentRequestDto component) {
         return componentMapper.mapToDto(componentService.create(component));

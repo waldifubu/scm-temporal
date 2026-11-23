@@ -1,6 +1,9 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.SupplierRule;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
@@ -19,4 +22,8 @@ public interface SupplierRuleRepository extends JpaRepository<SupplierRule, Long
      */
     @Query("select r from SupplierRule r join fetch r.supplier s where s.isActive = true")
     List<SupplierRule> findAllWithActiveSupplier();
+
+    /** One page of the table for the admin's list; every association is to-one, so it stays paged in SQL. */
+    @EntityGraph(attributePaths = {"supplier", "component", "product"})
+    Page<SupplierRule> findAllBy(Pageable pageable);
 }

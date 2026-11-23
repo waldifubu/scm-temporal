@@ -5,6 +5,7 @@ import com.supplychainmanagement.dto.common.PageResponse;
 import com.supplychainmanagement.dto.mapper.UserMapper;
 import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
+import com.supplychainmanagement.dto.user.DemoteRequest;
 import com.supplychainmanagement.dto.user.UserRequestDto;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.common.PageRequests;
@@ -41,7 +42,7 @@ public class UserController {
 
     @NoCheck
     @GetMapping(path = "", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public PageResponse<UserDto> list(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -54,14 +55,14 @@ public class UserController {
 
     @NoCheck
     @GetMapping(path = "/{id}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public UserDto getById(@PathVariable Long id) {
         return userMapper.mapToDto(userService.findById(id));
     }
 
     @NoCheck
     @GetMapping(path = "/distributors", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER', 'LOGISTICS')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public PageResponse<UserDto> getDistributors(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
@@ -117,6 +118,22 @@ public class UserController {
     @PreAuthorize("hasAnyAuthority('ADMIN')")
     public UserDto update(@PathVariable Long id, @RequestBody UserRequestDto request) {
         return userMapper.mapToDto(userService.update(id, request));
+    }
+
+    /** Makes the user an administrator (type and roles), see {@link UserService#promoteToAdmin}. */
+    @NoCheck
+    @PostMapping(path = "/{id}/promote", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
+    public UserDto promote(@PathVariable Long id) {
+        return userMapper.mapToDto(userService.promoteToAdmin(id));
+    }
+
+    /** Takes an administrator back to one ordinary role, see {@link UserService#demote}. */
+    @NoCheck
+    @PostMapping(path = "/{id}/demote", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
+    public UserDto demote(@PathVariable Long id, @RequestBody @jakarta.validation.Valid DemoteRequest request) {
+        return userMapper.mapToDto(userService.demote(id, request.role()));
     }
 
     @NoCheck

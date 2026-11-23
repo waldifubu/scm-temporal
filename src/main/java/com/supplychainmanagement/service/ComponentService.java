@@ -30,7 +30,7 @@ public interface ComponentService {
 
     /**
      * Creates a component from what a client may send - see {@link ComponentRequestDto}. The product
-     * is resolved by {@code articleNo} (404 when there is none), and a duplicate SKU or externalId is
+     * is resolved by {@code externalId} (404 when there is none), and a duplicate SKU or externalId is
      * a 409.
      * <p>
      * It used to take the {@code Component} entity, which meant a client could send an {@code id} and

@@ -38,7 +38,7 @@ import static org.mockito.Mockito.when;
  * {@code create} handed the bound object to {@code save()}, which with an id present is a merge over
  * whichever component already had it. The DTO has no id field, so that is closed by construction;
  * what is held here is that the service really builds its own entity, and that the product now
- * arrives as an {@code articleNo} rather than as a nested object of which one field was read.
+ * arrives as an {@code externalId} rather than as a nested object of which one field was read.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -100,7 +100,7 @@ class ComponentServiceRequestDtoTest {
         assertThat(created.getQty()).isEqualTo(4);
     }
 
-    /** The product is named by articleNo and looked up - an unknown one is a 404. */
+    /** The product is named by externalId and looked up - an unknown one is a 404. */
     @Test
     void answersAnUnknownProductWith404() {
         when(productRepository.findByArticleNo(ARTICLE_NO)).thenReturn(Optional.empty());
@@ -122,20 +122,24 @@ class ComponentServiceRequestDtoTest {
         verify(componentRepository, never()).save(any());
     }
 
-    /** No SKU sent means the entity keeps what it has - on create, what @PrePersist gives it. */
+    /**
+     * No SKU sent: on create the service gives the component one - the column is NOT NULL and nothing in the
+     * entity fills it (only qty and weight), so the insert used to end as a 500. A SKU nobody sent is not checked
+     * for a clash: a fresh random one cannot have one.
+     */
     @Test
-    void leavesTheSkuAloneWhenNoneIsSent() {
+    void givesAFreshSkuWhenNoneIsSent() {
         knownProduct();
 
         Component created = service.create(request(null));
 
-        assertThat(created.getSku()).isNull();
+        assertThat(created.getSku()).isNotNull();
         verify(componentRepository, never()).existsBySku(any());
     }
 
     /**
      * Update writes the same set of fields as create. It used to copy a smaller selection -
-     * description, weight, articleNo and qty could be set on create but never changed afterwards,
+     * description, weight, externalId and qty could be set on create but never changed afterwards,
      * and qty is the recipe quantity.
      */
     @Test

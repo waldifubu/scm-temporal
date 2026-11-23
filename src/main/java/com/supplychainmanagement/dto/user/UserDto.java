@@ -21,6 +21,8 @@ public record UserDto(
         @Nullable String color,
         Boolean isActive,
         Set<String> roles,
+        /** The type the account is filed under ({@code user_type}: admin, customer, warehouse, ...). */
+        String userType,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         Long ruleId
 ) {

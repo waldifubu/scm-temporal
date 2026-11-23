@@ -465,6 +465,28 @@ public class PackingServiceImpl implements PackingService {
     }
 
     /**
+     * Throws an empty container away. Only a package that holds nothing: items are the record of what was
+     * packed, and taking the package away from under them would drop that - so a package with contents is a
+     * 409, the way out being to take the items out first. Read {@code FOR UPDATE}, because "empty" is checked
+     * and then acted on while another request may be filling it. Only OPEN, like every other change to a
+     * package (a PACKED one is never empty).
+     */
+    @Override
+    @Transactional
+    public void deleteEmptyPackage(Long shipmentPackageId) {
+        ShipmentPackage shipmentPackage = findOpenPackageForUpdate(shipmentPackageId);
+        if (!shipmentPackage.getItems().isEmpty()) {
+            throw new APIException(HttpStatus.CONFLICT, "ShipmentPackage " + shipmentPackageId
+                    + " still holds " + shipmentPackage.getItems().size() + " item(s); only an empty package can be recycled");
+        }
+        if (shipmentPackage.getShipment() != null) {
+            throw new APIException(HttpStatus.CONFLICT, "ShipmentPackage " + shipmentPackageId
+                    + " is part of a shipment and cannot be recycled");
+        }
+        shipmentPackageRepository.delete(shipmentPackage);
+    }
+
+    /**
      * Puts loose package items into the package. An item already in this package is left as it is,
      * so repeating a call changes nothing.
      * <p>

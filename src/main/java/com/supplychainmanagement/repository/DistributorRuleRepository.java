@@ -1,6 +1,9 @@
 package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.DistributorRule;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -30,4 +33,8 @@ public interface DistributorRuleRepository extends JpaRepository<DistributorRule
     List<DistributorRule> findMatching(@Param("customerId") Long customerId,
                                        @Param("weight") BigDecimal weight,
                                        @Param("volume") BigDecimal volume);
+
+    /** One page of the table for the admin's list; every association is to-one, so it stays paged in SQL. */
+    @EntityGraph(attributePaths = {"distributor", "customer"})
+    Page<DistributorRule> findAllBy(Pageable pageable);
 }

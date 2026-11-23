@@ -188,6 +188,26 @@ class AuthStatusCodesTest {
         assertThat(protectedCall("Bearer garbage").getStatus()).isEqualTo(401);
     }
 
+    /**
+     * An access token issued while the account was active must stop working once the account is
+     * deactivated - otherwise "disabled" only holds for the next login, not for the session in hand.
+     */
+    @Test
+    void refusesAValidTokenOfAnAccountDeactivatedAfterwards() throws Exception {
+        User user = testData.userWithRoles(RoleEnum.LOGISTICS);
+        JwtTokenProvider provider = new JwtTokenProvider();
+        ReflectionTestUtils.setField(provider, "jwtSecret", jwtSecret);
+        ReflectionTestUtils.setField(provider, "jwtExpirationInMs", 60_000L);
+        String token = provider.generateToken(
+                new UsernamePasswordAuthenticationToken(user.getUsername(), null, List.of()));
+
+        assertThat(protectedCall("Bearer " + token).getStatus()).isEqualTo(200);
+
+        user.setIsActive(false);
+
+        assertThat(protectedCall("Bearer " + token).getStatus()).isEqualTo(403);
+    }
+
     /** A token signed with another key never authenticates. */
     @Test
     void answersAForgedTokenWith401() throws Exception {

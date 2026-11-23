@@ -17,6 +17,8 @@ import com.supplychainmanagement.security.RefreshTokenService;
 import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.UserService;
+import jakarta.persistence.DiscriminatorValue;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.hibernate.Hibernate;
 import org.springframework.beans.BeanUtils;
@@ -44,6 +46,9 @@ public class UserServiceImpl implements UserService {
             RoleEnum.ADMIN, Admin.class
     );
 
+    /** The discriminator column of {@link User}; {@code @DiscriminatorColumn} says the same. */
+    private static final String DISCRIMINATOR_COLUMN = "user_type";
+
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final DistributorRepository distributorRepository;
@@ -52,6 +57,7 @@ public class UserServiceImpl implements UserService {
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenService refreshTokenService;
     private final UserMapper userMapper;
+    private final EntityManager entityManager;
 
     @Override
     public List<User> findAll() {
@@ -135,6 +141,71 @@ public class UserServiceImpl implements UserService {
         // change was never persistable to begin with. A plain save on the managed entity therefore
         // achieves exactly what the previous code did.
         return userRepository.save(existing);
+    }
+
+    @Override
+    @Transactional
+    public User promoteToAdmin(Long id) {
+        User user = findForTypeChange(id);
+        if (user instanceof Admin) {
+            throw new APIException(HttpStatus.CONFLICT, "User " + id + " is already an administrator");
+        }
+        return changeMainRole(user, RoleEnum.ADMIN);
+    }
+
+    @Override
+    @Transactional
+    public User demote(Long id, RoleEnum role) {
+        if (role == null || role == RoleEnum.ADMIN) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "A role other than ADMIN is required");
+        }
+        User user = findForTypeChange(id);
+        if (!(user instanceof Admin)) {
+            throw new APIException(HttpStatus.CONFLICT, "User " + id + " is not an administrator");
+        }
+        // Somebody has to be left who can promote again.
+        long admins = entityManager.createQuery("select count(a) from Admin a", Long.class).getSingleResult();
+        if (admins <= 1) {
+            throw new APIException(HttpStatus.CONFLICT, "The last administrator cannot be demoted");
+        }
+        return changeMainRole(user, role);
+    }
+
+    private User findForTypeChange(Long id) {
+        return userRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
+    }
+
+    /**
+     * Gives the user one role and the type that goes with it. The roles go through the entity, so the provider
+     * writes the {@code users_roles} difference itself (a role the user already holds is neither deleted nor
+     * inserted twice, the others are removed). The type cannot: {@code user_type} is the discriminator of a
+     * single-table hierarchy and mapped {@code insertable = false, updatable = false}, so no entity change ever
+     * writes it. That one column is set with a single ANSI statement - an UPDATE with a bound parameter, nothing
+     * a database dialect has an opinion about - and the table and column names are read from the mapping rather
+     * than written down. The persistence context is cleared afterwards: the instance it holds still is the old
+     * subclass.
+     */
+    private User changeMainRole(User user, RoleEnum role) {
+        Class<? extends User> target = USER_TYPE_CLASS_BY_ROLE.get(role);
+        Role roleRow = roleRepository.findByRolename(role)
+                .orElseThrow(() -> new APIException(HttpStatus.BAD_REQUEST, "Role " + role + " not found"));
+        Long id = user.getId();
+
+        user.setRoles(new HashSet<>(Set.of(roleRow)));
+        userRepository.saveAndFlush(user);
+
+        String discriminator = target.getAnnotation(DiscriminatorValue.class).value();
+        entityManager.createNativeQuery("update " + tableName() + " set " + DISCRIMINATOR_COLUMN + " = ?1 where id = ?2")
+                .setParameter(1, discriminator).setParameter(2, id).executeUpdate();
+        entityManager.clear();
+
+        return findForTypeChange(id);
+    }
+
+    /** The table of the {@code User} hierarchy, as the mapping names it. */
+    private String tableName() {
+        return User.class.getAnnotation(jakarta.persistence.Table.class).name();
     }
 
     @Override

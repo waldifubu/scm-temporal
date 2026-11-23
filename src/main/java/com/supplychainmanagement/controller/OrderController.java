@@ -12,7 +12,10 @@ import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.event.OrderCreatedEvent;
 import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.dto.order.OrderHistoryEntryDto;
 import com.supplychainmanagement.dto.order.OrderHistoryResponse;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import com.supplychainmanagement.dto.order.OrderShipmentResponse;
 import com.supplychainmanagement.service.OrderHistoryService;
 import com.supplychainmanagement.service.OrderShipmentService;
@@ -33,6 +36,7 @@ import java.util.Set;
 import java.util.Arrays;
 import java.util.EnumSet;
 import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.model.enums.RoleEnum;
 
 @RestController
 @RequestMapping({"/api/{version}/orders"})
@@ -54,7 +58,10 @@ public class OrderController {
     static final Set<String> ORDER_SORTABLE = Set.of("id", "orderNo", "created", "updated", "dueDate",
             "deliveryDate", "status", "total");
 
-    /** {@code status=ALL} on {@code GET /orders}: every order, whatever its status. */
+    /**
+     * {@code status=ALL} on {@code GET /orders}: every order, whatever its status. Only for ADMIN - everybody else
+     * works from {@code NOT_COMPLETED} or one status, and gets a 403 for this word.
+     */
     static final String ALL = "ALL";
 
     /** {@code status=NOT_COMPLETED}: every order but the closed ones - what a manager works from. */
@@ -83,6 +90,11 @@ public class OrderController {
         return null;
     }
 
+    private static boolean isAdmin(User user) {
+        return user != null && user.getAuthorities().stream()
+                .anyMatch(authority -> RoleEnum.ADMIN.name().equals(authority.getAuthority()));
+    }
+
     // CUSTOMER may see their own order list; ADMIN/MANAGER/WAREHOUSE are included because
     // OrderService.findAllByUserAndStatus deliberately branches to all orders for the roles that may read any order.
     @GetMapping(path = "", version = "1.0")
@@ -97,6 +109,9 @@ public class OrderController {
         Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_SORTABLE);
 
         Set<OrderStatus> group = statusGroup(status);
+        if (ALL.equals(status.trim().toUpperCase()) && !isAdmin(authUser)) {
+            throw new APIException(HttpStatus.FORBIDDEN, "Only administrators may list ALL orders");
+        }
         return toSummaryPage(group != null
                 ? orderService.findAllByUserAndStatuses(authUser, group, pageable)
                 : orderService.findAllByUserAndStatus(authUser, parseStatus(status), pageable));
@@ -202,6 +217,42 @@ public class OrderController {
         return toDetailsDto(orderService.findByOrderNoForUser(orderNo, authUser));
     }
 
+
+    /** What {@code sort} may name on {@code GET /orders/history}; the order's columns are paths through the row's order. */
+    static final Set<String> ORDER_HISTORY_SORTABLE = Set.of("id", "changedAt", "previousStatus", "newStatus",
+            "userId", "order.orderNo");
+
+    /**
+     * Every status change of every order, grouped by order and, within an order, by time: the audit trail as one list.
+     * By default only the latest step of each order is listed ({@code latestOnly=false} lists them all). Optional {@code orderNo} narrows it to one order, {@code status} to the changes <em>into</em> that status.
+     * <p>
+     * Staff only - unlike {@code /history/{orderNo}}, this is not limited to the caller's own orders, so a
+     * customer has no business here. The literal segment wins over {@code /{orderNo}}.
+     */
+    @GetMapping(path = "/history", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS')")
+    public PageResponse<OrderHistoryEntryDto> listHistory(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(required = false) Long orderNo,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String sort,
+            @RequestParam(defaultValue = "ASC") String order,
+            @RequestParam(defaultValue = "true") boolean latestOnly) {
+        // Without a sort - and when sorted by the order - the list is grouped: by order number, and within an
+        // order by when the step happened, the id after that (rows of one transaction share a timestamp, and a
+        // page boundary must not shuffle them). Any other sort is that column and then the id.
+        boolean grouped = sort == null || "order.orderNo".equals(sort);
+        Pageable asked = PageRequests.of(page, size, grouped ? "order.orderNo" : sort, order,
+                ORDER_HISTORY_SORTABLE);
+        Sort.Direction direction = asked.getSort().iterator().next().getDirection();
+        Sort sorting = grouped
+                ? Sort.by(direction, "order.orderNo", "changedAt", "id")
+                : "id".equals(sort) ? asked.getSort() : asked.getSort().and(Sort.by(direction, "id"));
+        Pageable pageable = PageRequest.of(asked.getPageNumber(), asked.getPageSize(), sorting);
+        OrderStatus wanted = status == null || status.isBlank() ? null : parseStatus(status);
+        return PageResponse.of(orderHistoryService.findEntries(orderNo, wanted, latestOnly, pageable));
+    }
 
     /**
      * The history of one order: every status it went through, newest first, one row each with the

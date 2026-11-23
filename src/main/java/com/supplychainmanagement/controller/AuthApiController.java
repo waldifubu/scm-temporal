@@ -16,6 +16,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -29,19 +30,26 @@ import java.util.stream.Collectors;
 public class AuthApiController {
 
     private final ApplicationEventPublisher eventPublisher;
-    private AuthService authService;
+    private final AuthService authService;
 
+    /**
+     * An administrator creates an account with any role. Not public, unlike the rest of {@code /auth}: the filter
+     * reads the token for this path and the chain demands ADMIN, the annotation says it once more.
+     */
     @PostMapping(value = "/register", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public ResponseEntity<?> register(@Valid @RequestBody RegisterRequest request) {
-        Map<String, String> response = new HashMap<>();
-        User newUser;
-        try {
-            newUser = authService.register(request);
-        } catch (RuntimeException runtimeException) {
-            response.put("message", runtimeException.getMessage());
-            return ResponseEntity.badRequest().body(response);
-        }
+        return registered(authService.register(request));
+    }
 
+    /** Self-registration, open to everybody: any role except ADMIN (403). */
+    @PostMapping(value = "/userregister", version = "1.0")
+    public ResponseEntity<?> userRegister(@Valid @RequestBody RegisterRequest request) {
+        return registered(authService.registerUser(request));
+    }
+
+    private ResponseEntity<?> registered(User newUser) {
+        Map<String, String> response = new HashMap<>();
         response.put("message", "User successfully registered");
         log.info("User registered with username: {} and id: {}", newUser.getUsername(), newUser.getId());
 

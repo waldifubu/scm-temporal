@@ -214,6 +214,14 @@ public class PackingController {
         return toResponse(packingService.removePackageItem(shipmentPackageId, packageItemId));
     }
 
+    /** Recycles an empty container: deletes an OPEN package that holds no item. 409 when it still holds some. */
+    @DeleteMapping(path = "/packing/shipment/{shipmentPackageId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','WAREHOUSE')")
+    @org.springframework.web.bind.annotation.ResponseStatus(org.springframework.http.HttpStatus.NO_CONTENT)
+    public void deleteEmptyPackage(@PathVariable Long shipmentPackageId) {
+        packingService.deleteEmptyPackage(shipmentPackageId);
+    }
+
     /**
      * The package's own data - type, weight, dimensions, number. Its contents are changed through
      * the /items endpoints above.

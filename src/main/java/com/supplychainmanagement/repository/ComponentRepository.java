@@ -17,6 +17,9 @@ public interface ComponentRepository extends JpaRepository<Component, Long> {
     @EntityGraph(attributePaths = "product")
     List<Component> findAllBy();
 
+    /** Every bill-of-materials line of one product. */
+    List<Component> findByProductId(Long productId);
+
     Optional<Component> findBySku(UUID sku);
 
     /**

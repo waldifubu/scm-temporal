@@ -39,6 +39,19 @@ public interface UserService {
     /** Updates a user from what a client sent - see {@link UserRequestDto}. */
     User update(Long id, UserRequestDto request);
 
+    /**
+     * Makes the user an administrator: {@code user_type} becomes {@code admin} and ADMIN is the only role left in
+     * {@code users_roles} - whatever rows the user had there, an ADMIN row included, are deleted first, so the pair
+     * can never exist twice. 404 for an unknown user, 409 for one that already is an administrator.
+     */
+    User promoteToAdmin(Long id);
+
+    /**
+     * Takes an administrator back to one ordinary role: type and roles follow {@code role} (never ADMIN, 400). 404
+     * for an unknown user, 409 for one who is no administrator or for the last administrator there is.
+     */
+    User demote(Long id, com.supplychainmanagement.model.enums.RoleEnum role);
+
     void deleteById(Long id);
 
     User findByUsernameOrEmail(String usernameOrEmail);

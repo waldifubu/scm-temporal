@@ -1,6 +1,10 @@
 package com.supplychainmanagement.service;
 
+import com.supplychainmanagement.dto.order.OrderHistoryEntryDto;
 import com.supplychainmanagement.dto.order.OrderHistoryResponse;
+import com.supplychainmanagement.model.enums.OrderStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -16,4 +20,11 @@ public interface OrderHistoryService {
      * Not paged: an order has as many rows as it has had status changes, a handful.
      */
     List<OrderHistoryResponse> findHistory(Long orderNo, org.springframework.security.core.userdetails.User authUser);
+
+    /**
+     * The status changes of <em>all</em> orders, paged, optionally narrowed to one order and/or to the
+     * status the order went to. Staff only - the caller (the controller's role check) keeps customers out,
+     * because this is not scoped to the caller's own orders.
+     */
+    Page<OrderHistoryEntryDto> findEntries(Long orderNo, OrderStatus status, boolean latestOnly, Pageable pageable);
 }

@@ -39,7 +39,7 @@ public class ProductCatalogView extends HorizontalLayout {
         var grid = new Grid<Product>();
         grid.addColumn(Product::getId).setHeader("ID").setSortProperty("id").setAutoWidth(true);
         grid.addColumn(Product::getName).setHeader("Name").setSortProperty("name");
-        grid.addColumn(Product::getArticleNo).setHeader("Article No").setTextAlign(ColumnTextAlign.END).setSortProperty("articleNo");
+        grid.addColumn(Product::getArticleNo).setHeader("Article No").setTextAlign(ColumnTextAlign.END).setSortProperty("externalId");
         grid.addColumn(Product::getDescription).setHeader("Description");
 
         grid.addColumn(Product::getSku).setHeader("SKU").setSortProperty("sku");

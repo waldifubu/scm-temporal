@@ -15,6 +15,7 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -65,7 +66,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     public Product findByArticleNo(long articleNo) {
         return productRepository.findByArticleNo(articleNo)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", articleNo));
+                .orElseThrow(() -> new ResourceNotFoundException("Product", "externalId", articleNo));
     }
 
     @Override
@@ -84,7 +85,13 @@ public class ProductServiceImpl implements ProductService {
         // existing product, which is what taking the entity as the body allowed.
         Product product = new Product();
         applyProductData(request, product);
-        product.setComponents(new ArrayList<>(componentsFor(request, product, List.of())));
+        // No bill of materials sent is none, not an NPE: componentsFor answers null for "leave alone".
+        List<Component> lines = componentsFor(request, product, List.of());
+        product.setComponents(lines == null ? new ArrayList<>() : new ArrayList<>(lines));
+        // The column is NOT NULL and nothing else fills it: a product made without a SKU gets one here.
+        if (product.getSku() == null) {
+            product.setSku(UUID.randomUUID());
+        }
         applyCategories(product, categoriesFor(request.categoryIds()));
 
         Product savedProduct = productRepository.save(product);
@@ -220,7 +227,14 @@ public class ProductServiceImpl implements ProductService {
         if (!productRepository.existsById(id)) {
             throw new ResourceNotFoundException("Product", "id", id);
         }
-        productRepository.deleteById(id);
+        try {
+            productRepository.deleteById(id);
+            // Flushed here, inside the try: an order line or stock row that still names the product would
+            // otherwise surface at the commit, after this method, as a 500.
+            productRepository.flush();
+        } catch (DataIntegrityViolationException stillReferenced) {
+            throw new APIException(HttpStatus.CONFLICT, "Product " + id + " is still referenced (orders, stock) and cannot be deleted");
+        }
     }
 
     @Override

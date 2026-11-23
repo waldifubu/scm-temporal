@@ -141,13 +141,14 @@ class OrderListAccessTest {
     @Test
     void allListsEveryOrderAndNotCompletedLeavesOutTheCompletedOnes() throws Exception {
         User manager = testData.userWithRoles(RoleEnum.MANAGER);
+        User admin = testData.userWithRoles(RoleEnum.ADMIN);
         User customer = testData.customer();
         Order created = orderIn(customer, OrderStatus.CREATED);
         Order inFulfillment = orderIn(customer, OrderStatus.IN_FULFILLMENT);
         Order rejected = orderIn(customer, OrderStatus.REJECTED);
         Order completed = orderIn(customer, OrderStatus.COMPLETED);
 
-        assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=ALL")).contains(
+        assertThat(listedBy(admin, "/orders" + NEWEST_FIRST + "&status=ALL")).contains(
                 created.getOrderNo(), inFulfillment.getOrderNo(), rejected.getOrderNo(), completed.getOrderNo());
         assertThat(listedBy(manager, "/orders" + NEWEST_FIRST + "&status=NOT_COMPLETED"))
                 .contains(created.getOrderNo(), inFulfillment.getOrderNo(), rejected.getOrderNo())
@@ -167,12 +168,27 @@ class OrderListAccessTest {
         Order ownCompleted = orderIn(customer, OrderStatus.COMPLETED);
         Order foreign = orderIn(testData.customer(), OrderStatus.REVIEW);
 
-        assertThat(listedBy(customer, "/orders" + NEWEST_FIRST + "&status=ALL"))
-                .contains(own.getOrderNo(), ownCompleted.getOrderNo())
-                .doesNotContain(foreign.getOrderNo());
         assertThat(listedBy(customer, "/orders" + NEWEST_FIRST + "&status=NOT_COMPLETED"))
                 .contains(own.getOrderNo())
                 .doesNotContain(ownCompleted.getOrderNo(), foreign.getOrderNo());
+    }
+
+    /** {@code status=ALL} is the administrator's alone: every other role is refused, whatever it may read otherwise. */
+    @Test
+    void onlyAnAdministratorMayAskForAll() throws Exception {
+        for (RoleEnum role : List.of(RoleEnum.MANAGER, RoleEnum.WAREHOUSE, RoleEnum.CUSTOMER)) {
+            User user = testData.userWithRoles(role);
+            String token = jwtTokenProvider.generateToken(
+                    new UsernamePasswordAuthenticationToken(user.getUsername(), null, List.of()));
+            for (String word : List.of("ALL", "all")) {
+                MockHttpServletResponse response = mockMvc.perform(
+                                MockMvcRequestBuilders.get("/api/1.0/orders?status=" + word)
+                                        .header("X-API-KEY", "order-list-" + CALLS.incrementAndGet())
+                                        .header("Authorization", "Bearer " + token))
+                        .andReturn().getResponse();
+                assertThat(response.getStatus()).as(role + " " + word).isEqualTo(403);
+            }
+        }
     }
 
     /** The rule the other way round: a customer still sees their own and nobody else's. */

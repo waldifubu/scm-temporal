@@ -229,6 +229,14 @@ else (`ApiVersionDefaultFilter`).
 also holds the `HttpOnly`-cookie case, that the filter really reads a token on `/me`, and that login and
 logout stayed public.
 
+**Two ways to register** (`AuthApiController`, `RegisterEndpointsTest`): `POST /auth/register` is the **administrator's** call and takes any role
+(`AuthService.register`); `POST /auth/userregister` is **public** and takes any role **except ADMIN** (403, `AuthService.registerUser`) - before this,
+`/auth/register` was public with a free `role` field, so anybody could make themselves an administrator. `/auth/register` is the one carve-out under
+`/auth`: `JwtAuthenticationFilter.ADMIN_REGISTRATION_PATTERN` makes the filter read the token there, `SpringSecurityConfig` demands `hasAuthority("ADMIN")`
+**before** the `/auth/**` permitAll (first match wins), and the method carries `@PreAuthorize` as a second line. Too wide a carve-out and `/auth/login`
+loses its public status, too narrow and the admin has no principal - `RegisterEndpointsTest` holds both directions. `ApiDocumentCustomizer` does not mark
+`/auth/register` public, so the description lists its `x-roles`. The controller no longer catches `RuntimeException`; `APIException`s answer through the handler.
+
 **The API describes itself in OpenAPI** (springdoc 3.1.1, `OpenApiConfig`): `/v3/api-docs` and, to try it
 from, `/swagger-ui.html`. It is **off unless somebody turned it on** - springdoc is on by default, and what
 it serves is every endpoint with the roles that may call it, without a login (both paths sit outside

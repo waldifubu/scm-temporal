@@ -10,7 +10,7 @@ public record ComponentResponseDto(
         @Nullable String manufacturer,
         @Nullable String name,
         String sku,
-        @Nullable String articleNo,
+        @Nullable String externalId,
         Integer qty,
         ProductRefDto product
 ) {

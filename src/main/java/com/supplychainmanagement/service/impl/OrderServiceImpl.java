@@ -637,7 +637,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         return productRepository.findWithComponentsByArticleNo(product.getArticleNo())
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", product.getArticleNo()));
+                .orElseThrow(() -> new ResourceNotFoundException("Product", "externalId", product.getArticleNo()));
     }
 
     private void recalculateOrder(Order order) {

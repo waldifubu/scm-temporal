@@ -27,7 +27,21 @@ public interface UserMapper {
                 // a missing flag counts as not active, as everywhere else
                 Boolean.TRUE.equals(user.getIsActive()),
                 rolesToNames(user.getRoles()),
+                userTypeOf(user),
                 ruleIdOf(user));
+    }
+
+    /**
+     * The discriminator value of the user's class. Read off the class rather than {@code User.userType}, which is a
+     * read-only column and still {@code null} on an entity that was only just inserted in this session.
+     */
+    default String userTypeOf(User user) {
+        var discriminator = org.hibernate.Hibernate.unproxy(user).getClass()
+                .getAnnotation(jakarta.persistence.DiscriminatorValue.class);
+        if (discriminator != null) {
+            return discriminator.value();
+        }
+        return user.getUserType() != null ? user.getUserType() : "user";
     }
 
     /**

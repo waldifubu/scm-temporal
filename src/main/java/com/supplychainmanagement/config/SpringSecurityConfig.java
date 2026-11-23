@@ -48,6 +48,10 @@ public class SpringSecurityConfig {
                     // after it, including anyRequest().authenticated(), dead code. Authorization happens
                     // on the REQUEST dispatch; the ASYNC pass merely delivers the finished response.
                     authorize.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll();
+                    // The one call under /auth that is not public: an administrator creates accounts (any role).
+                    // Before the permitAll below - the first matching rule wins.
+                    authorize.requestMatchers("/api/auth/register", "/api/{version:[0-9]+\\.[0-9]+}/auth/register")
+                            .hasAuthority("ADMIN");
                     authorize.requestMatchers("/api/auth/**").permitAll();
                     authorize.requestMatchers("/api/{version:[0-9]+\\.[0-9]+}/auth/**").permitAll();
                     authorize.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll();

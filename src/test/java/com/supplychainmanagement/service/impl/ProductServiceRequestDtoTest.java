@@ -234,7 +234,7 @@ class ProductServiceRequestDtoTest {
     }
 
     /**
-     * The recipe quantity of an existing line. applyComponents copies articleNo, name, description,
+     * The recipe quantity of an existing line. applyComponents copies externalId, name, description,
      * weight and sku onto a matched line and says nothing about qty - so the question is whether the
      * value set in componentsFor survives that merge, or whether PUT /products silently ignores it.
      */

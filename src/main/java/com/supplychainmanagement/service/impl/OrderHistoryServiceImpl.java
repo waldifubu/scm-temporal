@@ -1,7 +1,12 @@
 package com.supplychainmanagement.service.impl;
 
 import com.supplychainmanagement.dto.common.DisplayNames;
+import com.supplychainmanagement.dto.mapper.OrderHistoryEntryMapper;
+import com.supplychainmanagement.dto.order.OrderHistoryEntryDto;
 import com.supplychainmanagement.dto.order.OrderHistoryResponse;
+import com.supplychainmanagement.model.enums.OrderStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.entity.users.User;
@@ -29,6 +34,7 @@ public class OrderHistoryServiceImpl implements OrderHistoryService {
     private final OrderHistoryRepository orderHistoryRepository;
     private final UserRepository userRepository;
     private final RoleService roleService;
+    private final OrderHistoryEntryMapper entryMapper;
 
     /**
      * The order is fetched through {@code findByOrderNoForUser}, the same call {@code GET /orders/{orderNo}}
@@ -50,6 +56,15 @@ public class OrderHistoryServiceImpl implements OrderHistoryService {
         Map<Long, String> names = showActor ? namesOfActors(rows) : Map.of();
 
         return rows.stream().map(row -> OrderHistoryResponse.of(row, showActor, names)).toList();
+    }
+
+    /** Two queries per page: the rows (order and customer fetched), then the names of the acting users. */
+    @Override
+    public Page<OrderHistoryEntryDto> findEntries(Long orderNo, OrderStatus status, boolean latestOnly,
+                                                  Pageable pageable) {
+        Page<OrderHistory> rows = orderHistoryRepository.findEntries(orderNo, status, latestOnly, pageable);
+        Map<Long, String> names = namesOfActors(rows.getContent());
+        return rows.map(row -> entryMapper.mapToDto(row, names));
     }
 
     /** One query for every user the rows name; an id nobody answers to simply has no name. */

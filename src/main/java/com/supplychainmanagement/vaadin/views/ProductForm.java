@@ -22,7 +22,7 @@ class ProductForm extends Composite<FormLayout>  {
         var descriptionField = new TextArea("Description");
 //        var categoryField = new TextField("Category");
 //        var brandField = new TextField("Brand");
-        var articleNo = new NumberField("articleNo");
+        var articleNo = new NumberField("externalId");
 //        var releaseDateField = new DatePicker("Release Date");
         var priceField = new BigDecimalField("Price");
 //        var discountField = new BigDecimalField("Discount");

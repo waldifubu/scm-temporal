@@ -30,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -493,7 +494,7 @@ public class ComponentServiceImpl implements ComponentService {
     @Override
     public Component findByArticleNo(String articleNo) {
         return componentRepository.findByExternalId(articleNo)
-                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with articleNo: " + articleNo));
+                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with externalId: " + articleNo));
     }
 
     @Override
@@ -504,7 +505,30 @@ public class ComponentServiceImpl implements ComponentService {
         Component component = new Component();
         apply(request, component);
         validateUniqueIdentifiers(component, null);
-        return componentRepository.save(component);
+        // The column is NOT NULL and the entity does not fill it (only qty and weight): a component made without
+        // a SKU gets one here - after the check, a fresh random one cannot clash.
+        if (component.getSku() == null) {
+            component.setSku(UUID.randomUUID());
+        }
+        Component saved = componentRepository.save(component);
+        refreshProductWeight(saved.getProduct());
+        return saved;
+    }
+
+    /**
+     * A product weighs what its components weigh (the rule {@code Product.onCreate} applies on insert); a new
+     * component changes that, so the sum is taken again over every line including the one just saved.
+     * Components without a weight add nothing.
+     */
+    private void refreshProductWeight(Product product) {
+        if (product == null) {
+            return;
+        }
+        product.setWeight(componentRepository.findByProductId(product.getId()).stream()
+                .map(Component::getWeight)
+                .filter(Objects::nonNull)
+                .reduce(java.math.BigDecimal.ZERO, java.math.BigDecimal::add));
+        productRepository.save(product);
     }
 
     /**
@@ -517,7 +541,7 @@ public class ComponentServiceImpl implements ComponentService {
     private void apply(ComponentRequestDto request, Component component) {
         Product product = productRepository.findByArticleNo(request.productArticleNo())
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Product", "articleNo", request.productArticleNo()));
+                        "Product", "externalId", request.productArticleNo()));
 
         component.setProduct(product);
         component.setName(request.name());
@@ -549,7 +573,7 @@ public class ComponentServiceImpl implements ComponentService {
         validateUniqueIdentifiers(incoming, existingComponent);
 
         // One place decides which fields a client may set - update used to copy a different, smaller
-        // selection than create bound, so description, weight, articleNo and qty could be created
+        // selection than create bound, so description, weight, externalId and qty could be created
         // but never changed.
         apply(request, existingComponent);
 
@@ -590,16 +614,30 @@ public class ComponentServiceImpl implements ComponentService {
         if (request.qty() != null) {
             component.setQty(request.qty());
         }
-        return componentRepository.save(component);
+        Component saved = componentRepository.save(component);
+        if (request.weight() != null) {
+            // Only a changed weight can change the product's sum.
+            refreshProductWeight(saved.getProduct());
+        }
+        return saved;
     }
 
     @Override
     @Transactional
     public void deleteById(Long id) {
-        if (!componentRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Component", "id", id);
+        Component component = componentRepository.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
+        Product product = component.getProduct();
+        try {
+            componentRepository.deleteById(id);
+            // Flushed here, inside the try: a reference that forbids the delete is otherwise reported at the
+            // commit, after this method, as a 500.
+            componentRepository.flush();
+        } catch (DataIntegrityViolationException stillReferenced) {
+            throw new APIException(HttpStatus.CONFLICT, "Component " + id + " is still referenced and cannot be deleted");
         }
-        componentRepository.deleteById(id);
+        // The line is gone, so the product weighs what is left.
+        refreshProductWeight(product);
     }
 
     private void validateUniqueIdentifiers(Component component, Component existingComponent) {
