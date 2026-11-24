@@ -17,7 +17,7 @@ import java.util.List;
  * meant to be sent. Anything not listed here is ignored now.
  * <p>
  * The shape on the wire is the one the order form always sent, so no client changes:
- * <pre>{"dueDate": "2026-12-01", "orderItems": [{"quantity": 2, "product": {"externalId": 1001}}]}</pre>
+ * <pre>{"dueDate": "2026-12-01", "orderItems": [{"quantity": 2, "product": {"articleNo": 1001}}]}</pre>
  * {@code customer} is for the roles that order on somebody's behalf (ADMIN, MANAGER); a customer's own
  * order takes the logged-in user and ignores it. {@code OrderRequestMapper} turns it into the entity.
  *

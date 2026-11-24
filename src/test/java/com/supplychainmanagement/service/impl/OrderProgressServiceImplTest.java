@@ -15,6 +15,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
+import com.supplychainmanagement.service.OrderWorkflow;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -49,6 +51,9 @@ class OrderProgressServiceImplTest {
     private OrderItemRepository orderItemRepository;
     @Mock
     private ApplicationEventPublisher eventPublisher;
+
+    @Spy
+    private OrderWorkflow workflow = new OrderWorkflowImpl();
 
     @InjectMocks
     private OrderProgressServiceImpl service;
@@ -341,6 +346,23 @@ class OrderProgressServiceImplTest {
         assertThat(event.userId()).isEqualTo(7L);
         assertThat(event.previousStatus()).isEqualTo(OrderStatus.CREATED);
         assertThat(event.newStatus()).isEqualTo(OrderStatus.REJECTED);
+    }
+
+    /**
+     * The workflow is the one list of steps, and this is where it is enforced: a move it does not name is refused
+     * before anything is written, so no history row can describe a step that was never possible.
+     */
+    @Test
+    void changeStatusRefusesAMoveTheWorkflowDoesNotList() {
+        Order order = order(OrderStatus.CREATED);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.changeStatus(order, OrderStatus.DELIVERED, 7L))
+                .isInstanceOf(com.supplychainmanagement.exception.APIException.class)
+                .hasMessageContaining("cannot move from CREATED to DELIVERED");
+
+        assertThat(order.getStatus()).isEqualTo(OrderStatus.CREATED);
+        verify(orderRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     /** A write that changes nothing would read in the history as a step that never happened. */

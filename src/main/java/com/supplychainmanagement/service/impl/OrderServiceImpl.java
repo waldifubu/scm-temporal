@@ -11,6 +11,8 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.OrderAction;
+import com.supplychainmanagement.service.OrderWorkflow;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.repository.OrderRepository;
@@ -47,14 +49,9 @@ public class OrderServiceImpl implements OrderService {
     private static final LocalTime END_OF_WORKING_DAY = LocalTime.of(17, 0);
 
     /**
-     * An order that ended is not cancelled, it is over.
-     */
-    private static final Set<OrderStatus> ENDED_STATUSES =
-            EnumSet.of(OrderStatus.REJECTED, OrderStatus.COMPLETED);
-
-    /**
-     * From here on the goods are in a shipment, and it is the shipment that gets called off -
-     * POST /shipments/{id}/cancel, which hands the packages back and lets the orders fall with them.
+     * Only for the wording of a refused cancellation: from here on the goods are in a shipment, and it is
+     * the shipment that gets called off - POST /shipments/{id}/cancel, which hands the packages back and lets
+     * the orders fall with them. Whether a cancellation is allowed is {@link OrderWorkflow}'s to say.
      */
     private static final Set<OrderStatus> DISPATCH_STATUSES = EnumSet.of(
             OrderStatus.READY_FOR_DISPATCH, OrderStatus.IN_TRANSIT,
@@ -66,6 +63,7 @@ public class OrderServiceImpl implements OrderService {
     private final ProductionService productionService;
     private final OrderProgressService orderProgress;
     private final FulfillmentService fulfillmentService;
+    private final OrderWorkflow workflow;
     /**
      * Working days from acknowledgement to delivery when every line is covered by stock today.
      */
@@ -233,6 +231,11 @@ public class OrderServiceImpl implements OrderService {
         return OrderNumberScrambler.orderNoFor(counter);
     }
 
+    /** "CREATED or REVIEW" - the statuses of a set, in the order the enum declares them. */
+    private static String names(Set<OrderStatus> statuses) {
+        return statuses.stream().map(Enum::name).collect(Collectors.joining(" or "));
+    }
+
     /**
      * The guard is "CREATED or REVIEW" rather than "not already acknowledged": unlike a rejection,
      * which stays possible right up to fulfillment, a confirmation only makes sense while the order is
@@ -242,9 +245,10 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public Order accept(Order order, Long userId) {
-        if (order.getStatus() != OrderStatus.CREATED && order.getStatus() != OrderStatus.REVIEW) {
+        if (!workflow.allows(order.getStatus(), OrderAction.ACCEPT)) {
             throw new APIException(HttpStatus.BAD_REQUEST,
-                    "Only an order in CREATED or REVIEW can be accepted, this one is " + order.getStatus());
+                    "Only an order in " + names(workflow.sourcesOf(OrderAction.ACCEPT))
+                            + " can be accepted, this one is " + order.getStatus());
         }
 
         // Asked once and used twice: the same answer decides the promised date and the status, and
@@ -274,8 +278,9 @@ public class OrderServiceImpl implements OrderService {
                     + order.getStatus() + " and cannot be put under review");
         }
 
-        if (order.getStatus() != OrderStatus.CREATED && order.getStatus() != OrderStatus.REVIEW) {
-            throw new APIException(HttpStatus.CONFLICT, "Only an order in CREATED or REVIEW can be put under review, order "
+        if (!workflow.allows(order.getStatus(), OrderAction.REVIEW)) {
+            throw new APIException(HttpStatus.CONFLICT, "Only an order in "
+                    + names(workflow.sourcesOf(OrderAction.REVIEW)) + " can be put under review, order "
                     + order.getOrderNo() + " is " + order.getStatus());
         }
 
@@ -359,15 +364,7 @@ public class OrderServiceImpl implements OrderService {
         if (order.getStatus() == OrderStatus.REJECTED) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Order is already rejected");
         }
-        if (order.getStatus() == OrderStatus.COMPLETED || order.getStatus() == OrderStatus.CANCELLED) {
-            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
-                    + order.getStatus() + " and cannot be rejected");
-        }
-        if (order.getStatus() == OrderStatus.DELIVERED || order.getStatus() == OrderStatus.PARTIALLY_DELIVERED) {
-            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
-                    + order.getStatus() + " and cannot be rejected");
-        }
-        if (order.getStatus() == OrderStatus.IN_TRANSIT || order.getStatus() == OrderStatus.READY_FOR_DISPATCH) {
+        if (!workflow.allows(order.getStatus(), OrderAction.REJECT)) {
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
                     + order.getStatus() + " and cannot be rejected");
         }
@@ -391,6 +388,11 @@ public class OrderServiceImpl implements OrderService {
         if (order.getStatus() == OrderStatus.REJECTED || order.getStatus() == OrderStatus.CANCELLED) {
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
                     + order.getStatus() + " and cannot be completed");
+        }
+
+        if (!workflow.allows(order.getStatus(), OrderAction.COMPLETE)) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + " and cannot be completed yet");
         }
 
         // An order with no lines has nothing that could arrive - undeliveredLines would find nothing
@@ -423,14 +425,13 @@ public class OrderServiceImpl implements OrderService {
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is already cancelled");
         }
 
-        if (ENDED_STATUSES.contains(order.getStatus())) {
+        if (!workflow.allows(order.getStatus(), OrderAction.CANCEL)) {
+            if (DISPATCH_STATUSES.contains(order.getStatus())) {
+                throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                        + order.getStatus() + " - its packages travel in a shipment, call that off instead");
+            }
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
                     + order.getStatus() + " and cannot be cancelled");
-        }
-
-        if (DISPATCH_STATUSES.contains(order.getStatus())) {
-            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
-                    + order.getStatus() + " - its packages travel in a shipment, call that off instead");
         }
 
         List<OrderItem> moved = fulfillmentService.linesPastReservation(order);

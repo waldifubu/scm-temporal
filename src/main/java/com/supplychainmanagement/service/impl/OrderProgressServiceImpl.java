@@ -5,7 +5,11 @@ import com.supplychainmanagement.dto.order.UndeliveredLine;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.OrderItem;
 import com.supplychainmanagement.event.OrderStatusChangedEvent;
+import com.supplychainmanagement.exception.APIException;
+import com.supplychainmanagement.model.enums.OrderAction;
 import com.supplychainmanagement.model.enums.OrderStatus;
+import com.supplychainmanagement.service.OrderWorkflow;
+import org.springframework.http.HttpStatus;
 import com.supplychainmanagement.model.enums.ShipmentStatus;
 import com.supplychainmanagement.repository.OrderItemRepository;
 import com.supplychainmanagement.repository.OrderRepository;
@@ -28,15 +32,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class OrderProgressServiceImpl implements OrderProgressService {
 
-    /**
-     * The stretch of the chain the shipment side owns. Everything before it is the order's own
-     * business - WAIT_SUPPLY is about stock, not about shipments - and the three ends are not steps.
-     * An order outside this range is left alone, in both directions.
-     */
-    private static final Set<OrderStatus> RECOMPUTED_FROM = EnumSet.of(
-            OrderStatus.IN_FULFILLMENT, OrderStatus.READY_FOR_DISPATCH, OrderStatus.IN_TRANSIT,
-            OrderStatus.PARTIALLY_DELIVERED, OrderStatus.DELIVERED);
-
     /** A shipment from here on has left the warehouse's hands - what READY_FOR_DISPATCH reports. */
     private static final Set<ShipmentStatus> HANDED_OVER = EnumSet.of(
             ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED,
@@ -51,6 +46,12 @@ public class OrderProgressServiceImpl implements OrderProgressService {
     private final OrderRepository orderRepository;
     private final OrderItemRepository orderItemRepository;
     private final ApplicationEventPublisher eventPublisher;
+    /**
+     * The stretch of the chain the shipment side owns is {@code SHIPMENT_PROGRESS} here: everything before it is the
+     * order's own business - WAIT_SUPPLY is about stock, not about shipments - and the ends are not steps. An order
+     * outside it is left alone, in both directions. {@link #changeStatus} refuses a move the workflow does not list.
+     */
+    private final OrderWorkflow workflow;
 
     /**
      * Loaded with their lines: where an order stands depends on them, and findWithOrderItemsByIdIn
@@ -68,7 +69,7 @@ public class OrderProgressServiceImpl implements OrderProgressService {
                 .collect(Collectors.groupingBy(ShippedQuantity::orderId));
 
         for (Order order : orderRepository.findWithOrderItemsByIdIn(orderIds)) {
-            if (!RECOMPUTED_FROM.contains(order.getStatus())) {
+            if (!workflow.allows(order.getStatus(), OrderAction.SHIPMENT_PROGRESS)) {
                 continue;
             }
             changeStatus(order, statusOf(order, shipped.getOrDefault(order.getId(), List.of())), userId);
@@ -169,6 +170,12 @@ public class OrderProgressServiceImpl implements OrderProgressService {
         }
 
         OrderStatus previousStatus = order.getStatus();
+        // Checked before anything is written: a step the workflow does not list is a bug in the caller, and the
+        // history must not record it. A new order has no previous status, and recordCreated does not come here.
+        if (previousStatus != null && !workflow.allowsMove(previousStatus, target)) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " cannot move from "
+                    + previousStatus + " to " + target);
+        }
         order.setStatus(target);
         orderRepository.save(order);
         eventPublisher.publishEvent(new OrderStatusChangedEvent(order.getId(), userId, previousStatus, target));

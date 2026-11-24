@@ -29,6 +29,12 @@ Thymeleaf site.
 
 ## Order workflow
 
+The rules below live in **one table**, `OrderWorkflow` (`OrderWorkflowImpl`): statuses, the steps between them, who takes
+them and what else has to hold. The services ask it instead of keeping lists of their own, `changeStatus` refuses a move
+it does not list, and `GET /orders/workflow` hands it to a client - the order page of the frontend offers its action buttons (review, accept, release,
+reject, cancel, complete) from it, by status and role. It is a pure function with no collaborators, so it can
+later be moved onto Temporal as the workflow definition (activities stay the existing services).
+
 Every `Order` moves through a coarse-grained `OrderStatus` state machine. The diagram reflects what
 is actually implemented today — including which HTTP calls trigger which transition:
 
@@ -568,7 +574,7 @@ answering.
 | Layer          | Technology                                                                  |
 |----------------|-----------------------------------------------------------------------------|
 | Language       | Java 25                                                                     |
-| Framework      | Spring Boot 4.1.0 (Web MVC), Spring Security 7                              |
+| Framework      | Spring Boot 4.2.0 (Web MVC, Spring Framework 7.1), Spring Security 7        |
 | Persistence    | Spring Data JPA / Hibernate ORM 7, MariaDB (`MariaDBDialect`) |
 | JSON           | Jackson 3 (`tools.jackson`) — see the note below                            |
 | Auth           | JWT (`jjwt`), BCrypt/Argon2 via BouncyCastle                                 |
@@ -577,7 +583,7 @@ answering.
 | Testing        | JUnit 5, Mockito, AssertJ, standalone MockMvc                               |
 | Build          | Maven (wrapper included: `mvnw` / `mvnw.cmd`)                               |
 
-> **Jackson 2 and 3 coexist here.** Spring Boot 4.1 auto-configures **Jackson 3**
+> **Jackson 2 and 3 coexist here.** Spring Boot 4.2 auto-configures **Jackson 3**
 > (`tools.jackson.databind`), and that is what serializes the API responses — inject
 > `tools.jackson.databind.ObjectMapper`, there is no bean for the Jackson 2 one. Jackson 2
 > (`com.fasterxml.jackson.databind`) stays on the classpath because `jjwt-jackson` needs it; do not
@@ -942,6 +948,8 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `POST /auth/register` — the administrator's registration, takes any role | ADMIN |
 | | `GET /me` — who is logged in, **every** role (`UserDto`, role names as the enum: `WAREHOUSE`, ...). Works with the `HttpOnly` session cookie alone, which is what a browser has after a reload | any authenticated role |
 | Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change)*, `GET /orders/{orderNo}/shipments` *(the shipments the order travels in; the carrier's name for staff only)*, `POST /orders`, `POST /orders/{orderNo}/accept`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, WAREHOUSE, CUSTOMER for `GET /orders` (a customer sees only their own orders, the other three all of them); `/new` ADMIN, MANAGER and WAREHOUSE (read-only), `/accept`, `/reject` and `/cancel` ADMIN and MANAGER only, `/complete` ADMIN, MANAGER and the order's own CUSTOMER; the lines of an order (`OrderItemDto`) name their product by `articleNo` and `sku`, `GET /{orderNo}`, `GET /history/{orderNo}` and `GET /{orderNo}/shipments` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
+| | `GET /orders/workflow` — the order workflow as data: `initialStatus`, `statuses` and every step `{from, to, action, trigger, actors, automatic, condition?}` (`trigger` `MANUAL` or `COMPUTED`; `COMPUTED` steps follow from the shipments and are never asked for). The same for every caller. The frontend reads its manual steps to decide which buttons an order page shows | ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER |
+| | `GET /orders/workflow/diagram` — the same workflow prepared for drawing: `nodes` (`id`, `label`, `description` of the status), `edges` (`from`, `to`, `kind` `FORWARD` or `BACK`, `label?`; shortcuts left out) and `ends` (`REJECTED`, `CANCELLED`). Not specific to any renderer | ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
@@ -1114,6 +1122,8 @@ part of them.
 | `StatusCheckConstraintTest` | that the database takes every status value — `OrderStatus` on the order and in both columns of its history, `FulfillmentStatus` on the order line, `ShipmentStatus` on the shipment (needs a database) |
 | `ShipmentResponseJsonTest`, `ShipmentPrePersistTest` | optional fields left out of the JSON, `CREATED` on insert |
 | `ProductWeightTest` | product weight from components, 0 without |
+| `OrderWorkflowImplTest`, `OrderWorkflowEndpointTest` | the workflow table (every status once, explained and reachable, the ends, the sources of each action, the shortcuts and labels, no step twice, no state or collaborator) and `GET /orders/workflow` and `/workflow/diagram` through the real chain |
+| `OrderWorkflowDiagramServiceImplTest` | what of the table is drawn: the exact arrows, shortcuts left out, the ends without arrows, back arrows labelled |
 | `ComponentProductCrudEndpointTest` | the product's weight following a component being created, patched and deleted, and the component answering `externalId` |
 | `RecycleEmptyPackageEndpointTest` | recycling: only an empty `OPEN` package is deleted, every other state a 409, unknown id a 404, who may call it |
 | `RegisterEndpointsTest` | `/auth/register` for ADMIN only (and public login unaffected), `/auth/userregister` for every role but `ADMIN` |

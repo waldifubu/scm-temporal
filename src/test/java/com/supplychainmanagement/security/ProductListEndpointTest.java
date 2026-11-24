@@ -69,8 +69,8 @@ class ProductListEndpointTest {
         List<Long> wanted = mine.stream().map(Product::getArticleNo).toList();
         List<Long> numbers = new ArrayList<>();
         page.get("content").forEach(row -> {
-            if (wanted.contains(row.get("externalId").asLong())) {
-                numbers.add(row.get("externalId").asLong());
+            if (wanted.contains(row.get("articleNo").asLong())) {
+                numbers.add(row.get("articleNo").asLong());
             }
         });
         return numbers;
@@ -113,9 +113,9 @@ class ProductListEndpointTest {
         Product third = testData.product();
         List<Product> mine = List.of(first, second, third);
 
-        assertThat(articleNos(page("/products?size=500&sort=externalId&order=DESC", RoleEnum.ADMIN), mine))
+        assertThat(articleNos(page("/products?size=500&sort=articleNo&order=DESC", RoleEnum.ADMIN), mine))
                 .containsExactly(third.getArticleNo(), second.getArticleNo(), first.getArticleNo());
-        assertThat(articleNos(page("/products?size=500&sort=externalId&order=ASC", RoleEnum.ADMIN), mine))
+        assertThat(articleNos(page("/products?size=500&sort=articleNo&order=ASC", RoleEnum.ADMIN), mine))
                 .containsExactly(first.getArticleNo(), second.getArticleNo(), third.getArticleNo());
     }
 

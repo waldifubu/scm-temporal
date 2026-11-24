@@ -183,6 +183,13 @@
             <version>0.13.0</version>
             <scope>runtime</scope>
         </dependency>
+
+        <!-- Source: https://mvnrepository.com/artifact/io.temporal/temporal-spring-boot-starter -->
+        <dependency>
+            <groupId>io.temporal</groupId>
+            <artifactId>temporal-spring-boot-starter</artifactId>
+            <version>1.41.1</version>
+        </dependency>
     </dependencies>
 
     <build>
@@ -244,7 +251,7 @@
                                 <path>
                                     <groupId>org.mapstruct</groupId>
                                     <artifactId>mapstruct-processor</artifactId>
-                                    <version>1.7.0.Beta1</version>
+                                    <version>1.7.0.Beta2</version>
                                 </path>
                                 <path>
                                     <groupId>org.projectlombok</groupId>

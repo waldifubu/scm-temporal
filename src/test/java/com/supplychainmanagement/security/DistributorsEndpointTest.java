@@ -85,7 +85,7 @@ class DistributorsEndpointTest {
     void listsAnActiveCarrierWithTheDetailsOfAUser() throws Exception {
         Distributor carrier = distributor();
 
-        JsonNode found = row(content(get("/users/distributors?size=500", RoleEnum.LOGISTICS)), carrier.getId());
+        JsonNode found = row(content(get("/users/distributors?size=500", RoleEnum.ADMIN)), carrier.getId());
 
         assertThat(found).isNotNull();
         assertThat(found.get("firstName").asString()).isEqualTo("Role");
@@ -129,20 +129,20 @@ class DistributorsEndpointTest {
         distributor();
         distributor();
 
-        JsonNode content = content(get("/users/distributors?size=500&sort=email&order=DESC", RoleEnum.MANAGER));
+        JsonNode content = content(get("/users/distributors?size=500&sort=email&order=DESC", RoleEnum.ADMIN));
 
         List<String> emails = new java.util.ArrayList<>();
         content.forEach(row -> emails.add(row.get("email").asString()));
         assertThat(emails).hasSizeGreaterThanOrEqualTo(2).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
 
-    /** The planning side and the people above it - and nobody else. */
+    /** The administrator only; the planning side asks {@code QUERY /users/distributors/query} instead. */
     @Test
-    void opensTheListToAdminManagerAndLogisticsOnly() throws Exception {
+    void opensTheListToAdminOnly() throws Exception {
         assertThat(get("/users/distributors", RoleEnum.ADMIN).getStatus()).isEqualTo(200);
-        assertThat(get("/users/distributors", RoleEnum.MANAGER).getStatus()).isEqualTo(200);
-        assertThat(get("/users/distributors", RoleEnum.LOGISTICS).getStatus()).isEqualTo(200);
 
+        assertThat(get("/users/distributors", RoleEnum.MANAGER).getStatus()).isEqualTo(403);
+        assertThat(get("/users/distributors", RoleEnum.LOGISTICS).getStatus()).isEqualTo(403);
         assertThat(get("/users/distributors", RoleEnum.WAREHOUSE).getStatus()).isEqualTo(403);
         assertThat(get("/users/distributors", RoleEnum.DISTRIBUTOR).getStatus()).isEqualTo(403);
         assertThat(get("/users/distributors", RoleEnum.CUSTOMER).getStatus()).isEqualTo(403);
@@ -151,7 +151,7 @@ class DistributorsEndpointTest {
     /** The literal segment has to win over {@code GET /users/{id}}, which would answer 400 for "distributors". */
     @Test
     void isNotMistakenForAUserId() throws Exception {
-        assertThat(get("/users/distributors", RoleEnum.LOGISTICS).getStatus()).isEqualTo(200);
+        assertThat(get("/users/distributors", RoleEnum.ADMIN).getStatus()).isEqualTo(200);
     }
 
     /** What stays closed: LOGISTICS may read the carriers, not the user list. */

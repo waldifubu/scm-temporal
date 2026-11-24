@@ -25,7 +25,7 @@ public class ProductController {
     private final ProductMapper productMapper;
 
     /** What a product list can be sorted by: the product's own columns, anything else is a 400. */
-    static final Set<String> PRODUCT_SORTABLE = Set.of("id", "externalId", "name", "unitPrice", "weight", "createdAt",
+    static final Set<String> PRODUCT_SORTABLE = Set.of("id", "articleNo", "name", "unitPrice", "weight", "createdAt",
             "updatedAt", "active");
 
     /**

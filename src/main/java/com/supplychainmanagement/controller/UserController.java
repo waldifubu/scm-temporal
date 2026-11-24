@@ -106,7 +106,7 @@ public class UserController {
 
     @NoCheck
     @PostMapping(path = "", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN')")
     public ResponseEntity<UserDto> create(@RequestBody UserRequestDto request,
                                           @AuthenticationPrincipal org.springframework.security.core.userdetails.User authUser) {
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -140,7 +140,8 @@ public class UserController {
     @DeleteMapping(path = "/{id}", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN')")
     public void delete(@PathVariable Long id) {
-        userService.deleteById(id);
+        // @TODO: Is deletion of users allowed? If yes, then we need to check if the user has any active orders or shipments before deleting. If not, we should throw an exception.
+        //userService.deleteById(id);
     }
 
     private PageResponse<UserDto> toPageResponse(Page<User> page) {

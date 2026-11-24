@@ -16,6 +16,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
+import com.supplychainmanagement.service.OrderWorkflow;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -55,6 +57,9 @@ class OrderServiceCompleteTest {
     private ProductionService productionService;
     @Mock
     private OrderProgressService orderProgress;
+
+    @Spy
+    private OrderWorkflow workflow = new OrderWorkflowImpl();
 
     @InjectMocks
     private OrderServiceImpl service;

@@ -59,10 +59,9 @@ class UserMapperTest {
                 .doesNotContain("password")
                 .doesNotContain(PASSWORD_HASH)
                 .doesNotContain("lastLogin")
-                .doesNotContain("userType")
                 .doesNotContain("createdAt")
                 .doesNotContain("updatedAt");
-        assertThat(json).contains("\"username\":\"ada\"", "\"roles\":[\"CUSTOMER\"]");
+        assertThat(json).contains("\"username\":\"ada\"", "\"roles\":[\"CUSTOMER\"]", "\"userType\":\"customer\"");
     }
 
     @Test

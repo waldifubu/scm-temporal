@@ -18,6 +18,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
+import com.supplychainmanagement.service.OrderWorkflow;
 import org.mockito.Mock;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -61,6 +63,9 @@ class OrderServiceCancelTest {
     private OrderProgressService orderProgress;
     @Mock
     private FulfillmentService fulfillmentService;
+
+    @Spy
+    private OrderWorkflow workflow = new OrderWorkflowImpl();
 
     @InjectMocks
     private OrderServiceImpl service;

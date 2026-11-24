@@ -60,7 +60,7 @@ class OrderCreateEndpointTest {
 
     private String body(Product product, int quantity) {
         return "{\"dueDate\":\"" + LocalDate.now().plusDays(30) + "\",\"orderItems\":[{\"quantity\":" + quantity
-                + ",\"product\":{\"externalId\":" + product.getArticleNo() + "}}]}";
+                + ",\"product\":{\"articleNo\":" + product.getArticleNo() + "}}]}";
     }
 
     @Test
@@ -78,7 +78,7 @@ class OrderCreateEndpointTest {
         User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
         Product product = testData.product();
         String json = "{\"orderNo\":12345,\"status\":\"COMPLETED\",\"total\":1,\"id\":99999999,"
-                + "\"orderItems\":[{\"quantity\":2,\"product\":{\"externalId\":" + product.getArticleNo() + "}}]}";
+                + "\"orderItems\":[{\"quantity\":2,\"product\":{\"articleNo\":" + product.getArticleNo() + "}}]}";
 
         MockHttpServletResponse response = post("/orders", customer, json);
 
@@ -90,7 +90,7 @@ class OrderCreateEndpointTest {
     void aLineWithoutAQuantityIsA400NamingTheField() throws Exception {
         User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
         Product product = testData.product();
-        String json = "{\"orderItems\":[{\"product\":{\"externalId\":" + product.getArticleNo() + "}}]}";
+        String json = "{\"orderItems\":[{\"product\":{\"articleNo\":" + product.getArticleNo() + "}}]}";
 
         MockHttpServletResponse response = post("/orders", customer, json);
 

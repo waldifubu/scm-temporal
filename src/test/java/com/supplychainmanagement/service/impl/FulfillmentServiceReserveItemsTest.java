@@ -27,6 +27,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
+import com.supplychainmanagement.service.OrderWorkflow;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -83,6 +85,9 @@ class FulfillmentServiceReserveItemsTest {
     /** Only here so the constructor of the service can be filled; {@code reserveItems} does not ask it. */
     @Mock
     private StockService stockService;
+
+    @Spy
+    private OrderWorkflow workflow = new OrderWorkflowImpl();
 
     @InjectMocks
     private FulfillmentServiceImpl service;

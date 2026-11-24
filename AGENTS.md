@@ -1,11 +1,11 @@
-# AGENTS.md
+# CLAUDE.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project
 
-Supply Chain Management demo app: Spring Boot 4.1.0 (Java 25) backend with two parallel UIs —
-a Vaadin/React admin UI and a classic Thymeleaf server-rendered site — plus a JSON REST API.
+Supply Chain Management demo app: Spring Boot 4.2.0 (Java 25) backend with two parallel UIs —
+a Vaadin (plain Java) admin UI and a classic Thymeleaf server-rendered site — plus a JSON REST API.
 Database is MariaDB, accessed via Spring Data JPA/Hibernate.
 
 ## Commands
@@ -36,7 +36,8 @@ migration logic in `config/` exists because of this server's behaviour (inline c
 `innodb_snapshot_isolation`), and H2 would pass what MariaDB fails.
 
 **A context test creates the rows it needs** through `support/TestData` (`@Import(TestData.class)`):
-`customer()`, `supplier()`, `product()`, `component()`, `storehouse()`. They used to be taken from
+`customer()`, `supplier()`, `product()`, `component()`, `storehouse()`, and for the order side `userWithRoles(...)`,
+`order(...)`, `orderItem(...)`, `consumedReservation(...)`, `packedQuantity(...)` and `historyRow(...)`. They used to be taken from
 the database with `findAll().getFirst()`, which only worked against a populated development schema.
 Everything `TestData` makes is created inside the test's transaction and rolls back with it, so two
 runs see the same thing - unique columns (`users.email`, `users.username`, `products.article_no`,
@@ -58,6 +59,25 @@ mvn -Dspring-boot.run.profiles=dev spring-boot:run
 Default port is 8080 (`server.port` in `application.properties`). Logs are written to
 `logs/app-${server.port}.log` in addition to stdout — tail that file to check startup status
 (look for `Started Application` vs `APPLICATION FAILED TO START`).
+
+**Faster startup: the AOT cache** (Project Leyden, JEP 483/514, JDK 25; `scripts/aot-cache.ps1`, Maven profile
+`aot-cache`; `scripts/aot-cache.sh` is the same for Linux/macOS, with `--profile`/`--verify` and the application's
+arguments after `--`). `scripts/aot-cache.ps1` packages the jar, extracts it (`-Djarmode=tools ... extract`, into `target/aot`),
+runs one training start (`-XX:AOTCacheOutput`, `spring.context.exit=onRefresh`, random port, no browser) and then
+starts with `-XX:AOTCache`. Measured 2026-11-09: "Started Application" after **3.4 s** with the cache, 5.8 s from the
+same jar without, 9.4 s with `mvn spring-boot:run`. `build` takes about 70 s, so it pays for repeated starts of an
+unchanged build, not for the edit-run cycle.
+<br>**The profile exists because the ordinary jar cannot start**: `vaadin-dev` is `optional` and is left out of it
+("'vaadin-dev-server' not found" - that jar would need a production frontend build, which this repository does not
+have). `aot-cache` sets `includeOptional`, so the jar runs in Vaadin's dev mode like `spring-boot:run` does. Dev mode
+looks for the Maven project in the **working directory**, so the jar is started from the project root, not from
+`target/aot` ("does not look like a Maven or Gradle project" otherwise).
+<br>**The cache belongs to one jar, its libraries and one JDK.** After any change it no longer matches and the JVM
+ignores it *silently* - a normal-speed start, no error. `run -Verify` adds `-Xlog:aot=info`; "Opened AOT cache" is the
+line to look for (one "Failed to link AdapterHandlerEntry" warning is JDK 25's own and harmless). Training starts the
+real context, so it needs the database. The cache only covers classes from jars - never `target/classes`, which is why
+`spring-boot:run` cannot use it - and the `--add-opens` in the plugin's `jvmArguments` is for `spring-boot:run` only;
+the jar starts without it. Not done: Spring's own AOT processing (`process-aot`) and a container image.
 
 **There is no JavaScript project in this repository.** No `package.json`, no `vite.config.ts`, no
 `src/main/frontend`, no `src/main/bundles`: they were removed on purpose, a React frontend is to live
@@ -129,6 +149,33 @@ is answered *before* the password is checked, so it does say that the account ex
 <br>For a client: a 401 from any endpoint except the login call means the session is over; a 401 *from*
 the login call means the credentials were wrong. The status does not tell them apart, the endpoint does.
 
+**A refresh token renews the session without a password** (`RefreshTokenService`, `RefreshToken`, `POST /auth/refresh`).
+The access token is short on purpose (`app.jwtExpirationMs`, **15 minutes**); login also sets a second `HttpOnly` cookie,
+`scmrefresh` (`app.refresh.cookie.name`), `SameSite=Strict`, with `Path=/api/<default version>/auth` - a browser sends it to
+the auth space and nowhere else, so **a client has to call the versioned `/api/1.0/auth/refresh`**; through the unversioned
+alias the cookie is not sent. It is never in a response body.
+<br>**Opaque, stored as a hash, rotated.** 256 random bits; the table `refresh_token` holds the SHA-256 only. Every refresh
+retires the token it was given (`usedAt`) and issues the next one into the same **family** (the chain of one login). A retired
+token shown again **after `app.refresh.graceSeconds` (20)** means a copy was kept: the whole family is revoked, the newest
+token included, and the answer is the same 401 as for any bad token ("Invalid refresh token" - one text for unknown, expired,
+revoked and replayed). Inside the grace window it is accepted once more (two tabs refreshing together) and forks the chain.
+The row is read `FOR UPDATE`. `rotate` is `noRollbackFor = APIException.class` because the replay branch revokes and *then*
+answers 401 - a default rollback would undo the revocation - and `AuthServiceImpl.refresh` is deliberately **not**
+`@Transactional` for the same reason (an outer transaction would roll the inner commit back as the exception passes it).
+`RefreshTokenEndpointTest` runs inside a test transaction and therefore **cannot see** that rollback; the two annotations are
+held by this note, not by a test.
+<br>**Two ends**: a token lives `app.refresh.idleDays` (7) from when it was issued, the family ends `app.refresh.maxDays` (30)
+after the login whatever the activity (`familyExpiresAt`, carried unchanged along the chain). A disabled account is a 403 at
+refresh, as at login; the lock from failed password attempts is not asked (nobody typed a password). The roles of the new
+access token are read from the database at that moment.
+<br>**Ended by**: logout (`POST /auth/logout`, the `GET` still works and does the same; both clear the two cookies and revoke
+the family of the cookie they carry), a changed password (`UserServiceImpl.update` revokes every session of that user), and a
+nightly sweep (`RefreshTokenService.sweep`) of expired rows and tokens retired more than a day ago.
+<br>For a client: a 401 from any endpoint except login and refresh means *try `/auth/refresh` once, repeat the call, and only if
+the refresh answers 401 as well the session is over*. Let parallel 401s share one refresh (single flight). Held by
+`RefreshTokenEndpointTest` (clock moved by hand: grace window, replay, idle end, absolute end, disabled, logout, cookie flags).
+`application-prod.properties` now has the 15 minutes (`app.jwtExpirationMs=900000`) as well.
+
 **The CORS origin is configuration, and empty means none.** `app.cors.allowedOrigins` is a comma
 separated list (`SecurityBeanConfig.parseOrigins`: trimmed, blanks dropped, a trailing slash removed -
 the `Origin` header never has one, so an origin written with it would never match and fail without
@@ -181,6 +228,14 @@ else (`ApiVersionDefaultFilter`).
 <br>The old path is gone, not aliased: `/api/1.0/auth/me` answers 404 (`MeEndpointTest`). That test
 also holds the `HttpOnly`-cookie case, that the filter really reads a token on `/me`, and that login and
 logout stayed public.
+
+**Two ways to register** (`AuthApiController`, `RegisterEndpointsTest`): `POST /auth/register` is the **administrator's** call and takes any role
+(`AuthService.register`); `POST /auth/userregister` is **public** and takes any role **except ADMIN** (403, `AuthService.registerUser`) - before this,
+`/auth/register` was public with a free `role` field, so anybody could make themselves an administrator. `/auth/register` is the one carve-out under
+`/auth`: `JwtAuthenticationFilter.ADMIN_REGISTRATION_PATTERN` makes the filter read the token there, `SpringSecurityConfig` demands `hasAuthority("ADMIN")`
+**before** the `/auth/**` permitAll (first match wins), and the method carries `@PreAuthorize` as a second line. Too wide a carve-out and `/auth/login`
+loses its public status, too narrow and the admin has no principal - `RegisterEndpointsTest` holds both directions. `ApiDocumentCustomizer` does not mark
+`/auth/register` public, so the description lists its `x-roles`. The controller no longer catches `RuntimeException`; `APIException`s answer through the handler.
 
 **The API describes itself in OpenAPI** (springdoc 3.1.1, `OpenApiConfig`): `/v3/api-docs` and, to try it
 from, `/swagger-ui.html`. It is **off unless somebody turned it on** - springdoc is on by default, and what
@@ -246,6 +301,60 @@ responsibilities — read all of them together before changing reservation/fulfi
   an order of which something has arrived while the rest is still out, and `COMPLETED` comes from
   `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `accept` parks an order whose stock
   is not there, and `CANCELLED` comes from `POST /orders/{orderNo}/cancel` (both below).
+- **The order workflow is one table, `OrderWorkflow`** (interface in `service`, `OrderWorkflowImpl` in `service/impl`;
+  `OrderAction`, added 2026-11-24): which statuses there are, which step (`ACCEPT`, `REVIEW`, `REJECT`, `CANCEL`, `RESERVE`,
+  `RELEASE`, `SHIPMENT_PROGRESS`, `COMPLETE`) may be taken from which status, where it leads, who takes it
+  (`actors`: the roles of the endpoint), whether a scheduled routine takes it too (`automatic`) and what else has to hold
+  (`condition`, only in words). **The services ask it instead of keeping lists of their own**: `OrderServiceImpl.accept/review/
+  reject/cancel/complete` guard with `workflow.allows(status, action)` (the messages are unchanged, `names(...)` builds the
+  "CREATED or REVIEW" part from the table), `FulfillmentServiceImpl` asks `RESERVE` (it had `PRE_FULFILLMENT_STATUSES`) and
+  `RELEASE`, `OrderProgressServiceImpl.recompute` asks `SHIPMENT_PROGRESS` (it had `RECOMPUTED_FROM`), and
+  **`OrderProgressService.changeStatus` refuses a move the table does not list** (409 `cannot move from A to B`, before anything is
+  written or published). A new status change therefore needs a row in `OrderWorkflowImpl` first - that is the point, a step
+  nobody listed cannot happen. `DELIVERED` is no source of `SHIPMENT_PROGRESS`, so `recompute` leaves a delivered order alone
+  (it could only have written the same status back); `COMPLETE` is taken from `DELIVERED` and `PARTIALLY_DELIVERED` (it used to
+  pass any status that was not an end, on quantities alone - the quantities are still checked in `complete`).
+  <br>**What it does not decide**: anything that depends on data - which target `ACCEPT` takes (stock), whether a line has left the
+  shelf (`CANCEL`), whether everything arrived (`COMPLETE`) - stays in the services; the table only names it as `condition`.
+  <br>**Built to be moved onto Temporal**: `OrderWorkflowImpl` is a pure function of its arguments - no repository, clock, user or
+  other bean, only `static final` constants (`OrderWorkflowImplTest.isAPureFunctionOfItsArguments` reads the fields by
+  reflection) - because workflow code has to replay deterministically. A status is the workflow's state, an `OrderAction` the
+  name of a signal or an update, `transitions()` what it validates them against; reserving, picking and shipping stay activities
+  (the existing services). Do not inject anything into `OrderWorkflowImpl`.
+  <br>**`GET /orders/workflow`** (`OrderWorkflowController`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER - every role that reads
+  orders; same answer for all) hands the table to a client as `OrderWorkflowResponse` `{initialStatus, statuses, transitions[]}`,
+  a step being `{from, to, action, trigger (MANUAL|COMPUTED), actors, automatic, condition?}`. A controller of its own because it
+  needs none of `OrderController`'s collaborators; the literal segment wins over `GET /orders/{orderNo}`. `COMPUTED` rows
+  (`SHIPMENT_PROGRESS`) are the ten forward steps from `IN_FULFILLMENT` on plus `READY_FOR_DISPATCH → IN_FULFILLMENT` (a shipment
+  called off) - they are never asked for, `recompute` works them out. Tests that build one of the three services with
+  `@InjectMocks` need `@Spy OrderWorkflow workflow = new OrderWorkflowImpl()` (the real table, not a mock).
+  Held by `OrderWorkflowImplTest` (every status once and reachable, the ends, the sources of every action as the services used
+  them, no step twice, pure), `OrderProgressServiceImplTest.changeStatusRefusesAMoveTheWorkflowDoesNotList` and
+  `OrderWorkflowEndpointTest` (roles, 401/403, the JSON).
+  <br>**`GET /orders/workflow/diagram`** (same controller, same roles; `OrderWorkflowDiagramService` / `...Impl`, `OrderWorkflowDiagramResponse`)
+  is the workflow **prepared for drawing**, so a client keeps no copy of the flow: `nodes` (`id`, `label` as words - `WAIT SUPPLY` -,
+  and `description`, what the status means - the text that used to be the frontend's `statusDescriptions.ts`, now
+  `OrderWorkflowImpl.describe`), `edges` (`from`, `to`, `kind` `FORWARD|BACK`, `label?`) and `ends` (where `REJECT`/`CANCEL` lead).
+  The rules (all in `OrderWorkflowDiagramServiceImpl`): one arrow per pair of statuses; the ends get no arrows; a step to an earlier
+  status in `statuses()` is `BACK` and always labelled (the table's `label`, else the action's name); **a step the table declares a
+  `shortcut` is not drawn**. Which steps are shortcuts is the table's call (`Transition.shortcut`: `RESERVE` from `CREATED`/`REVIEW`,
+  the computed steps that skip a status, `COMPLETE` from `PARTIALLY_DELIVERED`) - it is deliberately *not* worked out by a
+  transitive reduction, which would hide `CREATED -> ACKNOWLEDGED` behind the optional `REVIEW` and `IN_TRANSIT -> DELIVERED` behind
+  `PARTIALLY_DELIVERED`. A shortcut is still an allowed step (`changeStatus` lets it through). `Transition.label` ("all released",
+  "shipment cancelled") and `shortcut` are also in `GET /orders/workflow`. Nothing in the answer is Mermaid-specific; the frontend
+  (`features/orders/workflowDiagram.ts`, `flowFrom`) turns it into Mermaid text and keeps a built-in copy only as the fallback for a
+  403 (SUPPLIER, DISTRIBUTOR) or until the answer arrives; its test holds that copy against the backend's arrows.
+  Held by `OrderWorkflowDiagramServiceImplTest` (the exact arrows, the shortcuts, the ends, every back arrow labelled, every drawn
+  arrow allowed by the table), `OrderWorkflowImplTest` (every status explained, the shortcut list, the labels) and
+  `OrderWorkflowEndpointTest`.
+  <br>**`GET /orders/workflow` has a consumer: the buttons of the order page.** The frontend (`features/orders`, `orderWorkflowQueryOptions`,
+  asked once) offers a decision (`decisionsFor`: review, accept, release, reject, cancel) or "Complete Order" (`mayCompleteOrder`) when the table
+  holds a **manual** step (`trigger MANUAL`) from the order's status whose `actors` include one of the user's roles - the lists of statuses
+  and roles it used to keep for them are gone, so a change in `OrderWorkflowImpl` moves the buttons without a frontend change. Computed steps
+  and the system's own (`RESERVE`) never get a button, and **nothing is offered until the table has arrived** (or where it is refused: SUPPLIER,
+  DISTRIBUTOR). Consequence worth knowing: `COMPLETE` is listed from `PARTIALLY_DELIVERED` as well (a shortcut for the drawing, but an allowed
+  step), so "Complete Order" shows there too and the backend answers 409 while a line is still short; to hide it, the table would have to drop
+  that row, not the frontend. Held by the frontend's `orderDecisions.test.ts` and `completeOrder.test.ts` (a fixture shaped like the table).
 - **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
   (`OrderProgressService.recompute`). The shipment side says only *which orders were touched*; where
   each of them stands follows from the **quantities of its lines that sit in shipments**
@@ -268,9 +377,10 @@ responsibilities — read all of them together before changing reservation/fulfi
 - **`OrderItem`** has a finer-grained `FulfillmentStatus` (`WAITING → RESERVED → PICKING → PICKED →
   PACKING → PACKED → READY_FOR_DISPATCH`, plus `CANCELLED`), tracked per line item, and implemented end to end: the
   last step comes from the shipment (`PUT /shipments/{id}/ready`), not from
-  `OrderHandlingService.readyForDispatch()`, which has had **no caller since 2026-09-22**: its
-  endpoint `POST /dispatch/{reservationId}` was commented out and then deleted outright in the same
-  day's clean-up, when `checkShipmentReady` took the step over.
+  `OrderHandlingService.readyForDispatch()`, which **no longer exists**: it had no caller after
+  2026-09-22 - its endpoint `POST /dispatch/{reservationId}` was commented out and then deleted outright in
+  the same day's clean-up, when `checkShipmentReady` took the step over - and the method itself went in the
+  clean-up of 2026-10-05.
   <br>It is not merely redundant but wrong in this model, for two reasons worth keeping. It looks the
   line up **through its reservation** (`findByIdAndStatus(id, CONSUMED)`) - the very row
   `tryToDelete()` exists to sweep away for `READY_FOR_DISPATCH` orders, so the method depends on
@@ -284,8 +394,8 @@ responsibilities — read all of them together before changing reservation/fulfi
 - **`ShipmentPackage`** has `ShipmentPackageStatus` (`OPEN → PACKED → DISPATCHED`): filled while
   `OPEN`, closed by `completePackage`, and `DISPATCHED` when its shipment reports `intransit`.
   **`Shipment`** has `ShipmentStatus` (`CREATED → READY → DISPATCH_REQUESTED → ACCEPTED → IN_TRANSIT
-  → DELIVERED`, plus `CANCELLED`): `CREATED` on insert, `READY` through
-  `PUT /shipments/{id}/ready`, then the carrier's three steps, and `CANCELLED` through
+  → DELIVERED`, plus `CANCELLED` and `DECLINED`): `CREATED` on insert, `READY` through
+  `PUT /shipments/{id}/ready`, then the carrier's steps (accept, or decline, then in transit and delivered), and `CANCELLED` through
   `POST /shipments/{id}/cancel` (see below). `DISPATCH_REQUESTED` comes from `assignDistributor` and
   from nothing else, and `accept` requires it - so the handover to a carrier is a step that has to
   happen, not an optional one.
@@ -378,6 +488,14 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   `reserveItems` lifts such an order to `IN_FULFILLMENT` as soon as stock can be held, and
   `tryToReserve` looks at `WAIT_SUPPLY` next to `IN_FULFILLMENT` for exactly that reason. Without
   both halves the status is a dead end.
+- **There is no `APPROVED`** (removed 2026-11-11): it was reached only by the fallback of `releaseItems`, and `ACKNOWLEDGED` already says accepted. The fallback ends in `REVIEW`, where a manager accepts or rejects again. `ApprovedOrderStatusMigration` (on start, idempotent) moves rows in `orders` and `order_history` to `REVIEW`; the old value stays in the existing CHECK, harmless. `tryToReserve` deliberately does **not** sweep `REVIEW`: an order there is either one a manager is still examining or one that lost all its reservations, and the sweep cannot tell them apart - it would lift the first to `IN_FULFILLMENT` without `accept` or a delivery date. A released order therefore waits for a manager (`accept` or `reject`).
+- **`POST /orders/{orderNo}/review`** (ADMIN, MANAGER; `OrderService.review`) puts an incoming order into `REVIEW`:
+  a manager has picked it up and not yet answered the customer. **Only from `CREATED`, or `REVIEW` where it changes nothing** (409 otherwise, the message names
+  the status); it writes the status through `OrderProgressService.changeStatus` (so the history gets its row) and nothing
+  else - no availability check and no date, those stay with `accept`. Before this endpoint nothing set `REVIEW` at all.
+  `accept` takes an order from `CREATED` **or `REVIEW`** (400 from any other status), so a review has a way out
+  besides `reject`. `OrderReviewEndpointTest` holds the roles, every other status and the stored result,
+  `OrderServiceAcceptTest` the two accepted starting points.
 - **`InventoryService`** (`InventoryServiceImpl`) is the retry/idempotency wrapper around actual
   reservation work — `reserveWithRetry`/`releaseWithRetry`/`consumeWithRetry`, all keyed by the
   numeric `Order.id` (`Long orderId`, not the order number).
@@ -416,6 +534,22 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   failure on line three roll back the line statuses of one and two while their stock has already
   been consumed by the REQUIRES_NEW `consumeWithRetry` - a reservation reading ACTIVE over stock
   that is gone. Per line, everything before the failure stays correctly and completely picked.
+- **A pick is taken back by `POST /release/{reservationId}`** (`PickingController.releasePick`, ADMIN and WAREHOUSE;
+  `OrderHandlingService.unpickReservationById`, `OrderHandlingTransactionService.unpick`): the reservation has to be
+  `CONSUMED` (404 otherwise - an ACTIVE one was never picked, a taken-back one is gone), the line has to be `PICKED` (409
+  from `PACKING` on: the goods are in a package then). The line goes to `WAITING`, the stock goes back onto the shelf
+  through `InventoryService.restoreWithRetry` (`Stock.restore`: `onHand` up, **not** reserved again - `consume` took the
+  reservation with it), and the `CONSUMED` reservation is **deleted** at the end, in that inner `REQUIRES_NEW`
+  transaction: its row holds the line's one slot (`uk_reservation_order_item`), so it would block every later
+  reservation, exactly as a released one would. Same boundary as `pick`, same rule: the line is set first and the stock
+  handed back after, so a failure inside rolls the line back; the reservation is only ever written by the inner
+  transaction, never from the line's. `restore` skips a line without a stock row or a consumed reservation (nothing is
+  deleted then) and `unpick` turns an empty result into a 400. The order is not touched - it stays `IN_FULFILLMENT`
+  and `tryToReserve` picks the waiting line up again. Held by `StockRestoreTest`,
+  `InventoryReservationTransactionServiceTest` (restore), `OrderHandlingTransactionServiceUnpickTest`,
+  `OrderHandlingServiceUnpickTest`, `PickingControllerTest` and the authorization matrix; dropping `Stock.restore` or the
+  delete turns the inventory test red. No context test on purpose: both transactions are `REQUIRES_NEW`, and rows made
+  inside a test's own transaction are invisible to them.
 - **`pick` never writes the reservation itself.** `consume` sets `CONSUMED` and commits in its own
   `REQUIRES_NEW` transaction. The pick transaction took its snapshot before that commit, and MariaDB
   (`innodb_snapshot_isolation`, on by default since 11.6) refuses to update a row that changed after
@@ -517,9 +651,9 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   (`DATA_CHANGEABLE_IN`, 409 from `IN_TRANSIT` on). Shipment first, then its packages in ascending id
   order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
   `@PrePersist`. `shippingAddress` is optional when creating (blank is stored as `null` and left out
-  of the JSON) but required for `GET /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
+  of the JSON) but required for `PUT /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
   also requires every package `PACKED`). A distributor is assigned with
-  `PUT /shipments/{id}/distributor/{distributorId}` only while `READY` or `DISPATCH_REQUESTED`; the
+  `PUT /shipments/{id}/distributor/{distributorId}` only while `READY`, `DISPATCH_REQUESTED` or `DECLINED`; the
   user has to be a `Distributor`, checked on the unproxied instance - 400 otherwise. Read
   `FOR UPDATE` like every other shipment change: it checks a status and writes one
   (`DISPATCH_REQUESTED`, the only code path that sets it). The list
@@ -527,6 +661,18 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   `GET /shipments/packages` is the planning side's list of what it may still ship - see the note on
   the WAREHOUSE/LOGISTICS split further down. `ShipmentResponse`
   names customer and distributor by id and name only, never the `User` entities.
+  <br>**A list row names the distributor too** (`ShipmentListDto.distributorId` / `distributorName`, both `null` until the
+  shipment has been handed to a carrier - the keys stay in the JSON). **The page can be sorted by the two names**:
+  `SHIPMENT_SORTABLE` (shared with `GET /shipments/distributor`) holds `customer.lastName` and `distributor.lastName`
+  next to the shipment's own columns. The second one is a path through an *optional* association, which is the trap:
+  as an inner join every shipment nobody has taken on would vanish from the list the moment that column is clicked - no
+  error, a shorter table. Spring Data sorts through a left join for an optional association, and the list query
+  fetches `customer` and `distributor` through the `@EntityGraph` (to-one, so it stays paged in SQL).
+  `ShipmentListSortTest` holds it with real rows (a shipment without a carrier stays in both directions; names created
+  against the id order). Both list services add **the id as the tie-break** (`findShipments`, `findShipmentsForDistributor`),
+  as `findPackableItems` does. It is held by the two service unit tests, which stub the repository with the exact page
+  asked (`FIRST_PAGE_BY_ID`, the caller's sort with the id after it, and not repeated for a sort by id) - not by the
+  context test: a small table does not reorder its ties on its own, so an endpoint test cannot see it go.
 - **Reporting a shipment ready** (`PUT /shipments/{id}/ready`, `checkShipmentReady`): read
   `FOR UPDATE` and only from `CREATED` (409 - on a shipment already on its way the call would take
   lines packed again in the meantime back to `READY_FOR_DISPATCH`), with a shipping address (409),
@@ -546,10 +692,10 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   path variable, and two queries like every other shipment list. The literal segment wins over
   `GET /shipments/{shipmentId}` in the other controller - `OutboundControllerTest` registers both
   controllers to hold that.
-- **The carrier's three steps** (ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
+- **The carrier's steps** (accept, in transit, delivered - and decline, see below; ADMIN and DISTRIBUTOR, `DeliveryServiceImpl.advance` - the carrier
   side lives in `DeliveryService`, not in `ShipmentService`; `RoleEnum.LOGISTICS` is the inside role
   that plans shipments, which is why it is not called `LogisticsService`). They answer with
-  `DeliveryResponse`: address, package count, weight and package numbers, **no package contents** -
+  `DeliveryResponse`: address, package count, weight and package numbers, the customer's id, `createdAt`, `updatedAt`, `comment` and `distributorComment` (each left out while empty), **no package contents** -
   the carrier is not shown the customer's SKUs and quantities. The steps are:
   `POST /shipments/{id}/accept` (`DISPATCH_REQUESTED` → `ACCEPTED`),
   `POST /shipments/{id}/intransit` (`ACCEPTED` → `IN_TRANSIT`, stamps `shippedAt` and takes the
@@ -561,8 +707,12 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   (`POST /supplier/{requestId}/intransit`) is spelled the same way, so there is one spelling to
   remember now; it used to be hyphenated on that side, which is how the mistake survived.
   <br>There is a fourth, `PATCH /shipments/{id}/trackingnumber` (ADMIN, DISTRIBUTOR): the carrier's
-  own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`), refused once the
-  shipment is `DELIVERED` or `CANCELLED` and only from the assigned distributor. It moves no status
+  own reference, body `{ "trackingNumber": "DHL-123" }` (`TrackingNumberRequest`, at most 70 characters),
+  **settable only in `DISPATCH_REQUESTED` and `ACCEPTED`** (a positive list, `TRACKING_NUMBER_CHANGEABLE_IN`;
+  409 otherwise) and only from the assigned distributor. **From `IN_TRANSIT` on it is fixed** - it is what the customer
+  is told to follow - and it was not before: the check refused only `DELIVERED`/`CANCELLED`, later `DECLINED`, so a
+  carrier could still change the number of a shipment on the road, and a `CREATED`/`READY` shipment (no carrier
+  assigned) ended in a NullPointerException, a 500, on the missing assignment. It moves no status
   and takes no order along. The body used to be a bare `@RequestBody String` - not a JSON object at
   all; the length bound now lives in one place (`TrackingNumberRequest.MAX_LENGTH`) and the service
   reads it from there, because the service is also reachable from inside, where no bean validation
@@ -584,11 +734,14 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   **`OrderProgressService.recompute`**, not the shipment. It publishes the `OrderStatusChangedEvent`
   and runs `Propagation.MANDATORY` - without the caller's transaction an `AFTER_COMMIT` listener
   would drop the event, so it refuses to run outside one.
-- **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN and MANAGER,
-  `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. Checked on
+- **Closing an order** (`POST /orders/{orderNo}/complete`, ADMIN, MANAGER **and CUSTOMER**,
+  `OrderService.complete`): the commercial end, and the only way to `COMPLETED`. The customer confirms that the goods
+  arrived, for their **own** order only: the order is fetched through `findByOrderNoForUser` (403 for somebody else's,
+  like `GET /orders/{orderNo}`); the rules below hold for every caller. The order page offers "Complete Order" for
+  `DELIVERED` to the customer, the manager and the admin. `OrderCompleteAccessTest` holds the access. Checked on
   **quantities**, not on statuses: every line has to be covered by `PackageItem`s that travelled in
-  shipments reporting `DELIVERED` (`OrderItemRepository.findDeliveredQuantities`,
-  `OrderProgressService.undeliveredLines`). Counting lines would not do - a line may be packed in
+  shipments reporting `DELIVERED` (`OrderItemRepository.findShippedQuantities`, whose `DELIVERED` rows
+  `OrderProgressService.undeliveredLines` reads off). Counting lines would not do - a line may be packed in
   several runs and travel in several shipments, so 5 of 10 delivered is not a delivered line. Every
   join of that query is an inner one, so a line nothing has arrived for is **missing from the
   result**: coverage is counted from the order's own lines, never from the query alone. Four 409s:
@@ -618,6 +771,19 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   nobody to name). The names come from **one** query for all rows (`userId` is a plain column, not an
   association, so there is nothing to fetch-join), and use `DisplayNames`, the one rule for what a person
   is called that the supplier list and the component requests share.
+- **The shipments of an order** (`GET /orders/{orderNo}/shipments`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS and CUSTOMER;
+  `OrderShipmentService`, `OrderShipmentResponse`): oldest first, one row per shipment the order's packages travel in -
+  status, tracking number, address, `shippedAt`/`deliveredAt`, and the numbers of **this order's** packages in it. It
+  exists because the roles that read an order may not read `/shipments` (ADMIN and LOGISTICS), and because an order
+  has no reference to a shipment - the link runs over the packages (`ShipmentRepository.findByOrderId`, two queries
+  however many shipments). The order is fetched through `findByOrderNoForUser` like the history, so the access rule is
+  the order's (404 unknown, 403 a customer's foreign order). **`distributorName` is staff only** (`canReadAnyOrder`):
+  a customer is told where and when, not which carrier; the key is absent for them and for a shipment nobody took on.
+  An order in no shipment answers `[]`. The order page asks only in `READY_FOR_DISPATCH`, `IN_TRANSIT`,
+  `PARTIALLY_DELIVERED`, `DELIVERED` and `COMPLETED` (`showsShipments`). `OrderShipmentsEndpointTest` holds it with real rows.
+- **`POST /orders` is mapped to `""`, not `"/"`** (`OrderController.createOrder`): Spring does not match a trailing slash, and with `"/"` the order form - which posts to `/orders` - got "Method 'POST' is not supported" (405) for every order. The controller test calls the method directly and could not see it; `OrderCreateEndpointTest` posts the form's body through the real chain (201), and the old mapping turns it red.
+- **The order list follows the same rule** (`GET /orders`, ADMIN, MANAGER, WAREHOUSE and CUSTOMER; `OrderServiceImpl.findAllByUserAndStatus` asks `canReadAnyOrder`): those three see every customer's orders, a customer only their own. It asked `isAdmin` first, then `isPrivilegedUser`, so a manager - who has no orders of their own - was handed the list where *they* are the customer, an empty one, and the warehouse (not on the endpoint at all) a 403 although it may read each single order. `OrderListAccessTest` holds it with real rows; putting `isPrivilegedUser` back turns the warehouse case red. `GET /orders/new` is ADMIN, MANAGER and WAREHOUSE (read only; acknowledging and rejecting stay ADMIN/MANAGER).
+  <br>**A line of an order names its product** (`OrderItemDto.productName`, `articleNo`, `sku`; a line always has a product - `order_items.product_id` is NOT NULL): `articleNo` is what `GET /products/{articleNo}` is addressed by, so a client links the line to the product page and shows the SKU as a tooltip. The product's database id is deliberately not sent - the public view of a product hides it. `OrderReadAccessTest` holds the two keys.
 - **Who may read an order that is not their own is `RoleService.canReadAnyOrder`**: ADMIN, MANAGER,
   WAREHOUSE and LOGISTICS. It is **not** `isPrivilegedUser`, which is ADMIN and MANAGER and answers other
   questions too (which product fields a caller sees, whose orders a list shows). Reading an order asked
@@ -643,8 +809,52 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   <br>`linesPastReservation` and the existing `hasLineBeyondReservation` share one predicate, so the
   rule cannot drift; `CANCELLED` deliberately does not count as past reservation - the line holds
   nothing and nothing moved for it.
+- **The carrier says no** (`POST /shipments/{id}/decline`, ADMIN and DISTRIBUTOR, `OutboundController`,
+  `DeliveryService.declineShipment`): body `{ "reason": "..." }` (`DeclineShipmentRequest`, shaped like
+  `CancelShipmentRequest`, at most 255 characters because the column is a plain `varchar(255)` - a longer one is a 400,
+  not a database 500). `DISPATCH_REQUESTED -> DECLINED` and the reason into **`Shipment.distributorComment`** - the
+  carrier's own note, apart from `comment`, which stays the planner's (a cancellation writes its reason into
+  `comment`, a decline never does). **It does nothing else, on purpose**: the packages stay in the shipment, no
+  line and no order moves, `OrderProgressService` is not asked. DISPATCH_REQUESTED only, like `accept` - declining
+  what was offered, before anything was promised; after `accept`, backing out is a cancellation (409 otherwise).
+  Only the assigned distributor (403 for another one, asked before the status), ADMIN exempt, blank reason 400.
+  Both answers show the reason: `DeliveryResponse.distributorComment` and `ShipmentResponse.distributorComment`
+  (left out while null). `shipment.status` needed its CHECK widened for the new value:
+  `StatusCheckConstraintMigration` covers it now, and `StatusCheckConstraintTest.takesEveryShipmentStatus` writes
+  every value. `DeliveryServiceImplTest`, `OutboundControllerTest` and `ShipmentDeclineTest` (real chain and rows)
+  hold it; four mutations - ownership, status, the wrong field, order progress asked as well - turn them red.
+  <br>**`accept` takes the same kind of note** (`POST /shipments/{id}/accept`, body `AcceptShipmentRequest`
+  `{ "reason": "..." }`): kept in `distributorComment` too, so the field is the carrier's note on the shipment whichever
+  way they answered. **Optional here** - the body itself is optional (`@RequestBody(required = false)`, so a client
+  that sends none keeps working), and an empty or blank `reason` leaves the comment as it was; required only for
+  `decline`. At most 255 characters, a 400 above. `DeliveryService.acceptShipment(id, reason, userId)`, with the old
+  two-argument form kept as a default method. The page has one `reason` field above the Accept and Reject buttons
+  and both send it.
+  <br>**The way out of a decline is `PUT /shipments/{id}/distributor/{id}`**: `assignDistributor` takes `DECLINED` next to
+  `READY` and `DISPATCH_REQUESTED` (409 otherwise, the message names all three), hands the shipment to the new carrier
+  (back to `DISPATCH_REQUESTED`) and **clears `distributorComment`** - the note belongs to the carrier who typed it, and
+  the next one is not shown it as if it were about them. The planner's `comment` and the packages are not touched. The
+  first carrier then gets a 403 for the shipment. `ShipmentServiceImplTest` and `ShipmentDeclineTest` hold it. The page
+  offers the button in `DECLINED` (see `ASSIGNABLE_STATES` in the frontend), marking the carrier who said no as
+  "rejected" and not selectable again.
+  <br>**Still not decided, so not done:** `cancel` (`CANCELLABLE_IN`) and the data change (`DATA_CHANGEABLE_IN`) do not
+  list `DECLINED`, so a declined shipment can be handed on but not called off or edited before that, and its packages
+  stay in it until it is. Because no recompute runs on a rejection, its orders keep the status they had until the next
+  shipment event touches them; `OrderProgressServiceImpl` ignores `DECLINED` (not in its coverage sets), so the next
+  recompute sees the shipment as not covering anything. `assignTrackingNumber` refuses a declined shipment (positive
+  list: `DISPATCH_REQUESTED` and `ACCEPTED` only).
 - **Calling a shipment off** (`POST /shipments/{id}/cancel`, ADMIN, LOGISTICS **and DISTRIBUTOR** -
-  one endpoint for both sides): only up to
+  one endpoint for both sides). **A carrier may only call off the shipment assigned to them**
+  (`ShipmentServiceImpl.requireMayCancel`, asked before the status like the carrier's other steps): ADMIN and
+  LOGISTICS - the planning side - may cancel any shipment, the assigned distributor their own, **anybody else with
+  the DISTRIBUTOR role is a 403, and so is a carrier for a shipment nobody has been assigned**. Until 2026-10-25 the
+  endpoint checked nothing of the sort: any carrier could call off any shipment of the house by its id, and the
+  reason they typed replaced the shipment's `comment` (the planner's note). It reads the roles by id
+  (`RoleService.hasAnyRole(userId, roles)`, the general form of `isAdmin(Long)`) because the service only
+  knows the acting user by id. `ShipmentServiceImplTest` (five cases: owner, other carrier, unassigned, owner asked
+  before status, planner for any carrier) and `ShipmentCancelOwnerTest` (real chain and rows) hold it; removing the
+  check or dropping LOGISTICS from the exemption turns both red.
+  <br>Cancelling is only possible up to
   `ACCEPTED` (409 afterwards - once it rolls it is a return, which the process does not model), and
   only with a reason (400), which is kept in `comment`. It undoes what the shipment had set in
   motion: the packages are loose again and stay `PACKED`, lines go from `READY_FOR_DISPATCH` back to
@@ -698,14 +908,24 @@ reconciliation the latter.
 ### Scheduled routines
 
 `AutomaticReservationService` holds what runs without a request; `@EnableScheduling` comes from
-`AutomaticProductionService`. During development the `@Scheduled` annotations of all four routines
-are commented out; the intervals below are the ones they carry. Each works the first 100 orders of
-its status. `AutomaticProductionService.assemble()` on the other hand is active and runs `produce()`
-every 150 s.
+`AutomaticProductionService`. **`tryToReserve()`, `tryToRelease()` and `tryToDelete()` are active**
+(`@Scheduled`, every 150 s - a decision, not an oversight: the sweeps are meant to run); only
+`checkCreatedOrders()` is still commented out. The intervals below are the ones they carry. Each works the
+first 100 orders of its status. `AutomaticProductionService.assemble()` is active as well and runs
+`produce()` every 150 s. Note what that means for `tryToRelease()`: the first expired reservation of an order
+releases **all** of that order's active reservations (see its bullet) - the "Expiry-Sweep" finding in
+`issues.txt` is live, not a risk for when it is switched on.
 
 - `checkCreatedOrders()` (every 300 s) checks coverage per `CREATED` order and accepts the ones
   whose every line is coverable (`orderService.accept(order, null)`). It writes.
-- `tryToReserve()` (every 150 s) calls `reserveItems` for every order in `RESERVABLE_STATUSES` (`IN_FULFILLMENT`, `WAIT_SUPPLY` and the shipment statuses; not `REVIEW`, where a manager decides).
+- `tryToReserve()` (every 150 s) calls `reserveItems` for the orders in `RESERVABLE_STATUSES`: `IN_FULFILLMENT`,
+  `WAIT_SUPPLY` and - since 2026-11-04 - `READY_FOR_DISPATCH`, `IN_TRANSIT` and `PARTIALLY_DELIVERED`. The last three
+  because an order is *computed* from the shipments its lines travel in: one whose other lines are already shipped can
+  still have a line `WAITING`, and with those statuses missing from the sweep that line was never reserved and the
+  order never reached `DELIVERED` (order 4567: three lines delivered, the fourth `WAITING` for good although stock was
+  free). `reserveItems` moves an order's status only out of a pre-fulfillment one, so these stay where they are; the
+  line then goes through pick, pack and a further shipment, and `recompute` does the rest.
+  `AutomaticReservationServiceReserveTest` holds the list.
 - `tryToRelease()` (every 150 s) takes its orders from
   `FulfillmentService.findOrdersWithExpiredReservations()` - every order holding at least one
   reservation past `expiresAt`, each once - and calls `releaseItems` for each. `expiresAt` only
@@ -724,7 +944,7 @@ every 150 s.
   works on `READY_FOR_DISPATCH` orders - so it never did anything, and had it fired it would have been
   wrong: the order follows the shipments its lines travel in, not a bookkeeping row. Reaching the
   order for that call, *after* the delete, was the `LazyInitializationException` the sweep died on.
-  The `systemUser` parameter went with it. The `@Scheduled` is still commented out.
+  The `systemUser` parameter went with it. The `@Scheduled` is active.
 
 There is no open-in-view session out here, so every order reaching these routines has to arrive with
 its `orderItems` already fetched, or it turns into a `LazyInitializationException`.
@@ -807,9 +1027,11 @@ join with ON, because `OrderItem` has no reference to its reservation, and a lef
 long as `uk_reservation_order_item` holds.
 
 **Packages are WAREHOUSE, shipments are LOGISTICS, and the two do not overlap.** Everything under
-`/packages` and `/shipment-packages` is packing work (ADMIN, WAREHOUSE); everything under
+`/packages` and `/shipment-packages` is packing work (ADMIN, WAREHOUSE) - with one exception: LOGISTICS may *read*
+`GET /shipment-packages` and `GET /shipment-packages/{id}`, so the planning side can look into a container (the
+frontend's *Ready for Shipment* detail page uses the single one); `/packages` stays closed to it. Everything under
 `/shipments` is planning (ADMIN, LOGISTICS). LOGISTICS used to have the two package lists as well -
-removed, because the split is meant to be clean. What the planning side needs from them it gets from
+removed once, because the split was meant to be clean; the two reads came back on purpose. What the planning side needs from them it gets from
 a view of its own: **`GET /shipments/packages`** (ADMIN, LOGISTICS,
 `ShipmentService.findShippablePackages`) - the `PACKED` packages that are in no shipment yet, which
 is exactly what `POST /shipments` and `POST /shipments/{id}/packages` take. Same arrangement as
@@ -829,7 +1051,7 @@ orders - because a collection fetch in a paged query makes Hibernate page in mem
 A package row (`ShipmentPackageListDto`) carries its **dimensions** - `length`, `width`, `height`, each under its own
 name and null where the package has none - next to `weight`, `packageWeight` and the `volume` computed from them; the same
 rows come back from `GET /shipment-packages`, `GET /shipment-packages/{id}`, `GET /shipments/packages` and inside
-`ShipmentResponse.packages`, so the planning side can size a shipment without a second call. The row also says **when**:
+`ShipmentResponse.packages`, so the planning side can size a shipment without a second call. The row also names **the customer** (`customerId`, from the order of its first item - a package holds one order's items only; `null` for an empty package; only the id, which the LAZY reference serves without loading it), so the planning side sees which containers belong together. Held by `ShipmentPackageListDtoTest` and `ShippablePackagesEndpointTest` (real rows, two customers). The row also says **when**:
 `createdAt` (the package was made) and `packedAt` (it was completed, `OPEN` to `PACKED` - `null` until then, so the key is
 always there and a client reads "not packed yet" off the null), both as `yyyy-MM-dd HH:mm:ss` like the items in the same row
 (`ShipmentResponse`'s own timestamps are ISO; one package document formats its moments one way). Both columns existed
@@ -877,17 +1099,30 @@ this change would otherwise be unverified.
 
 ### Paged list endpoints
 
-New list endpoints take their parameters through **`PageRequests.of`** (package-private in
+Every paged list takes its parameters through **`PageRequests.of`** (package-private in
 `controller`): it refuses a `sort` that is not on a list the endpoint names, a negative `page` and a
 `size` below one, all as a **400** that says which parameter and what is allowed. Those three used to
 end as a 500 - nothing handles `PropertyReferenceException`, and `PageRequest.of` throws
-`IllegalArgumentException` - for what is a typo in a query string. `/storehouses` and
-`/components/suppliers` use it; the older lists still have the weakness.
+`IllegalArgumentException` - for what is a typo in a query string. The older lists used to have that
+weakness and have none now (18 endpoints are walked by `ListParametersTest`); each controller keeps its whitelist as a package-private constant
+(`OrderController.ORDER_SORTABLE`, `PackingController.ORDER_ITEM_SORTABLE`, `PickingController.PICKING_SORTABLE`,
+`ShipmentController.SHIPMENT_SORTABLE` - shared with `OutboundController` -, `PackageController.PACKAGE_ITEM_SORTABLE` /
+`SHIPMENT_PACKAGE_SORTABLE`, `UserController.USER_SORTABLE`, `StockController.STOCK_SORTABLE`,
+`ComponentController.REQUEST_SORTABLE`, `ProductController.PRODUCT_SORTABLE`).
+<br>**`GET /products` is paged** (`ProductService.findPage`, `{content, total, page, size}`; it answered a bare list of every product before, and the frontend's order form and stock page asked for `size=1000` to keep seeing them all). A page is two queries: the products alone, then - for ADMIN and MANAGER, whose rows carry components and categories - `findWithComponentsByIdIn` for the whole page, because a collection fetch in a paged query pages in memory. The id is the tie-break (`ProductServicePageTest`, mutation red); `ProductListEndpointTest` runs it against real rows.
+<br>**A whitelist entry has to be something the query can resolve**: the entity's property name (`created`,
+not `createdAt`, on an order) or, on a projection, a column of the root alias. A `@Transient` field is not
+one - `Order.amountOfItems` was on the first draft of the order list and ended in a 500 for every sort by it.
+`ListParametersTest` therefore runs **every entry of every whitelist, ascending and descending**, against
+the real queries, not only the typo. `password` is deliberately not on the user list.
+<br>`GET /orders?status=` is text and parsed by hand (`OrderController.parseStatus`): an unknown status is a 400
+naming the valid ones, no longer the 500 of `valueOf`.
+<br>**`status` also takes two groups**: `ALL` (every status) and `NOT_COMPLETED` (everything but `COMPLETED`; the manager's view of open work), resolved by `OrderController.statusGroup` and read through `OrderRepository.findAllByStatusIn` / `findAllByCustomerAndStatusIn` (`OrderService.findAllByUserAndStatuses`, same `canReadAnyOrder` rule). Held by `OrderListAccessTest`.
 
 Every list endpoint follows `OrderController.list`: request parameters `page` / `size` / `sort` /
 `order`, assembled into a `PageRequest`, answered with `PageResponse.of(page)` —
 `{content, total, page, size}`. Defaults are `page=0`, `size=25`, `order=ASC`; the `sort` default
-differs per endpoint. `sort` is applied as a JPQL path, so on a projection query a sort over a
+differs per endpoint (the package item lists have two keys, `created` then the order number, see their bullet). `sort` is applied as a JPQL path, so on a projection query a sort over a
 joined column is not resolvable and will fail at runtime.
 
 ### Persistence caveat: `ddl-auto=update`
@@ -968,7 +1203,23 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   `/components/article/{articleNo}`) is ADMIN, MANAGER and **WAREHOUSE** - the warehouse may order
   components, and without the catalogue it would have to get the SKU from somewhere else. Creating and
   changing a component stays ADMIN/MANAGER.
-- **Ordering components from a supplier** (`POST /components/request/{supplierId}`, ADMIN, MANAGER
+- **The supplier of a request comes from rules, not from the caller** (`supplier_rule`, `SupplierRule`,
+  `SupplierRuleRepository`; the inbound twin of `distributor_rule`). A rule names a supplier and optionally a
+  component and/or a product (`null` = no condition). Winner per component: the most specific rule
+  (`SupplierRule.specificity()`: component 2 + product 1, so a rule for the part beats one for its product, a
+  catch-all ranks last), then the higher `priority` (`int`, NOT NULL, default 0), then the lower id
+  (`SupplierRule.BEST_FIRST`). Rules of a deactivated supplier are never read (`findAllWithActiveSupplier`, supplier
+  fetched); matching is done in Java after that one query. `POST /components/request` takes no supplier
+  any more - the old `/request/{supplierId}` mapping is gone - and **a component no rule covers refuses the whole request
+  with 409 naming every uncovered SKU**, nothing placed (an unknown SKU is a 404). Different lines may go to
+  different suppliers. `GET /components/suppliers/resolve?sku=a&sku=b` (ADMIN, MANAGER, WAREHOUSE) answers
+  `SupplierResolution` per SKU (`supplierId`, `supplierName`, `ruleId`, all `null` when nothing covers it) so a form
+  can show the supplier before sending. Held by `ComponentServiceSupplierRuleTest`, `SupplierRuleRepositoryTest`,
+  `ComponentControllerTest` and the role matrix. Not built: the reverse list (components of one supplier) for a dropdown.
+- **`PATCH /components/{sku}`** (ADMIN, MANAGER, WAREHOUSE; `ComponentPatchRequest`): name, manufacturer, description,
+  externalId, weight, qty - only keys that are sent change; a blank name, a negative weight or a qty below 1 is a 400.
+  `GET /components/{sku}` and the PATCH answer `ComponentDetailDto` (incl. `createdAt`, `updatedAt`, product).
+- **Ordering components from a supplier** (formerly `POST /components/request/{supplierId}`, now see above; ADMIN, MANAGER
   and WAREHOUSE - a method-level `@PreAuthorize` widening the controller's ADMIN/MANAGER, because the
   warehouse owns the stock and already consumes components through `POST /produce`;
   `ComponentServiceImpl.requestComponents`): every entry of the body becomes its own
@@ -992,8 +1243,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   first by default (`sort=requestDate`) - a pile at the dock is worked off in the order it arrived.
   One query per page: `component` and `assignedBy` come along through an `@EntityGraph`, both to-one,
   so it stays paged in SQL; `supplier` is left out because only its id is read and a proxy answers
-  `getId()` unloaded. Plural next to the singular `POST /request/{supplierId}`, whose path is left as
-  clients know it.
+  `getId()` unloaded. Plural next to the singular `POST /components/request`.
 - **Who moved a request** is `RequestComponent.assignedBy` - a nullable `@ManyToOne User`, written by
   every step next to `updated`, which `@UpdateTimestamp` stamps itself. Not a history, one line of
   it: the statuses say where the request has been, this says who put it there last; a real audit
@@ -1045,6 +1295,14 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   `assignedBy` recorded. No body: there is no column for a reason, and `comment` belongs to whoever
   ordered the part - overwriting it would throw away why it was needed. Note the ordering side cannot
   withdraw a request; only the supplier and ADMIN can end one.
+- **Booking a whole delivery** (`POST /stock/book`, ADMIN and WAREHOUSE, `StockController.bookToStock`,
+  `ComponentService.bookRequests`, body `BookStockRequest` `{requestIds: [..], storehouseId?}` - the storehouse is optional, see the goods receipt): the same booking as the
+  single receipt below (`bookIn`: `StockService.add` of the request's quantity on its component's SKU), for several
+  requests in **one transaction**, and the request ends **`IN_STOCK`**, the last status, exactly as after the single receipt. Ids sorted and deduplicated, rows locked `FOR UPDATE` in that order; an unknown storehouse or request is a
+  404 (all missing ids named), any request not `DELIVERED` a 409 naming each with its status - nothing booked then.
+  The quantity is the request's own, the client cannot send one. `ComponentRequestWorkflowTest` holds it with real rows
+  (two requests of one SKU added up, a repeated id counted once, all-or-nothing, 404s). The frontend's *Request Components* page
+  ticks only `DELIVERED` rows and posts here.
 - **The goods receipt** (`POST /components/warehouse/{requestId}/in-stock[/{storehouseId}]`, ADMIN and
   WAREHOUSE, `ComponentServiceImpl.receiveRequest`): `DELIVERED → IN_STOCK`, and the requested
   quantity is added to `Stock.onHand` for that component's SKU in the receiving storehouse through
@@ -1109,16 +1367,66 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   send or deliver, and a request placed with it would sit in `OPEN` for good. The repository is typed
   `Supplier`, so the `user_type` discriminator is added by Hibernate and cannot be forgotten; the name
   is the one `RequestComponentResponse` uses for the same person (first and last name, the login only
-  when there is neither). Paged, sorted by `lastName` by default. Note `POST /components/request/...`
-  does **not** itself refuse a disabled supplier - the list hides them, the endpoint does not check.
+  when there is neither). Paged, sorted by `lastName` by default. `POST /components/request/...` refuses a
+  disabled supplier too (409 `Supplier N is deactivated ...`, checked right after the "is a supplier" test and
+  before the components are looked up, nothing saved): the list hid them, but an id noted earlier still worked.
+  A missing flag counts as not active.
+- **What the warehouse holds in all is `GET /stock/inventory`** (ADMIN and WAREHOUSE, `StockController.inventory`, `InventoryRow`): one row per SKU with `onHand` and `reserved` **summed over every storehouse**, `available` as their difference, the latest `updatedAt`, and the product's `name` (left join on the SKU, `null` for stock no product carries - the client shows it as a tooltip). Paged (`{content, total, page, size}`), sorted by `sku` unless asked, `sort` one of `sku`, `name`, `onHand`, `reserved`, `available`, `updatedAt`. It is `StockInventoryRepository`, an `EntityManager` query and not a Spring Data interface: the page is sorted by *sums*, and a derived sort (`order by s.onHand`) names a column that is not in the `group by`; the key is mapped to its expression from a fixed map and nothing the caller sent reaches the query text. The SKU is the last sort key (tie-break), and `total` counts articles (`count(distinct sku)`), not stock rows. `StockInventoryEndpointTest` runs it with real rows (two and three storehouses of one article added up, an article counted once, sort by sum against SKU order, by available and by name, an orphan SKU); putting `max` for `sum` in the sort turns it red. The literal segment wins over `GET /stock/{sku}`.
+- **What one article holds is `GET /stock/{sku}`** (ADMIN and WAREHOUSE, `StockController`): a list of
+  `StockResponse`, one row per storehouse, **by storehouse name** (then id - the finder gives no order, and a table
+  wants the same rows in the same place), optional `?storehouseId=` (0 = all). **Nothing stored - or nothing in the
+  storehouse asked for - is `200 []`, not a 404**: it was `ResourceNotFoundException`, which a product page listing
+  the stock of an article had to read as an empty table. An unknown SKU looks the same; the catalogue
+  (`GET /products/sku/{sku}`) is where that is told apart. The page needs the SKU from `ProductDto.sku`, then asks
+  this - MANAGER and CUSTOMER may read `/products` but get a 403 here, so a client shows the card to
+  ADMIN/WAREHOUSE only. `StockBySkuEndpointTest` runs it against the real chain and rows (empty article, empty
+  storehouse filter, name order with names created against the id order, the 403s); mutations - the throw put back,
+  the sort removed - turn it red.
+- **The two people lists for picking from: `GET /users/distributors` and `GET /users/suppliers`**
+  (`UserController`, `UserService.findDistributors` / `findSuppliers`, answered as `UserDto`, paged like `/users`
+  with the same `USER_SORTABLE`). They exist because the roles that *assign* a carrier or *place* a request may not
+  read the rest of `/users`: LOGISTICS hands a shipment over (`PUT /shipments/{id}/distributor/{distributorId}`)
+  and WAREHOUSE orders components, and neither could learn an id. **The roles differ on purpose, each is the set
+  that may do the thing the list is for**: distributors ADMIN, MANAGER, LOGISTICS; suppliers ADMIN, MANAGER,
+  WAREHOUSE - WAREHOUSE gets a 403 on the carriers and LOGISTICS one on the suppliers, and neither opens the rest of
+  `/users`. **Active accounts only** on both (a disabled account cannot log in, so it could never accept a
+  shipment or approve a request - it would sit in `DISPATCH_REQUESTED` / `OPEN` for good). Both go through a
+  repository typed on the subclass (`DistributorRepository`, `SupplierRepository`), so the `user_type`
+  discriminator is Hibernate's and cannot be forgotten. The literal segments win over `GET /users/{id}`.
+  `DistributorsEndpointTest` and `SuppliersEndpointTest` run them against the real chain and rows; mutations -
+  a role added or dropped, the active filter removed - turn them red.
+  <br>Unlike `GET /components/suppliers` (id and name only, WAREHOUSE-safe) these carry the full `UserDto`:
+  user name, e-mail address and roles. That is the design chosen for the planning side; note it when widening a role.
+  <br>`PUT /shipments/{id}/distributor/{id}` **refuses a deactivated distributor** (409 `Distributor N is deactivated ...`,
+  after the "is a distributor" test, nothing written; a missing flag counts as not active) - the same rule
+  `requestComponents` has for suppliers. Without it an id noted earlier still worked and the shipment would sit in
+  `DISPATCH_REQUESTED` for good. `ShipmentServiceImplTest.refusesADeactivatedDistributorWith409` holds it; dropping the check turns it red.
+- **Which carrier a shipment is meant for is a table of rules** (`DistributorRule`, `distributor_rule`; `UserService.queryDistributors`). A rule names a distributor and conditions, all optional and `null` = no condition: the customer, a weight range in kg and a volume range in cm³ (`ShipmentPackage.getVolume()` works in cm³; the pages show m³). Bounds are `[min, max)`. `DistributorRuleRepository.findMatching` returns what applies and skips rules of a deactivated carrier (the next rule gets its turn); a `null` parameter matches only rules that leave that dimension open. **Ranking is in Java, not SQL**: the rule that sets the most dimensions wins (`DistributorRule.specificity()`, a range counts once), then `priority`, then the lower id, and a carrier named twice appears once at its best place. `POST /users/distributors/query` (ADMIN, MANAGER, LOGISTICS; body `DistributorQueryRequest` `{customerId, weight, volume}`, all optional, negative = 400) answers the ranked carriers as a page, empty when no rule applies. The method is the HTTP **`QUERY`** (a safe request with a body), mapped with a plain `@RequestMapping(path, version, method = RequestMethod.QUERY)`: since Spring 7.1 (Boot 4.2) `RequestMethod`/`HttpMethod` know `QUERY`, so the former extra machinery (`@HttpQuery`, a custom handler mapping, a method condition) is gone. **The firewall bean is not**: Spring Security's `StrictHttpFirewall` does not allow `QUERY` by default and rejects it before any filter runs - a 400 with no body, no handler and no exception, which is what made "Assign distributor" fail after the clean-up. `SecurityBeanConfig.httpFirewall()` adds the method to the allowed list; `DistributorQueryEndpointTest` goes red without it. `QUERY` is in the CORS allowed methods (`SecurityBeanConfig`). The handler is `@Operation(hidden = true)`: OpenAPI 3.1 has no `QUERY` operation. `DistributorQueryEndpointTest` holds it through the real chain (roles, `GET`/`PUT` on the path refused, `QUERY` on another path 405, preflight). Not run against a real Tomcat, only MockMvc. It replaced a fixed customer-to-carrier map (and the `GET /users/distributors/customer/{customerId}` that answered from it, gone). `DistributorRuleSeedMigration` (an `ApplicationReadyEvent` listener) writes that map's two pairs - customer 311 to distributor 319, 312 to 320 - as customer-only rules, but **only into an empty table** and only where both users exist with the right type (`user_type` `customer` / `distributor`); emptying the table by hand brings the two back on the next start. `DistributorRuleSeedMigrationTest` holds it. `DistributorRuleRepositoryTest` holds the bounds, the open dimensions and the inactive carrier against real rows; `UserServiceDistributorMappingTest` the ranking.
+- **The package item lists filter by the status of their order line** (`GET /packages`, `GET /lonely-packages`, optional `fulfillmentStatus`, `PackageQueryService.findPackageItems(pageable, status)`; `null` lists all, an unknown value is a 400 through the enum binding). Two derived repository finders (`...ByOrderItemFulfillmentStatus`, `...ByShipmentPackageIsNullAndOrderItemFulfillmentStatus`), the same entity graph as the unfiltered ones so the paging stays in SQL. There is **no default on the backend** - the page starts on `PACKED` and sends it; a client that sends nothing still gets every item, as before. `PackageListSortTest` holds it with real rows (packed against packing, both lists).
+- **The package item lists sort by what their table shows** (`GET /packages`, `GET /lonely-packages`): next to the
+  item's own `id`, `runNo`, `quantity` and `created`, `PACKAGE_ITEM_SORTABLE` takes `orderItem.id`,
+  `orderItem.order.orderNo`, `orderItem.quantity`, `orderItem.fulfillmentStatus` and `shipmentPackage.id`. The page
+  groups its rows by order number, so sorting by it is the point; `siblings` stays unsortable (worked out per row).
+  **Without a `sort` the lists are ordered by `created`, then by the order number** (`PackageController.itemPageRequest`;
+  two keys, so it is not a default value of the parameter, which is optional now - it was `id`), `order` turning both;
+  the id is added after them. A `sort` that is asked for stays that one key. `PackageControllerTest` holds the pages
+  asked, `PackageListSortTest` the order with real rows (items made in the order third, first, second come back in that
+  order, not by number). The page sends no `sort` at start and marks `createdAt`.
+  `shipmentPackage.id` is a path through an *optional* association - a loose item has no package - and Spring Data sorts
+  through a left join there, so loose items are sorted and not dropped from the list when that column is clicked
+  (`PackageListSortTest` holds it with real rows). Both lists add **the id as the tie-break**
+  (`PackageQueryServiceImpl.withIdTieBreak`): items of one order share the sort value, which is exactly the case a sort
+  by order number is for, and with ties the database may order the same rows differently on the next page. Held by
+  `PackageQueryServiceImplTest` (the exact page asked) and not by the context test - a small table does not reorder its
+  ties on its own.
 - **Storehouses are listed, read-only** (`GET /storehouses`, ADMIN and WAREHOUSE,
   `StorehouseController`/`StorehouseService`, `StorehouseResponse`): two warehouse operations take a
   `storehouseId` - the goods receipt and `POST /stock/add` - and nothing said which ids exist, so a
   client had to be told them out of band. Paged like every list, sorted by `name` by default; a
   dropdown is `?size=100`. `sort` is checked against `id`, `name`, `city`, `country` and anything else
   is a **400** naming it: it is applied as a property path, and an unknown one ended in a
-  `PropertyReferenceException` that nothing handles - a 500 for a typo in a query parameter. (The other
-  list endpoints still have that weakness.) The entity's `stocks` collection is never read, so the list
+  `PropertyReferenceException` that nothing handles - a 500 for a typo in a query parameter. (Every other
+  list is checked the same way now, see "Paged list endpoints".) The entity's `stocks` collection is never read, so the list
   is one query; what a storehouse holds is `GET /stock/storehouse/{id}`. No create or change: they are
   set up with the system.
 - **Booking stock is `@Transactional` and reads `FOR UPDATE`** (`StockService.add`,
@@ -1128,9 +1436,39 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   saved the data was `@Version`, and what the caller got was a 500 for a request that was fine. The
   goods receipt and `produce()` book into the same rows, and `assemble()` runs every 150 s. It joins
   the caller's transaction rather than `REQUIRES_NEW` on purpose: the goods receipt is all or nothing.
+  <br>**Every other read-modify-write of a stock row is locked too** (since 2026-11-04), through the same
+  `findForUpdateByStorehouseIdAndSku`: `reserve`/`release`/`consume`/`restore` in
+  `InventoryReservationTransactionService` (`lockStocks`), `StockService.transferItemToStock` and the component
+  decrement in `produceSingleProduct`. Plain reads (`findByStorehouseIdAndSku`, `findEligibleBySku`, the availability
+  lists) stay unlocked - they are checks, not writes. Two rules make the locks safe: **a fixed order** (storehouse id,
+  then SKU - `lockStocks` sorts, `transfer` takes the lower storehouse id first, `produce` goes by SKU), because
+  two callers taking the same rows in opposite order deadlock; and **first in the transaction**, because with
+  `innodb_snapshot_isolation` a locking read of a row that changed after the transaction's snapshot (its first plain
+  read) is refused with "Record has changed since last read" instead of waiting - so `reserve` locks before it reads
+  the active reservations. `produce` reads its eligibility checks first and cannot; there the refusal is possible but
+  narrow, and no worse than the `OptimisticLockException` it replaces. `@Version` stays as the second line of defence.
+  `StockRepository.findBySkuForUpdate` was removed: it carried no lock despite its name and had no caller.
+  Held by `InventoryReservationTransactionServiceTest` (order), `StockServiceTransferTest` (order in both directions).
   <br>One race is left where it cannot be closed - with no row yet there is nothing to lock, so two
   first-ever bookings of a SKU can both insert. That is flushed on the spot and answered as a 409 that
   says so, instead of a 500 at an outer commit; a retry would need its own transaction, which the
   receipt must not have.
 - `service/ratelimiting` — `RateLimitingFilter` + `PricingPlanService`, backed by `bucket4j`
-  (`PricingPlan` enum), gates request rate by plan.
+  (`PricingPlan` enum), gates request rate by plan. **Which bucket a request draws from**
+  (`PricingPlanService.resolveBucket(apiKey, username, remoteAddr)`), in this order: a key of a paid plan
+  (`BX001-`, `PX001-`, `NL001-...`) - its own bucket on that plan; otherwise a **logged-in user** - a bucket per user
+  name on `PricingPlan.USER` (capacity 120, 60 per minute); otherwise any other key - its own `FREE` bucket; otherwise the
+  remote address on `FREE` (capacity 30, 20 per 2 minutes), which is also what stands in front of the login.
+  The families are prefixed (`key:`, `user:`, `ip:`), so an `X-API-KEY: user:admin` cannot drain the admin's bucket.
+  <br>Why per user: the bucket was per address, so everyone behind one reverse proxy or office NAT shared 30 requests,
+  and a single page that fires a dozen calls used a third of it. The user comes from `request.getUserPrincipal()`:
+  the filter is registered at `LOWEST_PRECEDENCE`, after Spring Security, so a request Security refused (401) never
+  reaches it and is not counted - which is also why a probe of the limit has to be authenticated.
+  <br>**Behind a proxy the address is the proxy's** unless the container reads `X-Forwarded-For`
+  (`server.forward-headers-strategy=native` or `framework`, commented in `application.properties.dist`); it is not on
+  by default, because without a proxy in front the header is the caller's to forge.
+  <br>**Not closed, on purpose left as it was:** for a caller who is *not* logged in, any invented `X-API-KEY` is still a
+  `FREE` bucket of its own - so `POST /auth/login` can be tried far more often than 30 times by changing the header
+  each time. For a logged-in caller the invented key is ignored now (it falls into the user's bucket).
+  `RateLimitPerUserTest` (real chain) and `PricingPlanServiceTest` hold the order above; four mutations turn them red.
+  A test that makes more calls than 120 with one user hits the limit - `ListParametersTest` takes a user per list.

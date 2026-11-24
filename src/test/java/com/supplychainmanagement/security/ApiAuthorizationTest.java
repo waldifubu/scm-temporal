@@ -114,7 +114,7 @@ class ApiAuthorizationTest {
                 // The planning side's own view of what it may ship - the overlap's replacement.
                 get("/api/1.0/shipments/packages", RoleEnum.ADMIN, RoleEnum.LOGISTICS),
                 // The carriers a shipment can be handed to.
-                get("/api/1.0/users/distributors", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.LOGISTICS),
+                get("/api/1.0/users/distributors", RoleEnum.ADMIN),
                 // The suppliers a component request can be placed with - the roles that may place one.
                 get("/api/1.0/users/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // The carrier reports; the house plans.
@@ -172,7 +172,12 @@ class ApiAuthorizationTest {
                 // The shipments of that order: the same roles and rule again.
                 get("/api/1.0/orders/1/shipments", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
                         RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
-                get("/api/1.0/users", RoleEnum.ADMIN, RoleEnum.MANAGER),
+                get("/api/1.0/users", RoleEnum.ADMIN),
+                // The order workflow as data: every role that reads orders.
+                get("/api/1.0/orders/workflow", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
+                get("/api/1.0/orders/workflow/diagram", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
                 // The storehouses a client can name - what the goods receipt and stock booking take.
                 get("/api/1.0/storehouses", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // The picked stage, as the warehouse packs from it and the manager watches it: the lists of

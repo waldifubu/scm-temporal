@@ -142,7 +142,7 @@ class OrderReadAccessTest {
 
     /**
      * A line names its product by article number and SKU, so a client can link it to the product page
-     * ({@code /products/{externalId}}) and show the SKU on hover.
+     * ({@code /products/{articleNo}}) and show the SKU on hover.
      */
     @Test
     void anOrderLineCarriesTheArticleNumberAndTheSkuOfItsProduct() throws Exception {
@@ -156,7 +156,7 @@ class OrderReadAccessTest {
         JsonNode answer = objectMapper.readTree(readOrder(order.getOrderNo(), manager).getContentAsString());
         JsonNode item = answer.get("items").get(0);
 
-        assertThat(item.get("externalId").asLong()).isEqualTo(line.getProduct().getArticleNo());
+        assertThat(item.get("articleNo").asLong()).isEqualTo(line.getProduct().getArticleNo());
         assertThat(item.get("sku").asString()).isEqualTo(line.getProduct().getSku().toString());
     }
 }

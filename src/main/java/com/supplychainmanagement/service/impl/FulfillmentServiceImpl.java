@@ -14,6 +14,8 @@ import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.exception.ResourceNotFoundException;
 import com.supplychainmanagement.exception.UnsufficientException;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.OrderAction;
+import com.supplychainmanagement.service.OrderWorkflow;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.repository.*;
@@ -37,14 +39,6 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class FulfillmentServiceImpl implements FulfillmentService {
 
-    /**
-     * The statuses a successful reservation lifts an order out of. WAIT_SUPPLY belongs in here: it
-     * says the stock was missing when the order was confirmed, and a reservation is the proof that it
-     * is not missing any more - without it the order would sit there for good.
-     */
-    private static final Set<OrderStatus> PRE_FULFILLMENT_STATUSES = EnumSet.of(
-            OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, OrderStatus.REVIEW, OrderStatus.WAIT_SUPPLY);
-
 
     private final ProductRepository productRepository;
     private final OrderRepository orderRepository;
@@ -54,6 +48,12 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     private final UserRepository userRepository;
     private final ProductionService productionService;
     private final OrderProgressService orderProgress;
+    /**
+     * Which statuses a successful reservation lifts an order out of ({@code RESERVE}) and where a full release
+     * sends it back ({@code RELEASE}). WAIT_SUPPLY is among the first: it says the stock was missing when the order
+     * was confirmed, and a reservation is the proof that it is not missing any more.
+     */
+    private final OrderWorkflow workflow;
 
     /**
      * Transactional so the order status, the line item statuses and the published
@@ -148,7 +148,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
         // read as "in progress" even though reserveWithRetry failed. Only move forward (out of a
         // pre-fulfillment status) so that a second, idempotent call never sets a further-along order
         // back. A partial reservation counts: fulfillment has started for at least one line.
-        if (!reservedOrderItemIds.isEmpty() && PRE_FULFILLMENT_STATUSES.contains(order.getStatus())) {
+        if (!reservedOrderItemIds.isEmpty() && workflow.allows(order.getStatus(), OrderAction.RESERVE)) {
             orderProgress.changeStatus(order, OrderStatus.IN_FULFILLMENT, userIdOf(username));
         }
 
@@ -337,7 +337,7 @@ public class FulfillmentServiceImpl implements FulfillmentService {
      * so this query sees what is really left.
      */
     private void revertOrderStatus(Order order, String username) {
-        if (order.getStatus() != OrderStatus.IN_FULFILLMENT
+        if (!workflow.allows(order.getStatus(), OrderAction.RELEASE)
                 || hasLineBeyondReservation(order)
                 || !findActiveReservations(order).isEmpty()) {
             return;

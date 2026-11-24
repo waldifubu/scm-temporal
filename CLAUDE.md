@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Supply Chain Management demo app: Spring Boot 4.1.0 (Java 25) backend with two parallel UIs —
+Supply Chain Management demo app: Spring Boot 4.2.0 (Java 25) backend with two parallel UIs —
 a Vaadin (plain Java) admin UI and a classic Thymeleaf server-rendered site — plus a JSON REST API.
 Database is MariaDB, accessed via Spring Data JPA/Hibernate.
 
@@ -301,6 +301,60 @@ responsibilities — read all of them together before changing reservation/fulfi
   an order of which something has arrived while the rest is still out, and `COMPLETED` comes from
   `POST /orders/{orderNo}/complete`. `WAIT_SUPPLY` is where `accept` parks an order whose stock
   is not there, and `CANCELLED` comes from `POST /orders/{orderNo}/cancel` (both below).
+- **The order workflow is one table, `OrderWorkflow`** (interface in `service`, `OrderWorkflowImpl` in `service/impl`;
+  `OrderAction`, added 2026-11-24): which statuses there are, which step (`ACCEPT`, `REVIEW`, `REJECT`, `CANCEL`, `RESERVE`,
+  `RELEASE`, `SHIPMENT_PROGRESS`, `COMPLETE`) may be taken from which status, where it leads, who takes it
+  (`actors`: the roles of the endpoint), whether a scheduled routine takes it too (`automatic`) and what else has to hold
+  (`condition`, only in words). **The services ask it instead of keeping lists of their own**: `OrderServiceImpl.accept/review/
+  reject/cancel/complete` guard with `workflow.allows(status, action)` (the messages are unchanged, `names(...)` builds the
+  "CREATED or REVIEW" part from the table), `FulfillmentServiceImpl` asks `RESERVE` (it had `PRE_FULFILLMENT_STATUSES`) and
+  `RELEASE`, `OrderProgressServiceImpl.recompute` asks `SHIPMENT_PROGRESS` (it had `RECOMPUTED_FROM`), and
+  **`OrderProgressService.changeStatus` refuses a move the table does not list** (409 `cannot move from A to B`, before anything is
+  written or published). A new status change therefore needs a row in `OrderWorkflowImpl` first - that is the point, a step
+  nobody listed cannot happen. `DELIVERED` is no source of `SHIPMENT_PROGRESS`, so `recompute` leaves a delivered order alone
+  (it could only have written the same status back); `COMPLETE` is taken from `DELIVERED` and `PARTIALLY_DELIVERED` (it used to
+  pass any status that was not an end, on quantities alone - the quantities are still checked in `complete`).
+  <br>**What it does not decide**: anything that depends on data - which target `ACCEPT` takes (stock), whether a line has left the
+  shelf (`CANCEL`), whether everything arrived (`COMPLETE`) - stays in the services; the table only names it as `condition`.
+  <br>**Built to be moved onto Temporal**: `OrderWorkflowImpl` is a pure function of its arguments - no repository, clock, user or
+  other bean, only `static final` constants (`OrderWorkflowImplTest.isAPureFunctionOfItsArguments` reads the fields by
+  reflection) - because workflow code has to replay deterministically. A status is the workflow's state, an `OrderAction` the
+  name of a signal or an update, `transitions()` what it validates them against; reserving, picking and shipping stay activities
+  (the existing services). Do not inject anything into `OrderWorkflowImpl`.
+  <br>**`GET /orders/workflow`** (`OrderWorkflowController`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER - every role that reads
+  orders; same answer for all) hands the table to a client as `OrderWorkflowResponse` `{initialStatus, statuses, transitions[]}`,
+  a step being `{from, to, action, trigger (MANUAL|COMPUTED), actors, automatic, condition?}`. A controller of its own because it
+  needs none of `OrderController`'s collaborators; the literal segment wins over `GET /orders/{orderNo}`. `COMPUTED` rows
+  (`SHIPMENT_PROGRESS`) are the ten forward steps from `IN_FULFILLMENT` on plus `READY_FOR_DISPATCH → IN_FULFILLMENT` (a shipment
+  called off) - they are never asked for, `recompute` works them out. Tests that build one of the three services with
+  `@InjectMocks` need `@Spy OrderWorkflow workflow = new OrderWorkflowImpl()` (the real table, not a mock).
+  Held by `OrderWorkflowImplTest` (every status once and reachable, the ends, the sources of every action as the services used
+  them, no step twice, pure), `OrderProgressServiceImplTest.changeStatusRefusesAMoveTheWorkflowDoesNotList` and
+  `OrderWorkflowEndpointTest` (roles, 401/403, the JSON).
+  <br>**`GET /orders/workflow/diagram`** (same controller, same roles; `OrderWorkflowDiagramService` / `...Impl`, `OrderWorkflowDiagramResponse`)
+  is the workflow **prepared for drawing**, so a client keeps no copy of the flow: `nodes` (`id`, `label` as words - `WAIT SUPPLY` -,
+  and `description`, what the status means - the text that used to be the frontend's `statusDescriptions.ts`, now
+  `OrderWorkflowImpl.describe`), `edges` (`from`, `to`, `kind` `FORWARD|BACK`, `label?`) and `ends` (where `REJECT`/`CANCEL` lead).
+  The rules (all in `OrderWorkflowDiagramServiceImpl`): one arrow per pair of statuses; the ends get no arrows; a step to an earlier
+  status in `statuses()` is `BACK` and always labelled (the table's `label`, else the action's name); **a step the table declares a
+  `shortcut` is not drawn**. Which steps are shortcuts is the table's call (`Transition.shortcut`: `RESERVE` from `CREATED`/`REVIEW`,
+  the computed steps that skip a status, `COMPLETE` from `PARTIALLY_DELIVERED`) - it is deliberately *not* worked out by a
+  transitive reduction, which would hide `CREATED -> ACKNOWLEDGED` behind the optional `REVIEW` and `IN_TRANSIT -> DELIVERED` behind
+  `PARTIALLY_DELIVERED`. A shortcut is still an allowed step (`changeStatus` lets it through). `Transition.label` ("all released",
+  "shipment cancelled") and `shortcut` are also in `GET /orders/workflow`. Nothing in the answer is Mermaid-specific; the frontend
+  (`features/orders/workflowDiagram.ts`, `flowFrom`) turns it into Mermaid text and keeps a built-in copy only as the fallback for a
+  403 (SUPPLIER, DISTRIBUTOR) or until the answer arrives; its test holds that copy against the backend's arrows.
+  Held by `OrderWorkflowDiagramServiceImplTest` (the exact arrows, the shortcuts, the ends, every back arrow labelled, every drawn
+  arrow allowed by the table), `OrderWorkflowImplTest` (every status explained, the shortcut list, the labels) and
+  `OrderWorkflowEndpointTest`.
+  <br>**`GET /orders/workflow` has a consumer: the buttons of the order page.** The frontend (`features/orders`, `orderWorkflowQueryOptions`,
+  asked once) offers a decision (`decisionsFor`: review, accept, release, reject, cancel) or "Complete Order" (`mayCompleteOrder`) when the table
+  holds a **manual** step (`trigger MANUAL`) from the order's status whose `actors` include one of the user's roles - the lists of statuses
+  and roles it used to keep for them are gone, so a change in `OrderWorkflowImpl` moves the buttons without a frontend change. Computed steps
+  and the system's own (`RESERVE`) never get a button, and **nothing is offered until the table has arrived** (or where it is refused: SUPPLIER,
+  DISTRIBUTOR). Consequence worth knowing: `COMPLETE` is listed from `PARTIALLY_DELIVERED` as well (a shortcut for the drawing, but an allowed
+  step), so "Complete Order" shows there too and the backend answers 409 while a line is still short; to hide it, the table would have to drop
+  that row, not the frontend. Held by the frontend's `orderDecisions.test.ts` and `completeOrder.test.ts` (a fixture shaped like the table).
 - **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
   (`OrderProgressService.recompute`). The shipment side says only *which orders were touched*; where
   each of them stands follows from the **quantities of its lines that sit in shipments**

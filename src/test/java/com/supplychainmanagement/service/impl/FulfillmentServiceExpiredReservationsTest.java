@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
+import org.mockito.Spy;
+import com.supplychainmanagement.service.OrderWorkflow;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -44,6 +46,9 @@ class FulfillmentServiceExpiredReservationsTest {
 
     @Mock
     private OrderProgressService orderProgress;
+
+    @Spy
+    private OrderWorkflow workflow = new OrderWorkflowImpl();
 
     @InjectMocks
     private FulfillmentServiceImpl service;
