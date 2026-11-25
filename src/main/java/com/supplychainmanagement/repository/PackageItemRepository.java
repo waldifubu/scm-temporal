@@ -50,6 +50,30 @@ public interface PackageItemRepository extends JpaRepository<PackageItem, Long> 
     @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
     Page<PackageItem> findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(FulfillmentStatus status, Pageable pageable);
 
+    /**
+     * The package items of one order whose line is in one of {@code statuses} - every status, where the list is not
+     * filtered by one. Fetched like {@link #findAllWithProductBy}.
+     */
+    @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
+    @Query("""
+            SELECT pi FROM PackageItem pi
+            WHERE pi.orderItem.order.orderNo = :orderNo AND pi.orderItem.fulfillmentStatus IN :statuses
+            """)
+    Page<PackageItem> findAllWithProductOfOrder(@Param("orderNo") Long orderNo,
+                                                @Param("statuses") Collection<FulfillmentStatus> statuses,
+                                                Pageable pageable);
+
+    /** {@link #findAllWithProductOfOrder} for the loose items alone. */
+    @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
+    @Query("""
+            SELECT pi FROM PackageItem pi
+            WHERE pi.shipmentPackage IS NULL
+              AND pi.orderItem.order.orderNo = :orderNo AND pi.orderItem.fulfillmentStatus IN :statuses
+            """)
+    Page<PackageItem> findAllLooseWithProductOfOrder(@Param("orderNo") Long orderNo,
+                                                     @Param("statuses") Collection<FulfillmentStatus> statuses,
+                                                     Pageable pageable);
+
     /** One package item with what its detail view reads - order line, product and order. */
     @EntityGraph(attributePaths = {"orderItem", "orderItem.product", "orderItem.order"})
     Optional<PackageItem> findWithProductById(Long id);

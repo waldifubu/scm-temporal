@@ -114,6 +114,23 @@ class FulfillmentServiceReleaseItemsTest {
         verify(orderItemRepository).saveAll(anyList());
     }
 
+    /** A rejected order is over: its lines end CANCELLED and not WAITING, as with a cancelled one. */
+    @Test
+    void endsTheLinesOfARejectedOrderAsCancelled() {
+        Order order = orderWithActiveReservation();
+        order.setStatus(OrderStatus.REJECTED);
+        OrderItem picked = new OrderItem();
+        picked.setId(6L);
+        picked.setFulfillmentStatus(FulfillmentStatus.PICKED);
+        order.setOrderItems(new LinkedHashSet<>(List.of(orderItem, picked)));
+
+        assertThat(service.releaseRejectedOrder(order, USERNAME)).hasSize(1);
+
+        assertThat(orderItem.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.CANCELLED);
+        // Goods off the shelf stay what they are.
+        assertThat(picked.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PICKED);
+    }
+
     /** The status write must happen after the release, not before it. */
     @Test
     void releasesStockBeforeTouchingTheLineItems() {

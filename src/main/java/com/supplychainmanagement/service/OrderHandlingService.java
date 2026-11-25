@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service;
 
+import org.jspecify.annotations.Nullable;
 import com.supplychainmanagement.dto.order.OrderItemListDto;
 import com.supplychainmanagement.dto.picking.PickingOrderDto;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
@@ -16,7 +17,8 @@ import java.util.List;
  */
 public interface OrderHandlingService {
 
-    Page<PickingOrderDto> pickingOrders(ReservationStatus reservationStatus, Pageable pageable);
+    /** The rows of one stage, of every order or, with an {@code orderNo}, of that one. */
+    Page<PickingOrderDto> pickingOrders(ReservationStatus reservationStatus, @Nullable Long orderNo, Pageable pageable);
 
     PickingOrderDto pickingReservationById(Long reservationId);
 
@@ -29,5 +31,10 @@ public interface OrderHandlingService {
      */
     PickingOrderDto unpickReservationById(Long reservationId);
 
-    Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable);
+    /** The lines in this status ({@code null}: every status), of one order or ({@code null}) of all. */
+    Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Long orderNo, Pageable pageable);
+
+    /** The lines in any of these statuses, of one order or ({@code null}) of all. */
+    Page<OrderItemListDto> getOrderItemsIn(java.util.Collection<FulfillmentStatus> statuses, Long orderNo,
+                                           Pageable pageable);
 }

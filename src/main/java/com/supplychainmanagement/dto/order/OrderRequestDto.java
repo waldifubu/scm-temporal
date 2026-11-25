@@ -1,6 +1,7 @@
 package com.supplychainmanagement.dto.order;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Future;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
 
@@ -21,12 +22,12 @@ import java.util.List;
  * {@code customer} is for the roles that order on somebody's behalf (ADMIN, MANAGER); a customer's own
  * order takes the logged-in user and ignores it. {@code OrderRequestMapper} turns it into the entity.
  *
- * @param dueDate    the day the customer wants the goods; optional
+ * @param dueDate    the day the customer wants the goods; optional, and after today if sent
  * @param customer   the customer an ADMIN or MANAGER orders for; required for them, ignored for a customer
  * @param orderItems the lines; an article is named once, a repeat is folded into the first line
  */
 public record OrderRequestDto(
-        LocalDate dueDate,
+        @Future LocalDate dueDate,
         @Valid CustomerRef customer,
         @Valid List<Line> orderItems
 ) {

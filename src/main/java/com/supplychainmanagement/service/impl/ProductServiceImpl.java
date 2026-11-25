@@ -66,7 +66,7 @@ public class ProductServiceImpl implements ProductService {
     @Override
     public Product findByArticleNo(long articleNo) {
         return productRepository.findByArticleNo(articleNo)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "externalId", articleNo));
+                .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", articleNo));
     }
 
     @Override
@@ -99,13 +99,16 @@ public class ProductServiceImpl implements ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException("Product", "id", savedProduct.getId()));
     }
 
-    /** The product's own fields. {@code sku} and {@code active} only when they are sent. */
+    /**
+     * The product's own fields. {@code sku} and {@code active} only when they are sent. The weight is not taken from
+     * the request: a new product gets the sum of its components' weights ({@code Product.onCreate}), and a change
+     * leaves the stored one.
+     */
     private void applyProductData(ProductRequestDto request, Product product) {
         product.setArticleNo(request.articleNo());
         product.setName(request.name());
         product.setDescription(request.description());
         product.setUnitPrice(request.unitPrice());
-        product.setWeight(request.weight());
         if (request.sku() != null) {
             product.setSku(request.sku());
         }
@@ -179,7 +182,6 @@ public class ProductServiceImpl implements ProductService {
 
             target.setName(line.name());
             target.setManufacturer(line.manufacturer());
-            target.setArticleNo(line.articleNo());
             target.setDescription(line.description());
             target.setExternalId(line.externalId());
             if (line.weight() != null) {
@@ -199,9 +201,8 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public Product update(Long id, ProductRequestDto request) {
-        Product existingProduct = productRepository.findByArticleNo(id)
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "id", id));
+    public Product update(long articleNo, ProductRequestDto request) {
+        Product existingProduct = findByArticleNo(articleNo);
 
         long newArticleNo = request.articleNo();
         if (newArticleNo != existingProduct.getArticleNo()
@@ -223,17 +224,16 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     @Transactional
-    public void deleteById(Long id) {
-        if (!productRepository.existsById(id)) {
-            throw new ResourceNotFoundException("Product", "id", id);
-        }
+    public void deleteByArticleNo(long articleNo) {
+        Product product = findByArticleNo(articleNo);
         try {
-            productRepository.deleteById(id);
+            productRepository.delete(product);
             // Flushed here, inside the try: an order line or stock row that still names the product would
             // otherwise surface at the commit, after this method, as a 500.
             productRepository.flush();
         } catch (DataIntegrityViolationException stillReferenced) {
-            throw new APIException(HttpStatus.CONFLICT, "Product " + id + " is still referenced (orders, stock) and cannot be deleted");
+            throw new APIException(HttpStatus.CONFLICT, "Product " + articleNo
+                    + " is still referenced (orders, stock) and cannot be deleted");
         }
     }
 
@@ -279,7 +279,6 @@ public class ProductServiceImpl implements ProductService {
             if (target == null) {
                 target = incomingComponent;
             } else {
-                target.setArticleNo(incomingComponent.getArticleNo());
                 target.setName(incomingComponent.getName());
                 target.setDescription(incomingComponent.getDescription());
                 target.setWeight(incomingComponent.getWeight());

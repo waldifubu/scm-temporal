@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.order.ShippedQuantity;
 import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentListDto;
@@ -48,12 +49,14 @@ import java.util.stream.Stream;
 public class ShipmentServiceImpl implements ShipmentService {
 
     /**
-     * While the shipment's own data - address, method, date, comment - may still be corrected. From
-     * IN_TRANSIT on the papers are out of the house, and a cancelled shipment is not edited either.
+     * While the shipment's own data - address, method, date, comment - may still be corrected. A DECLINED
+     * shipment is one of them: it is still in the house, and what the carrier objected to may need fixing
+     * before it is offered again. From IN_TRANSIT on the papers are out of the house, and a cancelled
+     * shipment is not edited either.
      */
     private static final Set<ShipmentStatus> DATA_CHANGEABLE_IN = EnumSet.of(
             ShipmentStatus.CREATED, ShipmentStatus.READY,
-            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED, ShipmentStatus.DECLINED);
 
     /**
      * While a shipment can still be called off: up to the handover, the goods are in the house. From
@@ -62,6 +65,15 @@ public class ShipmentServiceImpl implements ShipmentService {
     private static final Set<ShipmentStatus> CANCELLABLE_IN = EnumSet.of(
             ShipmentStatus.CREATED, ShipmentStatus.READY,
             ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+
+    /**
+     * The statuses of a shipment that has been reported ready: what lies in one of these counts towards a line
+     * being READY_FOR_DISPATCH. DECLINED is one of them - the goods are still packed for dispatch, and handing
+     * the shipment to another carrier does not report it ready a second time.
+     */
+    private static final Set<ShipmentStatus> REPORTED_READY = EnumSet.of(
+            ShipmentStatus.READY, ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED,
+            ShipmentStatus.DECLINED, ShipmentStatus.IN_TRANSIT, ShipmentStatus.DELIVERED);
 
     private final ShipmentRepository shipmentRepository;
     private final ShipmentPackageRepository shipmentPackageRepository;
@@ -192,7 +204,8 @@ public class ShipmentServiceImpl implements ShipmentService {
 
         if (!DATA_CHANGEABLE_IN.contains(shipment.getStatus())) {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is "
-                    + shipment.getStatus() + ", its data can only be changed up to " + ShipmentStatus.ACCEPTED);
+                    + shipment.getStatus() + ", its data can only be changed up to " + ShipmentStatus.ACCEPTED
+                    + " and while " + ShipmentStatus.DECLINED);
         }
 
         shipment.setShippingAddress(request.shippingAddress().trim());
@@ -434,25 +447,46 @@ public class ShipmentServiceImpl implements ShipmentService {
             throw new APIException(HttpStatus.CONFLICT, "Shipment " + shipmentId + " is not ready for dispatch: not all packages are packed");
         }
 
-        // Only now, with every package closed, are the lines really on their way out: each
-        // PackageItem names the line it was packed from, and PACKED means its ordered quantity is
-        // fully packed. A line still PACKING belongs to a package that is not in this shipment, and a
-        // line already further along travels in another shipment - forwards only, like the orders.
-        List<OrderItem> lines = orderItemRepository.findByShipmentId(shipmentId).stream()
-                .filter(line -> line.getFulfillmentStatus() == FulfillmentStatus.PACKED)
-                .toList();
+        // Written first: the quantities read below, here and in recompute, are grouped by the status of
+        // their shipment, so this one has to count as READY already.
+        shipment.setStatus(ShipmentStatus.READY);
+        shipmentRepository.save(shipment);
+
+        List<Long> orderIds = orderIdsOf(shipmentId);
+        List<OrderItem> lines = linesNowReady(shipmentId, orderIds);
         lines.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH));
         orderItemRepository.saveAll(lines);
 
         // The orders follow, but no target is named here: an order is spread over as many shipments
         // as its packages need, so this one being ready says nothing about the order as a whole.
         // OrderProgressService works out where each of them really stands.
-        orderProgress.recompute(orderIdsOf(shipmentId), userId);
-
-        shipment.setStatus(ShipmentStatus.READY);
-        shipmentRepository.save(shipment);
+        orderProgress.recompute(orderIds, userId);
 
         return toResponse(shipment);
+    }
+
+    /**
+     * The lines of this shipment whose whole ordered quantity now lies in shipments reported ready. A line
+     * still PACKING is not fully packed; a PACKED one may have parts loose or in a package that is not ready
+     * yet, and stays PACKED until the shipment carrying the last of them is reported. A line already further
+     * along is left alone - forwards only, like the orders.
+     */
+    private List<OrderItem> linesNowReady(Long shipmentId, List<Long> orderIds) {
+        List<OrderItem> packed = orderItemRepository.findByShipmentId(shipmentId).stream()
+                .filter(line -> line.getFulfillmentStatus() == FulfillmentStatus.PACKED)
+                .toList();
+        if (packed.isEmpty()) {
+            return packed;
+        }
+
+        Map<Long, Long> ready = orderItemRepository.findShippedQuantities(orderIds).stream()
+                .filter(row -> REPORTED_READY.contains(row.shipmentStatus()))
+                .collect(Collectors.groupingBy(ShippedQuantity::orderItemId,
+                        Collectors.summingLong(ShippedQuantity::quantity)));
+
+        return packed.stream()
+                .filter(line -> ready.getOrDefault(line.getId(), 0L) >= line.getQuantity())
+                .toList();
     }
 
     // ------------------------------------------------------------------ checks

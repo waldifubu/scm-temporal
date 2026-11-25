@@ -1,6 +1,7 @@
 package com.supplychainmanagement.security;
 
 import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.entity.ProductCategory;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.support.TestData;
@@ -20,6 +21,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -124,6 +126,31 @@ class ProductListEndpointTest {
         assertThat(get("/products?sort=nonsense", RoleEnum.ADMIN).getStatus()).isEqualTo(400);
         assertThat(get("/products?page=-1", RoleEnum.ADMIN).getStatus()).isEqualTo(400);
         assertThat(get("/products?size=0", RoleEnum.ADMIN).getStatus()).isEqualTo(400);
+    }
+
+    /** The warehouse reads the categories as well, in the list and for one product; a customer does not. */
+    @Test
+    void showsTheCategoriesToTheWarehouseButNoComponentsOrId() throws Exception {
+        Product product = testData.component().getProduct();
+        ProductCategory category = new ProductCategory();
+        category.setName("Category " + System.nanoTime());
+        entityManager.persist(category);
+        product.setCategories(new LinkedHashSet<>(List.of(category)));
+        entityManager.flush();
+        entityManager.clear();
+
+        JsonNode listed = page("/products?size=500&sort=id&order=DESC", RoleEnum.WAREHOUSE).get("content").get(0);
+        JsonNode single = page("/products/" + product.getArticleNo(), RoleEnum.WAREHOUSE);
+        JsonNode bySku = page("/products/sku/" + product.getSku(), RoleEnum.WAREHOUSE);
+
+        for (JsonNode view : List.of(listed, single, bySku)) {
+            assertThat(view.get("categories")).isNotNull().hasSize(1);
+            assertThat(view.get("categories").get(0).get("name").asString()).isEqualTo(category.getName());
+            assertThat(view.has("id")).isFalse();
+            assertThat(view.has("components")).isFalse();
+        }
+        assertThat(page("/products/" + product.getArticleNo(), RoleEnum.CUSTOMER).has("categories")).isFalse();
+        assertThat(page("/products/" + product.getArticleNo(), RoleEnum.MANAGER).get("categories")).hasSize(1);
     }
 
     /** A manager's rows carry the components, a customer's do not and have no id - paging changed neither. */

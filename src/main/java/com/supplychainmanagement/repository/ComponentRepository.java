@@ -2,6 +2,8 @@ package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.entity.RequestComponent;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -17,6 +19,10 @@ public interface ComponentRepository extends JpaRepository<Component, Long> {
     @EntityGraph(attributePaths = "product")
     List<Component> findAllBy();
 
+    /** The same, one page of it. The product is to-one, so the page stays cut in SQL. */
+    @EntityGraph(attributePaths = "product")
+    Page<Component> findAllBy(Pageable pageable);
+
     /** Every bill-of-materials line of one product. */
     List<Component> findByProductId(Long productId);
 
@@ -28,9 +34,9 @@ public interface ComponentRepository extends JpaRepository<Component, Long> {
      */
     List<Component> findBySkuIn(Collection<UUID> skus);
 
-    Optional<Component> findByExternalId(String articleNo);
+    Optional<Component> findByExternalId(String externalId);
 
     boolean existsBySku(UUID sku);
 
-    boolean existsByExternalId(String articleNo);
+    boolean existsByExternalId(String externalId);
 }

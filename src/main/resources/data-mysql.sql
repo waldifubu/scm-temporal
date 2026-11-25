@@ -33,11 +33,12 @@ INSERT INTO users (user_type,color,created_at,email,first_name,is_active,last_lo
                         ('distributor','#FA96008F','2026-07-06 23:46:06.000','distributor2@distributor.com','Dustin',1,NULL,'Distributor Nagel','{argon2}$argon2id$v=19$m=16384,t=2,p=1$sKuDWspzoEwzvz2sRxqQ3Q$KaVoLBeS+xcv4O9Qnzj5WYO1j08B1MMMYcn4bqu8C40','2026-07-06 23:46:05.529','distributor2'),
                         ('admin','#C80019','2026-07-06 23:46:06.000','admin1@admin.com','Anton',1,NULL,'Admin','{argon2}$argon2id$v=19$m=16384,t=2,p=1$jlvmW2qiZo0TF/rgoJtBhg$I2HWH0i1XyQBxe1tjOiq8l7Y4uSDuDJe2g5GSWU2x/M','2026-07-06 23:46:05.629','admin1'),
                         ('customer',NULL,'2026-07-14 01:02:09.000','claude-test@example.com','Claude',1,NULL,'Test','{argon2}$argon2id$v=19$m=16384,t=2,p=1$mbZM7RiiWz7TXOsg0kISSQ$kz68QpKbP7oaYC58g4keJBa4913DQpMWHCIbaYZPE70','2026-07-14 01:02:09.929','claude-test'),
-                        ('customer','#ccDDcc','2026-07-14 15:59:58.000','wfubu@web.de9','Waldi',1,NULL,'Dell','{argon2}$argon2id$v=19$m=16384,t=2,p=1$85ul6QgwOjvFzQ/TcYATBQ$E0+xeydtscoZMLwBpNK/fsczGnQp5tQcwxdrDejvPxM','2026-07-14 15:59:58.549','waldifubu9');
+                        ('customer','#ccDDcc','2026-07-14 15:59:58.000','wfubu@web.de9','Waldi',1,NULL,'Dell','{argon2}$argon2id$v=19$m=16384,t=2,p=1$85ul6QgwOjvFzQ/TcYATBQ$E0+xeydtscoZMLwBpNK/fsczGnQp5tQcwxdrDejvPxM','2026-07-14 15:59:58.549','waldifubu9'),
+                        ('distributor',NULL,'2026-11-25 21:14:48.000','distributor3@distributor.com','David',1,NULL,'Distributor 3','{argon2}$argon2id$v=19$m=16384,t=2,p=1$sKuDWspzoEwzvz2sRxqQ3Q$KaVoLBeS+xcv4O9Qnzj5WYO1j08B1MMMYcn4bqu8C40','2026-11-25 21:14:48.000','distributor3');
 */
 /* Users - Roles */
 /*
-INSERT INTO users_roles (user_id,role_id) VALUES (1,1), (2,1), (12,1), (13,1), (3,2), (4,2), (5,3), (6,3), (7,4), (8,5), (9,6),(10,6), (11,7);
+INSERT INTO users_roles (user_id,role_id) VALUES (1,1), (2,1), (12,1), (13,1), (3,2), (4,2), (5,3), (6,3), (7,4), (8,5), (9,6),(10,6), (11,7), (14,6);
 */
 
 /* Categories */
@@ -88,22 +89,22 @@ SET @C14  = UUID();
 SET @C15  = UUID();
 SET @C16  = UUID();
 
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'VL-BA', 'VL-BA-001', @C1, 1);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Gut und Billig', 'Blech innen', 'VL-BI', 'VL-BI-001', @C2, 1);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Röchling', 'Verkleidung', 'VL-VK', 'VL-VK-001', @C3, 1);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Bose', 'Lautsprecher', 'VL-LS', 'VL-LS-001', @C4, 1);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'VR-BA', 'VR-BA-001', @C5, 2);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'VR-BI', 'VR-BI-77', @C6, 2);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Igus', 'Verkleidung', 'VR-VK', 'VR-VK-001', @C7, 2);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Bang & Olufsen', 'Lautsprecher', 'VR-LS', 'VR-LS-655', @C8, 2);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'HL-BA', 'HL-BA-232', @C9, 3);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'HL-BI', 'HL-BI-123', @C10, 3);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('ISE', 'Verkleidung', 'HL-VK', 'HL-VK-001', @C11, 3);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('JBL', 'Lautsprecher', 'HL-LS', 'HL-LS-001', @C12, 3);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'HR-BA', 'HR-BA-001', @C13, 4);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'HR-BI', 'HR-BI-001', @C14, 4);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('ISE', 'Verkleidung', 'HR-VK', 'HR-VK-001', @C15, 4);
-INSERT INTO components (manufacturer, name, article_no, external_id, sku, product_id) VALUES('Harman Kardon', 'Lautsprecher', 'HR-LS', 'HR-LS-001', @C16, 4);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'VL-BA', @C1, 1);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Gut und Billig', 'Blech innen', 'VL-BI', @C2, 1);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Röchling', 'Verkleidung', 'VL-VK', @C3, 1);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Bose', 'Lautsprecher', 'VL-LS', @C4, 1);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'VR-BA', @C5, 2);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'VR-BI', @C6, 2);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Igus', 'Verkleidung', 'VR-VK', @C7, 2);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Bang & Olufsen', 'Lautsprecher', 'VR-LS', @C8, 2);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'HL-BA', @C9, 3);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'HL-BI', @C10, 3);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('ISE', 'Verkleidung', 'HL-VK', @C11, 3);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('JBL', 'Lautsprecher', 'HL-LS', @C12, 3);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Pfusch und weg', 'Blech außen', 'HR-BA', @C13, 4);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Gut und billig', 'Blech innen', 'HR-BI', @C14, 4);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('ISE', 'Verkleidung', 'HR-VK', @C15, 4);
+INSERT INTO components (manufacturer, name, external_id, sku, product_id) VALUES('Harman Kardon', 'Lautsprecher', 'HR-LS', @C16, 4);
 
 /* Warehouses - Different warehouses */
 REPLACE INTO storehouses (id, name, address, city, country) values (1, 'Zentrallager Hamburg', 'Hamburgser Str. 1313', 'Hamburg', 'DE');

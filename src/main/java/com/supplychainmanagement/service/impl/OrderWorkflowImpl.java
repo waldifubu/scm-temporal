@@ -18,6 +18,7 @@ import java.util.stream.Collectors;
 
 import static com.supplychainmanagement.model.enums.OrderAction.ACCEPT;
 import static com.supplychainmanagement.model.enums.OrderAction.CANCEL;
+import static com.supplychainmanagement.model.enums.OrderAction.CLOSE;
 import static com.supplychainmanagement.model.enums.OrderAction.COMPLETE;
 import static com.supplychainmanagement.model.enums.OrderAction.REJECT;
 import static com.supplychainmanagement.model.enums.OrderAction.RELEASE;
@@ -83,10 +84,11 @@ public class OrderWorkflowImpl implements OrderWorkflow {
         text.put(IN_TRANSIT, "Every line is on the road with a carrier.");
         text.put(PARTIALLY_DELIVERED, "Part of the order has arrived while the rest is still on its way.");
         text.put(DELIVERED, "Everything has arrived. The order can now be completed.");
-        text.put(COMPLETED, "The order is closed: the delivery was confirmed. This is the end of the flow.");
+        text.put(COMPLETED, "The order is closed: the delivery was confirmed, or it was cancelled before. "
+                + "This is the end of the flow.");
         text.put(REJECTED, "The order was declined. This is an end of the flow.");
         text.put(CANCELLED, "The order was called off before any goods moved; its reservations went back to "
-                + "stock. This is an end of the flow.");
+                + "stock. It is closed as completed two days later.");
         return Collections.unmodifiableMap(text);
     }
 
@@ -118,7 +120,7 @@ public class OrderWorkflowImpl implements OrderWorkflow {
 
         // reject: right up to fulfillment, never once goods are in a shipment.
         for (OrderStatus from : BEFORE_DISPATCH) {
-            manual(rows, REJECT, false, "", from, REJECTED);
+            manual(rows, REJECT, false, "No line has left the shelf", from, REJECTED);
         }
 
         // cancel: only while nothing has physically moved; after that the shipment is called off instead.
@@ -147,6 +149,10 @@ public class OrderWorkflowImpl implements OrderWorkflow {
         rows.add(completeFromDelivered);
         rows.add(new Transition(PARTIALLY_DELIVERED, COMPLETED, COMPLETE, Trigger.MANUAL, MAY_COMPLETE, false,
                 "Every line is covered by packages that arrived").asShortcut());
+
+        // close: a cancelled order is filed away. Computed, so that no client offers it as a button.
+        rows.add(new Transition(CANCELLED, COMPLETED, CLOSE, Trigger.COMPUTED, MANAGEMENT, true,
+                "Cancelled and unchanged for two days"));
 
         return Collections.unmodifiableList(rows);
     }

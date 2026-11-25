@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.common.DisplayNames;
 import com.supplychainmanagement.dto.mapper.UserMapper;
 import com.supplychainmanagement.dto.user.DistributorQueryRequest;
 import com.supplychainmanagement.dto.user.UserDto;
@@ -237,6 +238,10 @@ public class UserServiceImpl implements UserService {
 
         if (user.getUsername() == null || user.getUsername().isBlank()) {
             throw new APIException(HttpStatus.BAD_REQUEST, "Username is required");
+        }
+
+        if (DisplayNames.isReserved(user.getUsername())) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Username is reserved");
         }
 
         if (user.getEmail() == null || user.getEmail().isBlank()) {

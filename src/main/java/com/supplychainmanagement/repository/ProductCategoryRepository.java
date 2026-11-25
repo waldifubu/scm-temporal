@@ -11,4 +11,10 @@ import org.springframework.data.jpa.repository.JpaRepository;
  * one - with a {@code Set<Product>} inside it.
  */
 public interface ProductCategoryRepository extends JpaRepository<ProductCategory, Long> {
+
+    /** Whether the name is taken. The column's collation ignores case, so "Drive" and "drive" are one name. */
+    boolean existsByName(String name);
+
+    /** The same, not counting the category that is being changed. */
+    boolean existsByNameAndIdNot(String name, Long id);
 }

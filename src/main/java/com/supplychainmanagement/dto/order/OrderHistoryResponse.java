@@ -2,6 +2,7 @@ package com.supplychainmanagement.dto.order;
 
 import org.jspecify.annotations.Nullable;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.supplychainmanagement.dto.common.DisplayNames;
 import com.supplychainmanagement.entity.OrderHistory;
 import com.supplychainmanagement.model.enums.OrderStatus;
 
@@ -17,9 +18,9 @@ import java.util.Map;
  * <p>
  * <strong>{@code changedById} and {@code changedByName} are for staff only.</strong> A customer reads
  * the history of their own order and sees what happened and when; who inside the house did it is not
- * theirs to know, and a name here is a name of an employee. For staff, both are also absent where the
- * row has no acting user - an automatic step such as the reservation moving an order to
- * IN_FULFILLMENT has nobody to name, and a null here means exactly that.
+ * theirs to know, and a name here is a name of an employee. Where the row has no acting user - an automatic
+ * step, such as the routine completing an order - staff read {@link DisplayNames#SYSTEM} as the name, and there
+ * is no {@code changedById}.
  */
 public record OrderHistoryResponse(
         Long id,
@@ -43,7 +44,7 @@ public record OrderHistoryResponse(
                 row.getNewStatus(),
                 row.getChangedAt(),
                 actor,
-                actor == null ? null : names.get(actor)
+                !showActor ? null : actor == null ? DisplayNames.SYSTEM : names.get(actor)
         );
     }
 }

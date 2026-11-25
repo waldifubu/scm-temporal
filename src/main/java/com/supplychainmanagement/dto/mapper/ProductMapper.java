@@ -23,9 +23,7 @@ public interface ProductMapper {
         if (product == null) {
             return null;
         }
-        Set<ProductCategoryDto> categories = product.getCategories() == null ? null
-                : product.getCategories().stream().map(this::mapToDto)
-                        .collect(Collectors.toCollection(LinkedHashSet::new));
+        Set<ProductCategoryDto> categories = categoriesOf(product);
         List<ProductComponentDto> components = product.getComponents() == null ? null
                 : product.getComponents().stream().map(this::mapToDto).toList();
         return build(product, product.getId(), categories, components);
@@ -41,6 +39,17 @@ public interface ProductMapper {
         return product == null ? null : build(product, null, null, null);
     }
 
+    /** View for WAREHOUSE: the public one plus the categories. Id and components stay empty. */
+    default ProductDto mapToWarehouseDto(Product product) {
+        return product == null ? null : build(product, null, categoriesOf(product), null);
+    }
+
+    private Set<ProductCategoryDto> categoriesOf(Product product) {
+        return product.getCategories() == null ? null
+                : product.getCategories().stream().map(this::mapToDto)
+                        .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
     default ProductCategoryDto mapToDto(ProductCategory category) {
         return category == null ? null
                 : new ProductCategoryDto(category.getId(), category.getName(), category.getDescription());
@@ -54,7 +63,6 @@ public interface ProductMapper {
                 component.getId(),
                 component.getManufacturer(),
                 component.getName(),
-                component.getArticleNo(),
                 component.getDescription(),
                 component.getWeight() == null ? null : component.getWeight().doubleValue(),
                 component.getSku(),

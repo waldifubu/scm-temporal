@@ -64,7 +64,7 @@ class ProductServiceRequestDtoTest {
     }
 
     private static ProductRequestDto.ComponentLine line(Long id, String name) {
-        return new ProductRequestDto.ComponentLine(id, name, null, null, null, null, null, null, 4);
+        return new ProductRequestDto.ComponentLine(id, name, null, null, null, null, null, 4);
     }
 
     /** An existing product with one component line of its own. */

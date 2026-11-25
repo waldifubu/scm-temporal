@@ -160,7 +160,9 @@ class OrderHistoryServiceImplTest {
         when(roleService.canReadAnyOrder(caller)).thenReturn(false);
         when(historyRepository.findByOrderIdOrderByChangedAtDescIdDesc(ORDER_ID)).thenReturn(List.of(
                 row(1L, null, OrderStatus.CREATED, 7L),
-                row(2L, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, 8L)));
+                row(2L, OrderStatus.CREATED, OrderStatus.ACKNOWLEDGED, 8L),
+                // Not even "system": who did it is staff business, an automatic step included.
+                row(3L, OrderStatus.ACKNOWLEDGED, OrderStatus.IN_FULFILLMENT, null)));
 
         var history = service.findHistory(ORDER_NO, caller);
 
@@ -171,9 +173,9 @@ class OrderHistoryServiceImplTest {
         verifyNoInteractions(userRepository);
     }
 
-    /** An automatic step has nobody to name, and asking for nobody is not a query. */
+    /** An automatic step reads "system" - without an id, and asking for nobody is not a query. */
     @Test
-    void namesNobodyForAnAutomaticStepAndAsksNoOne() {
+    void namesTheSystemForAnAutomaticStepAndAsksNoOne() {
         theOrder();
         when(roleService.canReadAnyOrder(caller)).thenReturn(true);
         when(historyRepository.findByOrderIdOrderByChangedAtDescIdDesc(ORDER_ID)).thenReturn(List.of(
@@ -182,7 +184,7 @@ class OrderHistoryServiceImplTest {
         var history = service.findHistory(ORDER_NO, caller);
 
         assertThat(history.getFirst().changedById()).isNull();
-        assertThat(history.getFirst().changedByName()).isNull();
+        assertThat(history.getFirst().changedByName()).isEqualTo("system");
         verify(userRepository, never()).findAllById(any());
     }
 

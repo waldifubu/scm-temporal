@@ -27,6 +27,21 @@ public interface FulfillmentService {
     List<Order> findOrdersWithExpiredReservations();
 
     /**
+     * The REJECTED orders that still have something to end: an active reservation, or a line still
+     * {@code WAITING} or {@code RESERVED} - one whose reservation has expired meanwhile, or that never had one.
+     * Each once and with its lines loaded, for {@link #releaseRejectedOrder}.
+     */
+    List<Order> findRejectedOrdersToClose();
+
+    /**
+     * Ends what a rejected order holds: {@link #releaseItems(Order, String)}, and every line that has not left the
+     * shelf ends {@code CANCELLED}, as with a cancelled order. A line further along keeps its status.
+     *
+     * @return the released reservations
+     */
+    List<Reservation> releaseRejectedOrder(Order order, String username);
+
+    /**
      * The lines of the order whose goods have already left the shelf - anything past RESERVED, so
      * PICKING through READY_FOR_DISPATCH. Empty means nothing has physically moved and every
      * reservation the order holds can simply be handed back.

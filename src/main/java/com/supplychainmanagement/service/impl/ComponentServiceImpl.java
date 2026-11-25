@@ -1,12 +1,12 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.common.DisplayNames;
 import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.component.ComponentPatchRequest;
 import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.component.SupplierResolution;
-import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.entity.SupplierRule;
 import com.supplychainmanagement.repository.SupplierRuleRepository;
 import com.supplychainmanagement.entity.Component;
@@ -21,7 +21,6 @@ import com.supplychainmanagement.repository.ProductRepository;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import com.supplychainmanagement.repository.RequestComponentRepository;
 import com.supplychainmanagement.repository.StorehouseRepository;
-import com.supplychainmanagement.repository.SupplierRepository;
 import com.supplychainmanagement.repository.UserRepository;
 import com.supplychainmanagement.service.ComponentService;
 import com.supplychainmanagement.service.RoleService;
@@ -29,6 +28,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.Hibernate;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Pageable;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
@@ -51,7 +52,6 @@ public class ComponentServiceImpl implements ComponentService {
     private final RoleService roleService;
     private final StorehouseRepository storehouseRepository;
     private final StockService stockService;
-    private final SupplierRepository supplierRepository;
     private final SupplierRuleRepository supplierRuleRepository;
 
     /**
@@ -119,7 +119,7 @@ public class ComponentServiceImpl implements ComponentService {
             return rule == null
                     ? new SupplierResolution(sku, null, null, null)
                     : new SupplierResolution(sku, rule.getSupplier().getId(),
-                            SupplierResponse.from(rule.getSupplier()).name(), rule.getId());
+                            DisplayNames.of(rule.getSupplier()), rule.getId());
         }).toList();
     }
 
@@ -194,13 +194,6 @@ public class ComponentServiceImpl implements ComponentService {
                 : requestComponentRepository.findAllByRequestStatus(status, pageable);
 
         return page.map(RequestComponentResponse::from);
-    }
-
-    /** One query: a supplier has no lazy association the response reads. */
-    @Override
-    @Transactional(readOnly = true)
-    public Page<SupplierResponse> findSuppliers(Pageable pageable) {
-        return supplierRepository.findAllByIsActiveTrue(pageable).map(SupplierResponse::from);
     }
 
     @Override
@@ -480,6 +473,16 @@ public class ComponentServiceImpl implements ComponentService {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public Page<Component> findPage(Pageable pageable) {
+        Pageable stable = pageable.getSort().getOrderFor("id") != null
+                ? pageable
+                : PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                        pageable.getSort().and(Sort.by("id")));
+        return componentRepository.findAllBy(stable);
+    }
+
+    @Override
     public Component findById(Long id) {
         return componentRepository.findWithProductById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Component", "id", id));
@@ -492,9 +495,9 @@ public class ComponentServiceImpl implements ComponentService {
     }
 
     @Override
-    public Component findByArticleNo(String articleNo) {
-        return componentRepository.findByExternalId(articleNo)
-                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with externalId: " + articleNo));
+    public Component findByExternalId(String externalId) {
+        return componentRepository.findByExternalId(externalId)
+                .orElseThrow(() -> new APIException(HttpStatus.NOT_FOUND, "Component not found with externalId: " + externalId));
     }
 
     @Override
@@ -541,12 +544,11 @@ public class ComponentServiceImpl implements ComponentService {
     private void apply(ComponentRequestDto request, Component component) {
         Product product = productRepository.findByArticleNo(request.productArticleNo())
                 .orElseThrow(() -> new ResourceNotFoundException(
-                        "Product", "externalId", request.productArticleNo()));
+                        "Product", "articleNo", request.productArticleNo()));
 
         component.setProduct(product);
         component.setName(request.name());
         component.setManufacturer(request.manufacturer());
-        component.setArticleNo(request.articleNo());
         component.setDescription(request.description());
         component.setExternalId(request.externalId());
         component.setQty(request.qty());

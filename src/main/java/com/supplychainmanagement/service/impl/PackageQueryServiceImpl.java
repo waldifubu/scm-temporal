@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import java.util.EnumSet;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -99,6 +101,27 @@ public class PackageQueryServiceImpl implements PackageQueryService {
         return packageItemResponseAssembler.toResponses(status == null
                 ? packageItemRepository.findAllWithProductByShipmentPackageIsNull(ordered)
                 : packageItemRepository.findAllWithProductByShipmentPackageIsNullAndOrderItemFulfillmentStatus(status, ordered));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<PackageItemResponse> findPackageItemsOfOrder(Long orderNo, Pageable pageable,
+                                                             FulfillmentStatus status) {
+        return packageItemResponseAssembler.toResponses(packageItemRepository.findAllWithProductOfOrder(
+                orderNo, statusesOf(status), withIdTieBreak(pageable)));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<PackageItemResponse> findLoosePackageItemsOfOrder(Long orderNo, Pageable pageable,
+                                                                  FulfillmentStatus status) {
+        return packageItemResponseAssembler.toResponses(packageItemRepository.findAllLooseWithProductOfOrder(
+                orderNo, statusesOf(status), withIdTieBreak(pageable)));
+    }
+
+    /** The one status asked for, or all of them where there is no filter. */
+    private static Set<FulfillmentStatus> statusesOf(FulfillmentStatus status) {
+        return status == null ? EnumSet.allOf(FulfillmentStatus.class) : EnumSet.of(status);
     }
 
     /** One package item - the same row the lists show; unknown id is a 404. */

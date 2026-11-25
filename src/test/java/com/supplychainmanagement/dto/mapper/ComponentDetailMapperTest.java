@@ -29,7 +29,6 @@ class ComponentDetailMapperTest {
         component.setDescription("ein Blech");
         component.setExternalId("EXT-1");
         component.setWeight(new BigDecimal("12.500"));
-        component.setArticleNo("A-11");
         component.setQty(3);
         component.setProduct(product);
         setTimestamp(component, "createdAt", java.time.LocalDateTime.of(2026, 11, 1, 8, 30, 15));

@@ -151,6 +151,27 @@ class OrderServiceCompleteTest {
         verify(orderProgress, never()).changeStatus(any(), any(), any());
     }
 
+    /** The routine's step: a cancelled order is filed away, whatever has or has not arrived. */
+    @Test
+    void filesACancelledOrderAwayAsCompleted() {
+        Order order = order(OrderStatus.CANCELLED);
+
+        service.completeCancelled(order);
+
+        verify(orderProgress).changeStatus(order, OrderStatus.COMPLETED, null);
+        verify(orderProgress, never()).undeliveredLines(any());
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, mode = EnumSource.Mode.EXCLUDE, names = "CANCELLED")
+    void filesNothingElseAway(OrderStatus status) {
+        Order order = order(status);
+
+        assertStatus(catchThrowable(() -> service.completeCancelled(order)), HttpStatus.CONFLICT);
+
+        verify(orderProgress, never()).changeStatus(any(), any(), any());
+    }
+
     /**
      * Nothing ordered is not everything delivered: with no lines there is nothing that could be
      * short, so the order would close on the spot.

@@ -30,7 +30,6 @@ public interface ComponentMapper {
                 component.getName(),
                 component.getDescription(),
                 component.getSku() != null ? component.getSku().toString() : null,
-                component.getArticleNo(),
                 component.getExternalId(),
                 component.getWeight(),
                 component.getQty(),

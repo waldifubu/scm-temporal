@@ -46,6 +46,10 @@ public class PackingServiceImpl implements PackingService {
     static final List<FulfillmentStatus> PACKABLE_STATUSES =
             List.of(FulfillmentStatus.PICKED, FulfillmentStatus.PACKING);
 
+    /** The statuses of a fully packed line - what a package being completed may hold. */
+    private static final Set<FulfillmentStatus> COMPLETABLE_STATUSES =
+            EnumSet.of(FulfillmentStatus.PACKED, FulfillmentStatus.READY_FOR_DISPATCH);
+
     @Override
     @Transactional(readOnly = true)
     public Page<PackableItemDto> findPackableItems(Long orderNo, Pageable pageable) {
@@ -136,7 +140,8 @@ public class PackingServiceImpl implements PackingService {
     }
 
     /**
-     * A package goes to one customer, so it holds the items of one order only.
+     * A package goes to one customer, so it holds the items of one order only. The refusal names the orders by
+     * their order numbers - what a person knows an order by, not its id.
      */
     private static void requireOneOrder(Long shipmentPackageId, List<PackageItem> contents) {
         List<Long> orderIds = contents.stream()
@@ -146,8 +151,12 @@ public class PackingServiceImpl implements PackingService {
         if (orderIds.size() > 1) {
             // No id yet while the package is being created.
             String packageName = shipmentPackageId != null ? "ShipmentPackage " + shipmentPackageId : "A package";
+            List<?> orderNumbers = contents.stream()
+                    .map(item -> item.getOrderItem().getOrder().getOrderNo())
+                    .distinct()
+                    .toList();
             throw new APIException(HttpStatus.BAD_REQUEST, packageName
-                    + " can only hold items of one order, got items of orders " + orderIds);
+                    + " can only hold items of one order, got items of orders " + orderNumbers);
         }
     }
 
@@ -589,15 +598,16 @@ public class PackingServiceImpl implements PackingService {
         requireOneOrder(shipmentPackageId, shipmentPackage.getItems());
 
         shipmentPackage.getItems().forEach(item -> {
-            /**
-             * Every item in a completed package must be packed, so the order line is PACKED and the
-             * quantity is counted. A loose item that was packed but then taken out of its packagege
-             * would still be PACKED, but it is not in a completed package and cannot be shipped. A PACKING item is still open and could be packed again, so it is not ready
+            /*
+             * Only fully packed lines go into a completed package: a PACKING line is still open. A line
+             * reads READY_FOR_DISPATCH only after it was fully packed, so it counts as well - an item of
+             * such a line that is still loose would otherwise never get into a shipment, and its order
+             * would never be delivered completely.
              */
-            if (item.getOrderItem().getFulfillmentStatus() != FulfillmentStatus.PACKED) {
+            if (!COMPLETABLE_STATUSES.contains(item.getOrderItem().getFulfillmentStatus())) {
                 throw new APIException(HttpStatus.CONFLICT, "OrderItem " + item.getOrderItem().getId()
                         + " is " + item.getOrderItem().getFulfillmentStatus()
-                        + ", only PACKED items can be in a completed ShipmentPackage");
+                        + ", only PACKED or READY_FOR_DISPATCH items can be in a completed ShipmentPackage");
             }
         });
 

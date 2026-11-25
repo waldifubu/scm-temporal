@@ -37,7 +37,6 @@ class RequestComponentMapperTest {
         component.setId(11L);
         component.setSku(SKU);
         component.setName("Blech");
-        component.setArticleNo("A-11");
         component.setQty(4);
         component.setProduct(product);
 

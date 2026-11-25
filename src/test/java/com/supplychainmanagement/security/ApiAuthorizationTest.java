@@ -116,7 +116,7 @@ class ApiAuthorizationTest {
                 // The carriers a shipment can be handed to.
                 get("/api/1.0/users/distributors", RoleEnum.ADMIN),
                 // The suppliers a component request can be placed with - the roles that may place one.
-                get("/api/1.0/users/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                get("/api/1.0/users/suppliers", RoleEnum.ADMIN),
                 // The carrier reports; the house plans.
                 get("/api/1.0/shipments/distributor", RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
                 post("/api/1.0/shipments/1/accept", null, RoleEnum.ADMIN, RoleEnum.DISTRIBUTOR),
@@ -131,15 +131,12 @@ class ApiAuthorizationTest {
                 post("/api/1.0/shipments/1/cancel", "{\"reason\": \"no truck\"}",
                         RoleEnum.ADMIN, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 // The component catalogue: the warehouse reads it because it orders parts.
-                get("/api/1.0/components", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
+                get("/api/1.0/components", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE, RoleEnum.LOGISTICS),
                 // Changing a component: the warehouse may as well, it keeps the parts.
                 patch("/api/1.0/components/706a99c3-944b-11f1-9b51-001e064520d8", "{\"name\": \"Blech\"}",
                         RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 // The warehouse's work list and the supplier's own - two views of the same rows.
                 get("/api/1.0/components/requests", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
-                // Whom a request can be placed with - the same three roles that may place one. The warehouse
-                // is among them and may not read /users, which is why the list exists.
-                get("/api/1.0/components/suppliers", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE),
                 get("/api/1.0/supplier/my-requests", RoleEnum.ADMIN, RoleEnum.SUPPLIER),
                 post("/api/1.0/components/request",
                         "[{\"componentId\": \"706a99c3-944b-11f1-9b51-001e064520d8\", \"qty\": 1}]",
@@ -175,9 +172,9 @@ class ApiAuthorizationTest {
                 get("/api/1.0/users", RoleEnum.ADMIN),
                 // The order workflow as data: every role that reads orders.
                 get("/api/1.0/orders/workflow", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
-                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 get("/api/1.0/orders/workflow/diagram", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
-                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS),
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 // The storehouses a client can name - what the goods receipt and stock booking take.
                 get("/api/1.0/storehouses", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // The picked stage, as the warehouse packs from it and the manager watches it: the lists of

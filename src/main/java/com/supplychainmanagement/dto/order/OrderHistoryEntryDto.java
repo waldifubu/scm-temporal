@@ -10,8 +10,8 @@ import java.time.LocalDateTime;
  * {@link OrderHistoryResponse} shows it, plus which order it belongs to and whose order that is. Built by
  * {@code OrderHistoryEntryMapper}.
  * <p>
- * Staff only - the endpoint is closed to customers - so the actor is always shown. {@code changedById} and
- * {@code changedByName} are {@code null} where the row has no acting user (an automatic step).
+ * Staff only - the endpoint is closed to customers - so the actor is always shown. Where the row has no acting user
+ * (an automatic step) {@code changedById} is {@code null} and {@code changedByName} reads "system".
  */
 public record OrderHistoryEntryDto(
         Long id,

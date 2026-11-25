@@ -28,7 +28,7 @@ public record RequestComponentResponse(
         RequestStatus requestStatus,
         LocalDateTime requestDate,
         Long supplierId,
-        /** The supplier by name, so a list need not look the id up; the same name {@code GET /components/suppliers} shows. */
+        /** The supplier by name, so a list need not look the id up. */
         @JsonInclude(JsonInclude.Include.NON_NULL)
         String supplierName,
         /*

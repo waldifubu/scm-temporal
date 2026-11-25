@@ -1,5 +1,6 @@
 package com.supplychainmanagement.repository;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
 import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.OrderStatus;
@@ -79,4 +80,13 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
      */
     @EntityGraph(attributePaths = "orderItems")
     List<Order> findWithOrderItemsByIdIn(Collection<Long> ids);
+
+    /**
+     * The ids of the orders in a status that have a line in one of the fulfillment statuses, or a line without
+     * one (which counts as {@code WAITING}).
+     */
+    @Query("select distinct o.id from Order o join o.orderItems i "
+            + "where o.status = :status and (i.fulfillmentStatus is null or i.fulfillmentStatus in :lines)")
+    List<Long> findIdsByStatusAndLineStatusIn(@Param("status") OrderStatus status,
+                                              @Param("lines") Collection<FulfillmentStatus> lines);
 }

@@ -181,10 +181,23 @@ class ComponentProductCrudEndpointTest {
         Number id = read(created.getContentAsString(), "$.id");
         assertThat(productRepository.findById(id.longValue()).orElseThrow().getName()).isEqualTo("Tisch");
 
-        assertThat(call("DELETE", testData.userWithRoles(RoleEnum.WAREHOUSE), "/products/" + id, null).getStatus())
+        assertThat(call("DELETE", testData.userWithRoles(RoleEnum.WAREHOUSE), "/products/" + articleNo, null).getStatus())
                 .isEqualTo(403);
-        assertThat(call("DELETE", manager, "/products/" + id, null).getStatus()).isEqualTo(200);
+        assertThat(call("DELETE", manager, "/products/" + articleNo, null).getStatus()).isEqualTo(200);
         assertThat(productRepository.existsById(id.longValue())).isFalse();
+        // Gone is gone: the same number again is nobody's.
+        assertThat(call("DELETE", manager, "/products/" + articleNo, null).getStatus()).isEqualTo(404);
+    }
+
+    /** The path names a product by its article number, for changing it as for removing it - not by the database id. */
+    @Test
+    void doesNotTakeTheDatabaseIdForAnArticleNumber() throws Exception {
+        User admin = testData.userWithRoles(RoleEnum.ADMIN);
+        Product product = testData.product();
+
+        assertThat(call("DELETE", admin, "/products/" + product.getId(), null).getStatus()).isEqualTo(404);
+
+        assertThat(productRepository.existsById(product.getId())).isTrue();
     }
 
     @Test
@@ -192,13 +205,13 @@ class ComponentProductCrudEndpointTest {
         Order order = testData.order(testData.customer());
         OrderItem item = testData.orderItem(order, 1, FulfillmentStatus.WAITING);
         User admin = testData.userWithRoles(RoleEnum.ADMIN);
-        Long productId = item.getProduct().getId();
+        Long articleNo = item.getProduct().getArticleNo();
         // In production the delete is a request of its own and the order line is not in its session; here the
         // test's transaction is shared, so what the test made is let go first.
         entityManager.flush();
         entityManager.clear();
 
-        MockHttpServletResponse response = call("DELETE", admin, "/products/" + productId, null);
+        MockHttpServletResponse response = call("DELETE", admin, "/products/" + articleNo, null);
 
         assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(409);
     }

@@ -538,10 +538,10 @@ class DeliveryServiceImplTest {
 
     // ------------------------------------------------------------------ tracking number
 
-    /** Handed over and not yet on the road: the carrier sets it, and may change it. */
+    /** Handed over and not yet delivered: the carrier sets it, and may change it. */
     @ParameterizedTest
-    @EnumSource(value = ShipmentStatus.class, names = {"DISPATCH_REQUESTED", "ACCEPTED"})
-    void setsTheTrackingNumberWhileTheShipmentIsNotOnTheRoad(ShipmentStatus status) {
+    @EnumSource(value = ShipmentStatus.class, names = {"DISPATCH_REQUESTED", "ACCEPTED", "IN_TRANSIT"})
+    void setsTheTrackingNumberUntilTheShipmentIsDelivered(ShipmentStatus status) {
         Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
 
         DeliveryResponse response = service.assignTrackingNumber(SHIPMENT_ID, "DHL-123", DISTRIBUTOR_ID);
@@ -554,12 +554,12 @@ class DeliveryServiceImplTest {
     }
 
     /**
-     * From IN_TRANSIT on the number is fixed - and in every other status there is no carrier with one to set:
+     * In every other status there is no carrier with one to set, or nothing left to follow:
      * not handed over yet (CREATED, READY, which used to be a NullPointerException on the missing
      * assignment), turned down, delivered, called off.
      */
     @ParameterizedTest
-    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DECLINED", "IN_TRANSIT", "DELIVERED", "CANCELLED"})
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DECLINED", "DELIVERED", "CANCELLED"})
     void leavesTheTrackingNumberAloneOutsideTheStatusesItMayChangeIn(ShipmentStatus status) {
         Shipment shipment = shipment(status, shipmentPackage(5L, ShipmentPackageStatus.PACKED));
         shipment.setTrackingNumber("DHL-123");
@@ -567,7 +567,7 @@ class DeliveryServiceImplTest {
         Throwable thrown = catchThrowable(() -> service.assignTrackingNumber(SHIPMENT_ID, "DHL-999", DISTRIBUTOR_ID));
 
         assertStatus(thrown, HttpStatus.CONFLICT);
-        assertThat(thrown).hasMessageContaining("only [DISPATCH_REQUESTED, ACCEPTED]");
+        assertThat(thrown).hasMessageContaining("only [DISPATCH_REQUESTED, ACCEPTED, IN_TRANSIT]");
         assertThat(shipment.getTrackingNumber()).isEqualTo("DHL-123");
         verify(shipmentRepository, never()).save(any());
     }

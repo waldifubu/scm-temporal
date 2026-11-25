@@ -29,7 +29,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * {@code GET /order-items} with {@code status=ALL} against the real chain and rows: every line, whatever it is
  * doing. Without a status the endpoint still answers PICKED (the packing work list), and a status that is none is a
- * 400 - the page's "All statuses" used to send nothing and so showed the picked lines only.
+ * 400 - the page's "All statuses" used to send nothing and so showed the picked lines only. {@code ALL} is the
+ * administrator's alone; everybody else has {@code NOT_COMPLETED}, which leaves out the lines handed on or called off.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -50,6 +51,8 @@ class OrderItemsAllStatusesTest {
     private OrderItem picked;
     private OrderItem reserved;
     private OrderItem waiting;
+    private OrderItem ready;
+    private OrderItem cancelled;
 
     @BeforeEach
     void scenario() {
@@ -60,12 +63,18 @@ class OrderItemsAllStatusesTest {
         testData.consumedReservation(picked, storehouse);
         reserved = testData.orderItem(order, 3, FulfillmentStatus.RESERVED);
         waiting = testData.orderItem(order, 2, FulfillmentStatus.WAITING);
+        ready = testData.orderItem(order, 1, FulfillmentStatus.READY_FOR_DISPATCH);
+        cancelled = testData.orderItem(order, 1, FulfillmentStatus.CANCELLED);
     }
 
     private MockHttpServletResponse get(String query) throws Exception {
-        User warehouse = testData.userWithRoles(RoleEnum.WAREHOUSE);
+        return get(query, RoleEnum.ADMIN);
+    }
+
+    private MockHttpServletResponse get(String query, RoleEnum role) throws Exception {
+        User user = testData.userWithRoles(role);
         String token = jwtTokenProvider.generateToken(
-                new UsernamePasswordAuthenticationToken(warehouse.getUsername(), null, List.of()));
+                new UsernamePasswordAuthenticationToken(user.getUsername(), null, List.of()));
         return mockMvc.perform(MockMvcRequestBuilders.get("/api/1.0/order-items" + query)
                         .header("X-API-KEY", "items-all-" + CALLS.incrementAndGet())
                         .header("Authorization", "Bearer " + token))
@@ -85,7 +94,36 @@ class OrderItemsAllStatusesTest {
         MockHttpServletResponse response = get(ALL);
 
         assertThat(response.getStatus()).isEqualTo(200);
-        assertThat(idsOf(response)).contains(picked.getId(), reserved.getId(), waiting.getId());
+        assertThat(idsOf(response)).contains(picked.getId(), reserved.getId(), waiting.getId(), ready.getId(),
+                cancelled.getId());
+    }
+
+    @Test
+    void allIsTheAdministratorsAlone() throws Exception {
+        for (RoleEnum role : List.of(RoleEnum.MANAGER, RoleEnum.WAREHOUSE)) {
+            for (String word : List.of("ALL", "all")) {
+                assertThat(get("?status=" + word, role).getStatus()).as(role + " " + word).isEqualTo(403);
+            }
+        }
+    }
+
+    @Test
+    void notCompletedLeavesOutReadyForDispatchAndCancelledForEveryRole() throws Exception {
+        for (RoleEnum role : List.of(RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE)) {
+            MockHttpServletResponse response = get("?status=NOT_COMPLETED&sort=id&order=DESC&size=100", role);
+
+            assertThat(response.getStatus()).as(role.name()).isEqualTo(200);
+            assertThat(idsOf(response)).as(role.name())
+                    .contains(picked.getId(), reserved.getId(), waiting.getId())
+                    .doesNotContain(ready.getId(), cancelled.getId());
+        }
+    }
+
+    /** Only the group leaves them out: asked for by name, they are listed. */
+    @Test
+    void aCompletedStatusCanStillBeAskedForByName() throws Exception {
+        assertThat(idsOf(get("?status=CANCELLED&sort=id&order=DESC&size=100", RoleEnum.WAREHOUSE)))
+                .contains(cancelled.getId());
     }
 
     @Test

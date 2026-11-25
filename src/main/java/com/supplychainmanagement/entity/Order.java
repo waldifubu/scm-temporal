@@ -5,7 +5,6 @@ import com.supplychainmanagement.entity.users.User;
 import com.supplychainmanagement.model.enums.OrderStatus;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import jakarta.persistence.*;
-import jakarta.validation.constraints.Future;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -46,7 +45,10 @@ public class Order {
     @JsonFormat(pattern = "dd.MM.yyyy HH:mm:ss")
     private LocalDateTime created;
 
-    @Future
+    /**
+     * Ahead of today when the order is placed - checked on {@code OrderRequestDto}, not here: a constraint on
+     * the entity is applied on every update too, and an overdue order could then not change its status any more.
+     */
     @JsonFormat(pattern = "yyyy-MM-dd")
     private LocalDate dueDate;
 

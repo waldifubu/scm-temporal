@@ -8,7 +8,6 @@ import com.supplychainmanagement.dto.component.ComponentResponseDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.component.SupplierResolution;
-import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.dto.mapper.ComponentMapper;
 import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.RequestStatus;
@@ -38,19 +37,29 @@ public class ComponentController {
      */
     static final Set<String> REQUEST_SORTABLE = Set.of("id", "qty", "requestDate", "requestStatus", "updated");
 
+    /**
+     * What the component catalogue can be sorted by: the component's own columns and the name of its product
+     * (every component has one, so the join drops nothing). Package private, so a test walks every entry.
+     */
+    static final Set<String> COMPONENT_SORTABLE = Set.of("id", "name", "manufacturer", "externalId", "qty", "product.name");
+
     /** What the supplier list may be sorted by - see {@link PageRequests}. */
-    private static final java.util.Set<String> SUPPLIER_SORTABLE = java.util.Set.of("id", "firstName", "lastName");
     private final ComponentService componentService;
     private final ComponentMapper componentMapper;
     private final UserService userService;
 
-    // WAREHOUSE reads as well: it may order components through /request/{supplierId}, and without
+    // WAREHOUSE reads as well: it may order components through /request, and without
     // the catalogue it would have to get the SKU from somewhere else. Reading only - creating and
     // changing a component stays with ADMIN/MANAGER.
     @GetMapping(path = "", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
-    public List<ComponentResponseDto> getComponents() {
-        return componentService.findAll().stream().map(componentMapper::mapToDto).toList();
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE', 'LOGISTICS')")
+    public PageResponse<ComponentResponseDto> getComponents(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "25") int size,
+            @RequestParam(defaultValue = "id") String sort,
+            @RequestParam(defaultValue = "ASC") String order) {
+        var pageable = PageRequests.of(page, size, sort, order, COMPONENT_SORTABLE);
+        return PageResponse.of(componentService.findPage(pageable).map(componentMapper::mapToDto));
     }
 
     /**
@@ -69,28 +78,9 @@ public class ComponentController {
      * by default, because a work list is worked off in the order things arrived - not {@code id},
      * which the other lists use.
      * <p>
-     * Plural, next to the singular {@code POST /request/{supplierId}} that creates one: the path of
-     * the existing endpoint is left as clients know it.
+     * Plural, next to the singular {@code POST /request} that creates one: the path of the existing
+     * endpoint is left as clients know it.
      */
-    /**
-     * The suppliers a component request can be placed with: id and name, active ones, paged. The
-     * answer to "which id goes into {@code POST /request/{supplierId}}".
-     * <p>
-     * The same three roles that may place a request. WAREHOUSE is among them but may not read
-     * {@code /users}, so without this it could order and not say from whom. The path is literal and
-     * wins over {@code GET /{sku}}, like {@code /requests} does.
-     */
-    @GetMapping(path = "/suppliers", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
-    public PageResponse<SupplierResponse> getSuppliers(
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "25") int size,
-            @RequestParam(defaultValue = "lastName") String sort,
-            @RequestParam(defaultValue = "ASC") String order) {
-        return PageResponse.of(componentService.findSuppliers(
-                PageRequests.of(page, size, sort, order, SUPPLIER_SORTABLE)));
-    }
-
     /**
      * Whom a request for these components would go to, by the supplier rules - what the order form shows
      * next to each line before it is sent. {@code ?sku=a&sku=b}; a component no rule covers comes back
@@ -123,15 +113,15 @@ public class ComponentController {
 */
 
     @GetMapping(path = "/{sku}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE', 'LOGISTICS')")
     public ComponentDetailDto getComponentBySku(@PathVariable UUID sku) {
         return componentMapper.mapToDetailDto(componentService.findBySku(sku));
     }
 
-    @GetMapping(path = "/article/{articleNo}", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
-    public ComponentResponseDto getComponentByArticleNo(@PathVariable String articleNo) {
-        return componentMapper.mapToDto(componentService.findByArticleNo(articleNo));
+    @GetMapping(path = "/external/{externalId}", version = "1.0")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE', 'LOGISTICS')")
+    public ComponentResponseDto getComponentByExternalId(@PathVariable String externalId) {
+        return componentMapper.mapToDto(componentService.findByExternalId(externalId));
     }
 
     /**
@@ -178,7 +168,7 @@ public class ComponentController {
     }
 
     /**
-     * Creates a component - a bill-of-materials line of one product, named by its {@code externalId}.
+     * Creates a component - a bill-of-materials line of one product, named by its {@code articleNo}.
      * See {@link ComponentRequestDto} for what a client may send, and why it is not the entity.
      */
     @PostMapping(path = "", version = "1.0")

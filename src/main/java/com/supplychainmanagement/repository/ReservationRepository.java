@@ -2,6 +2,7 @@ package com.supplychainmanagement.repository;
 
 import com.supplychainmanagement.dto.picking.PickingOrderDto;
 import com.supplychainmanagement.entity.Reservation;
+import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -53,6 +54,13 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
     List<Reservation> findByStatusAndExpiresAtBefore(ReservationStatus status, LocalDateTime cutoff);
 
     /**
+     * The reservations in a status that belong to orders in a status - what rejected orders still hold.
+     * The order line comes along: the sweep reads the order id off it.
+     */
+    @EntityGraph(attributePaths = {"storehouse", "orderItem"})
+    List<Reservation> findByStatusAndOrderItemOrderStatus(ReservationStatus status, OrderStatus orderStatus);
+
+    /**
      * Paged counterpart of the method above. The ordering is left to the {@link Pageable} instead of
      * being baked into the method name: a static OrderBy would be applied on top of the sort the
      * caller asked for, which is not what a sortable list view wants.
@@ -79,6 +87,7 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
               join oi.product p
               join r.storehouse s
             where r.status = :status
+              and (:orderNo is null or o.orderNo = :orderNo)
             """,
             countQuery = """
                     select count(r)
@@ -88,8 +97,10 @@ public interface ReservationRepository extends JpaRepository<Reservation, Long> 
                       join oi.product p
                       join r.storehouse s
                     where r.status = :status
+                      and (:orderNo is null or o.orderNo = :orderNo)
                     """)
-    Page<PickingOrderDto> findPickingOrders(@Param("status") ReservationStatus status, Pageable pageable);
+    Page<PickingOrderDto> findPickingOrders(@Param("status") ReservationStatus status, @Param("orderNo") Long orderNo,
+                                            Pageable pageable);
 
     /**
      * Looks one reservation up by its own id and requires it to be in the given status. The status

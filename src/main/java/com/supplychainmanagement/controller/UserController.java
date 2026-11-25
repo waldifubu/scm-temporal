@@ -86,15 +86,12 @@ public class UserController {
     }
 
     /**
-     * The suppliers a component request can be placed with. Not the roles of the carrier list: it is the
-     * ones that may place a request ({@code POST /components/request/{supplierId}}) - ADMIN, MANAGER and
-     * WAREHOUSE. WAREHOUSE may order but may not read the rest of {@code /users}, so without this it
-     * could order and not say from whom; LOGISTICS has no business with suppliers at all, and a
-     * SUPPLIER is the one being asked.
+     * The active suppliers, for naming one in a supplier rule - ADMIN only, like the rules themselves.
+     * Placing a component request needs no supplier: the rules pick one.
      */
     @NoCheck
     @GetMapping(path = "/suppliers", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
+    @PreAuthorize("hasAuthority('ADMIN')")
     public PageResponse<UserDto> getSuppliers(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,

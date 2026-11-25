@@ -1,5 +1,7 @@
 package com.supplychainmanagement.service.business;
 
+import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.reservation.ReservationSummary;
 import com.supplychainmanagement.exception.UnsufficientException;
@@ -36,7 +38,7 @@ public class AutomaticReservationService {
     private final static Long deleteAfterDays = 2L; // Delete consumed reservations after 2 days
     /** The statuses {@link #tryToReserve} looks at: those that may still hold a line without a reservation. */
     static final List<OrderStatus> RESERVABLE_STATUSES = List.of(
-            OrderStatus.IN_FULFILLMENT, OrderStatus.WAIT_SUPPLY,
+            OrderStatus.ACKNOWLEDGED, OrderStatus.WAIT_SUPPLY, OrderStatus.IN_FULFILLMENT,
             OrderStatus.READY_FOR_DISPATCH, OrderStatus.IN_TRANSIT, OrderStatus.PARTIALLY_DELIVERED);
     private final FulfillmentService fulfillmentService;
     private final OrderService orderService;
@@ -88,6 +90,13 @@ public class AutomaticReservationService {
         });
     }
 
+    /** Whether there is anything to reserve. A line without a status counts as WAITING, as in checkItems. */
+    private static boolean hasWaitingLine(Order order) {
+        return order.getOrderItems().stream()
+                .anyMatch(line -> line.getFulfillmentStatus() == null
+                        || line.getFulfillmentStatus() == FulfillmentStatus.WAITING);
+    }
+
     private String describeUncovered(List<AvailableOrderItemDto> items) {
         return items.stream()
                 .filter(item -> !item.available())
@@ -99,15 +108,17 @@ public class AutomaticReservationService {
     public void tryToReserve() {
         Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
 
-        // WAIT_SUPPLY as well as IN_FULFILLMENT: an order parked for missing stock is exactly the one
-        // worth retrying, and a successful reservation is what takes it out of that status again
-        // (PRE_FULFILLMENT_STATUSES). Without this half the sweep would never look at it.
+        // ACKNOWLEDGED and WAIT_SUPPLY as well as IN_FULFILLMENT: an accepted order is waiting for its
+        // stock to be held, whether it was there at the time or not, and a successful reservation is what
+        // takes it on to IN_FULFILLMENT. CREATED and REVIEW are left to a manager.
         // The shipment side as well (RESERVABLE_STATUSES): an order is computed from the shipments its lines
         // travel in, so one with a line still WAITING can read READY_FOR_DISPATCH, IN_TRANSIT or
         // PARTIALLY_DELIVERED. Left out, that line was never reserved and the order never got to DELIVERED.
         // reserveItems moves an order's status only out of a pre-fulfillment one, so these stay where they are.
         var orders = RESERVABLE_STATUSES.stream()
                 .flatMap(status -> orderService.findAllByStatus(status, pageable).stream())
+                // These statuses also cover orders whose lines are all picked or shipped already.
+                .filter(AutomaticReservationService::hasWaitingLine)
                 .toList();
         orders.forEach(order -> {
                     try {
@@ -115,6 +126,9 @@ public class AutomaticReservationService {
                         log.info("Reserved for order {}: {}", order.getOrderNo(), reservationSummary.created());
                     } catch (UnsufficientException e) {
                         log.info("Order {}: not enough stock to reserve - missing {}", order.getOrderNo(), e.getMessage());
+                    } catch (Exception e) {
+                        // One order must not stop the sweep - the next run picks this one up again.
+                        log.error("Failed to reserve for order {}", order.getOrderNo(), e);
                     }
                 }
         );

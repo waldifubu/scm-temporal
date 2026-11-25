@@ -2,6 +2,7 @@ package com.supplychainmanagement.dto.common;
 
 import com.supplychainmanagement.entity.users.User;
 
+import java.text.Normalizer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -15,7 +16,22 @@ import java.util.stream.Stream;
  */
 public final class DisplayNames {
 
+    /** Who a status change is attributed to when no user made it: a scheduled routine. */
+    public static final String SYSTEM = "system";
+
     private DisplayNames() {
+    }
+
+    /**
+     * Whether a login name is taken by {@link #SYSTEM}. Case, surrounding blanks and accents do not count: the
+     * database compares names that way, so "Systém " would be found when a routine looks up "system".
+     */
+    public static boolean isReserved(String username) {
+        if (username == null) {
+            return false;
+        }
+        String plain = Normalizer.normalize(username, Normalizer.Form.NFKD).replaceAll("\\p{M}", "");
+        return plain.strip().equalsIgnoreCase(SYSTEM);
     }
 
     public static String of(User user) {

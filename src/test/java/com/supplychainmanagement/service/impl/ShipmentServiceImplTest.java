@@ -1,5 +1,6 @@
 package com.supplychainmanagement.service.impl;
 
+import com.supplychainmanagement.dto.order.ShippedQuantity;
 import com.supplychainmanagement.dto.shipping.CancelShipmentRequest;
 import com.supplychainmanagement.dto.shipping.CreateShipmentRequest;
 import com.supplychainmanagement.dto.shipping.ShipmentPackageIdsRequest;
@@ -705,13 +706,14 @@ class ShipmentServiceImplTest {
     private OrderItem lineInShipment(Long id, FulfillmentStatus status) {
         OrderItem line = new OrderItem();
         line.setId(id);
+        line.setQuantity(2);
         line.setFulfillmentStatus(status);
         return line;
     }
 
     /**
-     * With every package closed the shipment is READY, and the lines it carries - PACKED, so fully
-     * packed - go to READY_FOR_DISPATCH.
+     * With every package closed the shipment is READY, and the lines it carries whose whole quantity is
+     * in shipments reported ready go to READY_FOR_DISPATCH.
      */
     @Test
     void readyTakesThePackedLinesToReadyForDispatch() {
@@ -721,6 +723,11 @@ class ShipmentServiceImplTest {
         when(shipmentRepository.findWithPackagesById(SHIPMENT_ID)).thenReturn(Optional.of(shipment));
         OrderItem packedLine = lineInShipment(11L, FulfillmentStatus.PACKED);
         when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(packedLine));
+        // One part in this shipment, the other in one that is with a carrier already.
+        orderInShipment(OrderStatus.IN_FULFILLMENT);
+        when(orderItemRepository.findShippedQuantities(List.of(1042L))).thenReturn(List.of(
+                new ShippedQuantity(1042L, 11L, ShipmentStatus.READY, 1L),
+                new ShippedQuantity(1042L, 11L, ShipmentStatus.DECLINED, 1L)));
 
         service.checkShipmentReady(SHIPMENT_ID, 99L);
 
@@ -760,6 +767,24 @@ class ShipmentServiceImplTest {
                 () -> service.checkShipmentReady(SHIPMENT_ID, 99L)), HttpStatus.CONFLICT);
 
         verify(orderProgress, never()).recompute(any(), any());
+    }
+
+    /** Fully packed, but a part of it is loose or in a shipment not reported yet: it stays PACKED. */
+    @Test
+    void readyLeavesALineOfWhichAPartIsNotReadyYet() {
+        Shipment shipment = existingShipment(ShipmentStatus.CREATED, packed(5L));
+        shipment.setShippingAddress("Musterstr. 1");
+        OrderItem split = lineInShipment(11L, FulfillmentStatus.PACKED);
+        when(orderItemRepository.findByShipmentId(SHIPMENT_ID)).thenReturn(List.of(split));
+        orderInShipment(OrderStatus.IN_FULFILLMENT);
+        when(orderItemRepository.findShippedQuantities(List.of(1042L))).thenReturn(List.of(
+                new ShippedQuantity(1042L, 11L, ShipmentStatus.READY, 1L),
+                new ShippedQuantity(1042L, 11L, ShipmentStatus.CREATED, 1L)));
+
+        service.checkShipmentReady(SHIPMENT_ID, 99L);
+
+        assertThat(split.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.PACKED);
+        verify(orderItemRepository).saveAll(List.of());
     }
 
     /** A line that is only PACKING has parts in another package - it is not on its way yet. */
@@ -858,7 +883,7 @@ class ShipmentServiceImplTest {
 
     /** Address and the rest stay correctable while the shipment is still in hand. */
     @ParameterizedTest
-    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DISPATCH_REQUESTED", "ACCEPTED"})
+    @EnumSource(value = ShipmentStatus.class, names = {"CREATED", "READY", "DISPATCH_REQUESTED", "ACCEPTED", "DECLINED"})
     void changesTheShipmentDataUpToAccepted(ShipmentStatus status) {
         Shipment shipment = existingShipment(status, packed(5L));
 

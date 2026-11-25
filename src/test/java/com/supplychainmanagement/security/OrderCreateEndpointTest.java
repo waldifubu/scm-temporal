@@ -1,8 +1,11 @@
 package com.supplychainmanagement.security;
 
+import com.supplychainmanagement.entity.Order;
 import com.supplychainmanagement.entity.Product;
 import com.supplychainmanagement.entity.users.User;
+import com.supplychainmanagement.model.enums.OrderStatus;
 import com.supplychainmanagement.model.enums.RoleEnum;
+import com.supplychainmanagement.repository.OrderRepository;
 import com.supplychainmanagement.support.TestData;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,6 +25,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 /**
  * {@code POST /orders} against the real filter chain, with the body the order form sends - the path
@@ -46,6 +50,8 @@ class OrderCreateEndpointTest {
     private TestData testData;
     @Autowired
     private JwtTokenProvider jwtTokenProvider;
+    @Autowired
+    private OrderRepository orderRepository;
 
     private MockHttpServletResponse post(String path, User as, String json) throws Exception {
         String token = jwtTokenProvider.generateToken(
@@ -96,6 +102,31 @@ class OrderCreateEndpointTest {
 
         assertThat(response.getStatus()).isEqualTo(400);
         assertThat(response.getContentAsString()).contains("quantity");
+    }
+
+    @Test
+    void aDueDateThatIsNotAheadIsA400NamingTheField() throws Exception {
+        User customer = testData.userWithRoles(RoleEnum.CUSTOMER);
+        Product product = testData.product();
+        String json = "{\"dueDate\":\"" + LocalDate.now() + "\",\"orderItems\":[{\"quantity\":1,\"product\":{\"articleNo\":"
+                + product.getArticleNo() + "}}]}";
+
+        MockHttpServletResponse response = post("/orders", customer, json);
+
+        assertThat(response.getStatus()).isEqualTo(400);
+        assertThat(response.getContentAsString()).contains("dueDate");
+    }
+
+    /** The rule is about placing an order. One that has become overdue still has to move on. */
+    @Test
+    void anOverdueOrderCanStillBeChanged() {
+        Order order = testData.order(testData.customer());
+        order.setDueDate(LocalDate.now().minusDays(2));
+        orderRepository.saveAndFlush(order);
+
+        order.setStatus(OrderStatus.IN_FULFILLMENT);
+
+        assertThatCode(() -> orderRepository.saveAndFlush(order)).doesNotThrowAnyException();
     }
 
     @Test

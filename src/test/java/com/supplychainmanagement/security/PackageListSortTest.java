@@ -216,4 +216,25 @@ class PackageListSortTest {
         assertThat(idsOf(get("/packages?size=500"), mine)).containsExactlyInAnyOrder(packed.getId(), packing.getId());
         assertThat(idsOf(get("/lonely-packages?size=500&fulfillmentStatus=PACKED"), mine)).containsExactly(packed.getId());
     }
+    /** The search of the Packages page: one order's items only, with the status filter still applied. */
+    @Test
+    void narrowsBothListsToOneOrder() throws Exception {
+        Customer customer = testData.customer();
+        Order wanted = testData.order(customer);
+        Order other = testData.order(customer);
+        PackageItem packed = testData.packedQuantity(testData.orderItem(wanted, 4, FulfillmentStatus.PACKED), 4);
+        PackageItem packing = itemOf(wanted, 2);
+        PackageItem foreign = itemOf(other, 1);
+        List<PackageItem> mine = List.of(packed, packing, foreign);
+        String search = "?size=500&orderNo=" + wanted.getOrderNo();
+
+        for (String list : List.of("/packages", "/lonely-packages")) {
+            assertThat(idsOf(get(list + search), mine))
+                    .containsExactlyInAnyOrder(packed.getId(), packing.getId());
+            assertThat(idsOf(get(list + search + "&fulfillmentStatus=PACKED"), mine))
+                    .containsExactly(packed.getId());
+            assertThat(idsOf(get(list + search + "&sort=shipmentPackage.id"), mine)).hasSize(2);
+        }
+    }
+
 }

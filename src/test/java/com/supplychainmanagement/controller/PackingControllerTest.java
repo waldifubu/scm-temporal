@@ -22,6 +22,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -58,6 +59,8 @@ class PackingControllerTest {
         mockMvc = MockMvcBuilders.standaloneSetup(new PackingController(packingService,
                         new PackageItemResponseAssembler(mock(PackageItemRepository.class)), orderHandlingService))
                 .setControllerAdvice(new GlobalExceptionHandler())
+                .setCustomArgumentResolvers(
+                        new org.springframework.security.web.method.annotation.AuthenticationPrincipalArgumentResolver())
                 .setApiVersionStrategy(ApiVersioningTestSupport.apiVersionStrategy())
                 .build();
 
@@ -243,15 +246,17 @@ class PackingControllerTest {
     /** The packing work list: PICKED lines by default, sorted by updatedAt, paged as sent. */
     @Test
     void listsThePickedOrderItemsByDefault() throws Exception {
-        when(orderHandlingService.getOrderItems(any(), any())).thenAnswer(call ->
-                new org.springframework.data.domain.PageImpl<>(List.of(), call.getArgument(1), 0));
+        when(orderHandlingService.getOrderItems(any(), any(), any())).thenAnswer(call ->
+                new org.springframework.data.domain.PageImpl<>(List.of(), call.getArgument(2), 0));
 
         mockMvc.perform(get("/api/1.0/order-items").param("page", "2").param("size", "10"))
                 .andExpect(status().isOk());
 
-        verify(orderHandlingService).getOrderItems(eq(FulfillmentStatus.PICKED), argThat((Pageable pageable) ->
+        verify(orderHandlingService).getOrderItems(eq(FulfillmentStatus.PICKED), isNull(),
+                argThat((Pageable pageable) ->
                 pageable.getPageNumber() == 2 && pageable.getPageSize() == 10
-                        && pageable.getSort().equals(Sort.by(Sort.Direction.ASC, "updatedAt"))));
+                        && pageable.getSort().equals(
+                                Sort.by(Sort.Direction.ASC, "updatedAt").and(Sort.by("id")))));
     }
 
     // ------------------------------------------------------------------ a package from existing items

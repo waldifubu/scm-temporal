@@ -24,6 +24,12 @@ public interface PackageQueryService {
     /** {@code status} as in {@link #findPackageItems}. */
     Page<PackageItemResponse> findLoosePackageItems(Pageable pageable, FulfillmentStatus status);
 
+    /** {@link #findPackageItems} narrowed to the items of one order. */
+    Page<PackageItemResponse> findPackageItemsOfOrder(Long orderNo, Pageable pageable, FulfillmentStatus status);
+
+    /** {@link #findLoosePackageItems} narrowed to the items of one order. */
+    Page<PackageItemResponse> findLoosePackageItemsOfOrder(Long orderNo, Pageable pageable, FulfillmentStatus status);
+
     /** One package item, in the shape of the /packages list. */
     PackageItemResponse findPackageItem(Long packageItemId);
 

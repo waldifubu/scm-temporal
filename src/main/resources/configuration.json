@@ -102,6 +102,16 @@
       "color": "#FA96008F"
     },
     {
+      "id": 62,
+      "role": "distributor",
+      "username": "distributor3",
+      "firstname": "David",
+      "lastname": "Distributor 3",
+      "email": "distributor3@distributor.com",
+      "password": "123456",
+      "color": ""
+    },
+    {
       "id": 90,
       "role": "admin",
       "username": "admin1",

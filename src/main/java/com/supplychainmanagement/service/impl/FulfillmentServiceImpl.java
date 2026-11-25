@@ -56,6 +56,15 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     private final OrderWorkflow workflow;
 
     /**
+     * The statuses next to those the workflow lists for RESERVE in which stock may still be held: the order is
+     * under way and a line of it can be WAITING - a pick taken back, or a line that was short while others
+     * already left. Reserving does not change such a status.
+     */
+    private static final Set<OrderStatus> RUNNING_STATUSES = EnumSet.of(
+            OrderStatus.IN_FULFILLMENT, OrderStatus.READY_FOR_DISPATCH,
+            OrderStatus.IN_TRANSIT, OrderStatus.PARTIALLY_DELIVERED);
+
+    /**
      * Transactional so the order status, the line item statuses and the published
      * {@link OrderStatusChangedEvent} share one commit.
      * <p>
@@ -73,6 +82,14 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     @Override
     @Transactional
     public ReservationSummary reserveItems(Order order, String username) {
+        // Asked before anything is held: the reservation commits on its own, and the workflow check on
+        // the status change only guards the status, not the stock.
+        if (!workflow.allows(order.getStatus(), OrderAction.RESERVE)
+                && !RUNNING_STATUSES.contains(order.getStatus())) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + ", nothing can be reserved for it");
+        }
+
         List<AvailableOrderItemDto> availableItems = productionService.checkItems(order);
 
         /*
@@ -115,11 +132,12 @@ public class FulfillmentServiceImpl implements FulfillmentService {
                     checkItem.storehouseId()));
         }
 
-        // Nothing to reserve and nothing reserved earlier: that is a genuine failure, not a partial
-        // result. A line already held by this order reads as unavailable in checkItems - its stock
-        // is booked to this very order - so the existing reservations have to be consulted before
-        // giving up.
-        if (reserveItems.isEmpty() && findActiveReservations(order).isEmpty()) {
+        // Lines are waiting, none of them can be covered and nothing is reserved earlier: that is a
+        // genuine failure, not a partial result. A line already held by this order reads as unavailable
+        // in checkItems - its stock is booked to this very order - so the existing reservations have to
+        // be consulted before giving up. An order with no waiting line at all (picked, packed, shipped)
+        // is not short of anything: checkItems answers nothing, and the call ends as COMPLETE.
+        if (reserveItems.isEmpty() && !unavailableItems.isEmpty() && findActiveReservations(order).isEmpty()) {
             throw new UnsufficientException(describeUnavailable(unavailableItems));
         }
 
@@ -302,15 +320,52 @@ public class FulfillmentServiceImpl implements FulfillmentService {
     @Override
     @Transactional(readOnly = true)
     public List<Order> findOrdersWithExpiredReservations() {
-        // Deduplicated by id: an order holding several expired reservations is still one order to
+        return ordersOf(reservationRepository
+                .findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now()));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<Order> findRejectedOrdersToClose() {
+        // Both ways of having something left: tryToRelease hands back an expired reservation whatever the
+        // order's status, and puts the line to WAITING - nothing would be held any more to find it by.
+        Set<Long> orderIds = new LinkedHashSet<>(orderIdsOf(reservationRepository
+                .findByStatusAndOrderItemOrderStatus(ReservationStatus.ACTIVE, OrderStatus.REJECTED)));
+        orderIds.addAll(orderRepository.findIdsByStatusAndLineStatusIn(OrderStatus.REJECTED,
+                List.of(FulfillmentStatus.WAITING, FulfillmentStatus.RESERVED)));
+        return withLines(orderIds);
+    }
+
+    @Override
+    @Transactional
+    public List<Reservation> releaseRejectedOrder(Order order, String username) {
+        List<Reservation> released = releaseItems(order, username);
+
+        // After the release, which puts the lines back to WAITING on its way out.
+        List<OrderItem> ended = order.getOrderItems().stream()
+                .filter(line -> !isPastReservation(line.getFulfillmentStatus()))
+                .toList();
+        ended.forEach(line -> line.setFulfillmentStatus(FulfillmentStatus.CANCELLED));
+        orderItemRepository.saveAll(ended);
+
+        return released;
+    }
+
+    /** The orders behind the reservations, for a sweep that releases per order. */
+    private List<Order> ordersOf(List<Reservation> reservations) {
+        return withLines(orderIdsOf(reservations));
+    }
+
+    private static Set<Long> orderIdsOf(List<Reservation> reservations) {
+        // Deduplicated by id: an order holding several of the reservations is still one order to
         // release. A LinkedHashSet keeps the order in which the reservations came back.
-        Set<Long> orderIds = reservationRepository
-                .findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE, LocalDateTime.now())
-                .stream()
+        return reservations.stream()
                 // The order line comes with the query; its order is a proxy whose id needs no select.
                 .map(reservation -> reservation.getOrderItem().getOrder().getId())
                 .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
 
+    private List<Order> withLines(Set<Long> orderIds) {
         if (orderIds.isEmpty()) {
             return List.of();
         }

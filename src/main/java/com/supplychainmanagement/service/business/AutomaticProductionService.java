@@ -34,7 +34,7 @@ public class AutomaticProductionService {
 
     @Scheduled(initialDelay = 60, fixedDelay = 150, timeUnit = TimeUnit.SECONDS)
     public void assemble() {
-        Pageable pageable = PageRequest.of(0, 100, Sort.unsorted());
+        Pageable pageable = PageRequest.of(0, 999, Sort.unsorted());
         Page<ProductionResultDto> pageProducts = productionService.produce(pageable);
 
         var productionPageResponse = ProductionPageResponse.of(pageProducts);

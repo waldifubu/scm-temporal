@@ -25,13 +25,11 @@ import java.util.concurrent.atomic.AtomicLong;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * {@code GET /users/suppliers} - the suppliers a component request can be placed with - against the
- * real filter chain and the real rows.
+ * {@code GET /users/suppliers} - the suppliers a supplier rule can name - against the real filter chain and
+ * the real rows.
  * <p>
- * Same shape as {@code DistributorsEndpointTest}; what is different is who may ask: the roles that may
- * <em>place</em> a request - ADMIN, MANAGER and WAREHOUSE. The warehouse is the one that matters: it may
- * order components but not read the rest of {@code /users}, and the carriers' role (LOGISTICS) has
- * nothing to do with suppliers.
+ * Same shape as {@code DistributorsEndpointTest}; what is different is who may ask: ADMIN alone, who is the
+ * one that writes the rules.
  */
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -85,7 +83,7 @@ class SuppliersEndpointTest {
     void listsAnActiveSupplierWithTheDetailsOfAUser() throws Exception {
         Supplier supplier = supplier();
 
-        JsonNode found = row(content(get("/users/suppliers?size=500", RoleEnum.WAREHOUSE)), supplier.getId());
+        JsonNode found = row(content(get("/users/suppliers?size=500", RoleEnum.ADMIN)), supplier.getId());
 
         assertThat(found).isNotNull();
         assertThat(found.get("firstName").asString()).isEqualTo("Role");
@@ -130,35 +128,28 @@ class SuppliersEndpointTest {
         supplier();
         supplier();
 
-        JsonNode content = content(get("/users/suppliers?size=500&sort=email&order=DESC", RoleEnum.MANAGER));
+        JsonNode content = content(get("/users/suppliers?size=500&sort=email&order=DESC", RoleEnum.ADMIN));
 
         List<String> emails = new java.util.ArrayList<>();
         content.forEach(row -> emails.add(row.get("email").asString()));
         assertThat(emails).hasSizeGreaterThanOrEqualTo(2).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
 
-    /** The roles that may place a component request - and nobody else. */
+    /** The administrator's list - and nobody else's. */
     @Test
-    void opensTheListToAdminManagerAndWarehouseOnly() throws Exception {
+    void opensTheListToTheAdminOnly() throws Exception {
         assertThat(get("/users/suppliers", RoleEnum.ADMIN).getStatus()).isEqualTo(200);
-        assertThat(get("/users/suppliers", RoleEnum.MANAGER).getStatus()).isEqualTo(200);
-        assertThat(get("/users/suppliers", RoleEnum.WAREHOUSE).getStatus()).isEqualTo(200);
 
-        assertThat(get("/users/suppliers", RoleEnum.LOGISTICS).getStatus()).isEqualTo(403);
-        assertThat(get("/users/suppliers", RoleEnum.DISTRIBUTOR).getStatus()).isEqualTo(403);
-        assertThat(get("/users/suppliers", RoleEnum.SUPPLIER).getStatus()).isEqualTo(403);
-        assertThat(get("/users/suppliers", RoleEnum.CUSTOMER).getStatus()).isEqualTo(403);
+        for (RoleEnum role : RoleEnum.values()) {
+            if (role != RoleEnum.ADMIN) {
+                assertThat(get("/users/suppliers", role).getStatus()).as(role.name()).isEqualTo(403);
+            }
+        }
     }
 
     /** The literal segment has to win over {@code GET /users/{id}}, which would answer 400 for "suppliers". */
     @Test
     void isNotMistakenForAUserId() throws Exception {
-        assertThat(get("/users/suppliers", RoleEnum.WAREHOUSE).getStatus()).isEqualTo(200);
-    }
-
-    /** What stays closed: the warehouse may read the suppliers, not the user list. */
-    @Test
-    void doesNotOpenTheRestOfTheUserListToTheWarehouse() throws Exception {
-        assertThat(get("/users", RoleEnum.WAREHOUSE).getStatus()).isEqualTo(403);
+        assertThat(get("/users/suppliers", RoleEnum.ADMIN).getStatus()).isEqualTo(200);
     }
 }

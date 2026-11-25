@@ -70,7 +70,8 @@ public interface OrderService {
 
     /**
      * Turns an incoming order down - possible right up to fulfillment, unlike acknowledging, which
-     * only makes sense from CREATED.
+     * only makes sense from CREATED, and only while no line has left the shelf (409 otherwise), as for
+     * cancelling.
      * <p>
      * A method of its own rather than the caller setting REJECTED and going through
      * {@link #update(Long, Order, Long)}: with {@code open-in-view} the controller's order and the
@@ -97,6 +98,12 @@ public interface OrderService {
      * @param userId the acting user for the audit trail, may be null
      */
     Order complete(Order order, Long userId);
+
+    /**
+     * Files a cancelled order away as {@code COMPLETED}. Not {@link #complete}: nothing has to have arrived, and no
+     * endpoint offers it - the scheduled routine is the only caller. 409 for an order that is not cancelled.
+     */
+    void completeCancelled(Order order);
 
     /**
      * Cancels the order and hands back what it holds - ADMIN and MANAGER, not the customer.

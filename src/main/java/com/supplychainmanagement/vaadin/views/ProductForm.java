@@ -1,6 +1,7 @@
 package com.supplychainmanagement.vaadin.views;
 
 import com.supplychainmanagement.entity.Product;
+import com.supplychainmanagement.entity.ProductCategory;
 import com.vaadin.flow.component.Composite;
 import com.vaadin.flow.component.datepicker.DatePicker;
 import com.vaadin.flow.component.formlayout.FormLayout;
@@ -11,6 +12,8 @@ import com.vaadin.flow.component.textfield.TextField;
 import com.vaadin.flow.data.binder.Binder;
 import org.jspecify.annotations.Nullable;
 
+import java.util.stream.Collectors;
+
 class ProductForm extends Composite<FormLayout>  {
 
     private Binder<Product> binder;
@@ -20,9 +23,9 @@ class ProductForm extends Composite<FormLayout>  {
         // Create components
         var nameField = new TextField("Name");
         var descriptionField = new TextArea("Description");
-//        var categoryField = new TextField("Category");
+        var categoryField = new TextField("Category");
 //        var brandField = new TextField("Brand");
-        var articleNo = new NumberField("externalId");
+        var articleNo = new NumberField("Article No");
 //        var releaseDateField = new DatePicker("Release Date");
         var priceField = new BigDecimalField("Price");
 //        var discountField = new BigDecimalField("Discount");
@@ -32,7 +35,7 @@ class ProductForm extends Composite<FormLayout>  {
         var layout = getContent();
         layout.add(nameField);
         layout.add(descriptionField);
-//        layout.add(categoryField);
+        layout.add(categoryField);
 //        layout.add(brandField);
         layout.add(articleNo);
 //        layout.add(releaseDateField);
@@ -48,6 +51,10 @@ class ProductForm extends Composite<FormLayout>  {
         binder.forField(descriptionField)
                 .bind(Product::getDescription,
                         Product::setDescription);
+        // Shown only: the names of all categories of the product, in one line.
+        binder.forField(categoryField)
+                .bind(ProductForm::categoryNames, (product, value) -> {
+                });
         binder.forField(articleNo)
                 .bind(product -> product.getArticleNo() != null ? product.getArticleNo().doubleValue() : null,
                         (product, value) -> product.setArticleNo(value != null ? value.longValue() : null));
@@ -58,6 +65,16 @@ class ProductForm extends Composite<FormLayout>  {
                 .bind(Product::getUnitPrice,
                         Product::setUnitPrice);
         binder.setReadOnly(true);
+    }
+
+    private static String categoryNames(Product product) {
+        if (product.getCategories() == null) {
+            return "";
+        }
+        return product.getCategories().stream()
+                .map(ProductCategory::getName)
+                .sorted()
+                .collect(Collectors.joining(", "));
     }
 
     public void setFormDataObject(@Nullable Product productDetails) {

@@ -64,13 +64,13 @@ class OrderWorkflowEndpointTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = RoleEnum.class, names = {"ADMIN", "MANAGER", "WAREHOUSE", "LOGISTICS", "CUSTOMER"})
+    @EnumSource(value = RoleEnum.class, names = {"ADMIN", "MANAGER", "WAREHOUSE", "LOGISTICS", "CUSTOMER", "DISTRIBUTOR"})
     void everyRoleThatReadsOrdersMayReadTheWorkflow(RoleEnum role) throws Exception {
         assertThat(get(role).getStatus()).isEqualTo(200);
     }
 
     @ParameterizedTest
-    @EnumSource(value = RoleEnum.class, names = {"SUPPLIER", "DISTRIBUTOR"})
+    @EnumSource(value = RoleEnum.class, names = "SUPPLIER")
     void aRoleWithNoBusinessWithOrdersIsRefused(RoleEnum role) throws Exception {
         assertThat(get(role).getStatus()).isEqualTo(403);
     }
@@ -82,7 +82,7 @@ class OrderWorkflowEndpointTest {
             assertThat(get("/api/1.0/orders/workflow/diagram", role).getStatus()).as(role.name()).isEqualTo(200);
         }
         assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.SUPPLIER).getStatus()).isEqualTo(403);
-        assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.DISTRIBUTOR).getStatus()).isEqualTo(403);
+        assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.DISTRIBUTOR).getStatus()).isEqualTo(200);
     }
 
     @Test
@@ -141,7 +141,7 @@ class OrderWorkflowEndpointTest {
             if ("CREATED".equals(step.get("from").asString()) && "WAIT_SUPPLY".equals(step.get("to").asString())) {
                 accept = step;
             }
-            if ("CREATED".equals(step.get("from").asString()) && "REJECTED".equals(step.get("to").asString())) {
+            if ("CREATED".equals(step.get("from").asString()) && "REVIEW".equals(step.get("to").asString())) {
                 noCondition = step;
             }
         }

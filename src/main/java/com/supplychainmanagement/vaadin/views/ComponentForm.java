@@ -19,7 +19,7 @@ class ComponentForm extends Composite<FormLayout> {
         var nameField = new TextField("Name");
         var manufacturerField = new TextField("Manufacturer");
         var descriptionField = new TextArea("Description");
-        var articleNoField = new TextField("Article No");
+        var externalIdField = new TextField("External ID");
         var weightField = new BigDecimalField("Weight");
 
         // Layout form
@@ -27,7 +27,7 @@ class ComponentForm extends Composite<FormLayout> {
         layout.add(nameField);
         layout.add(manufacturerField);
         layout.add(descriptionField);
-        layout.add(articleNoField);
+        layout.add(externalIdField);
         layout.add(weightField);
 
         // Bind fields
@@ -41,9 +41,9 @@ class ComponentForm extends Composite<FormLayout> {
         binder.forField(descriptionField)
                 .bind(Component::getDescription,
                         Component::setDescription);
-        binder.forField(articleNoField)
-                .bind(Component::getArticleNo,
-                        Component::setArticleNo);
+        binder.forField(externalIdField)
+                .bind(Component::getExternalId,
+                        Component::setExternalId);
         binder.forField(weightField)
                 .bind(Component::getWeight,
                         Component::setWeight);

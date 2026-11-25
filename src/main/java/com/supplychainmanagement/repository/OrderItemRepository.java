@@ -81,7 +81,7 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
     Optional<OrderItem> findForUpdateById(@Param("id") Long id);
 
     /**
-     * Order lines in one fulfillment status, across all orders, as a projection - one query for the
+     * Order lines in one fulfillment status, across all orders or - with {@code orderNo} - of one, as a projection - one query for the
      * page, nothing lazy in the result. Sortable by the columns of OrderItem itself (updatedAt,
      * quantity, ...); a sort over a joined column such as the product name is not resolvable on a
      * projection query.
@@ -105,6 +105,7 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
               join oi.product p
               left join Reservation r on r.orderItem = oi
             where oi.fulfillmentStatus = :status
+              and (:orderNo is null or o.orderNo = :orderNo)
             """,
             countQuery = """
                     select count(oi)
@@ -112,8 +113,32 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
                       join oi.order o
                       join oi.product p
                     where oi.fulfillmentStatus = :status
+                      and (:orderNo is null or o.orderNo = :orderNo)
                     """)
-    Page<OrderItemListDto> findAllByFulfillmentStatus(@Param("status") FulfillmentStatus status, Pageable pageable);
+    Page<OrderItemListDto> findAllByFulfillmentStatus(@Param("status") FulfillmentStatus status,
+                                                      @Param("orderNo") Long orderNo, Pageable pageable);
+
+    /** {@link #findAllByFulfillmentStatus} over several statuses - what {@code status=NOT_COMPLETED} answers. */
+    @Query(value = """
+            select new com.supplychainmanagement.dto.order.OrderItemListDto(
+                oi.id, r.id, o.orderNo, p.articleNo, p.name, oi.quantity, oi.fulfillmentStatus, oi.updatedAt)
+            from OrderItem oi
+              join oi.order o
+              join oi.product p
+              left join Reservation r on r.orderItem = oi
+            where oi.fulfillmentStatus in :statuses
+              and (:orderNo is null or o.orderNo = :orderNo)
+            """,
+            countQuery = """
+                    select count(oi)
+                    from OrderItem oi
+                      join oi.order o
+                      join oi.product p
+                    where oi.fulfillmentStatus in :statuses
+                      and (:orderNo is null or o.orderNo = :orderNo)
+                    """)
+    Page<OrderItemListDto> findAllByFulfillmentStatusIn(@Param("statuses") Collection<FulfillmentStatus> statuses,
+                                                        @Param("orderNo") Long orderNo, Pageable pageable);
 
     /**
      * The same list over <strong>every</strong> status - what {@code GET /order-items?status=ALL} answers. A query of
@@ -127,14 +152,16 @@ public interface OrderItemRepository extends JpaRepository<OrderItem, Long> {
               join oi.order o
               join oi.product p
               left join Reservation r on r.orderItem = oi
+            where (:orderNo is null or o.orderNo = :orderNo)
             """,
             countQuery = """
                     select count(oi)
                     from OrderItem oi
                       join oi.order o
                       join oi.product p
+                    where (:orderNo is null or o.orderNo = :orderNo)
                     """)
-    Page<OrderItemListDto> findAllOrderItems(Pageable pageable);
+    Page<OrderItemListDto> findAllOrderItems(@Param("orderNo") Long orderNo, Pageable pageable);
 
     /**
      * The lines package items can be made from: in one of {@code statuses} (the service passes PICKED

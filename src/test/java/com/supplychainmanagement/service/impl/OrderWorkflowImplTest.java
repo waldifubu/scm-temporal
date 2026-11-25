@@ -22,6 +22,7 @@ import java.util.Set;
 
 import static com.supplychainmanagement.model.enums.OrderAction.ACCEPT;
 import static com.supplychainmanagement.model.enums.OrderAction.CANCEL;
+import static com.supplychainmanagement.model.enums.OrderAction.CLOSE;
 import static com.supplychainmanagement.model.enums.OrderAction.COMPLETE;
 import static com.supplychainmanagement.model.enums.OrderAction.REJECT;
 import static com.supplychainmanagement.model.enums.OrderAction.RELEASE;
@@ -71,7 +72,7 @@ class OrderWorkflowImplTest {
     }
 
     @Test
-    void theEndsAreRejectedCancelledAndCompleted() {
+    void theEndsAreRejectedAndCompletedAndACancelledOrderCanOnlyBeClosed() {
         Set<OrderStatus> ends = EnumSet.noneOf(OrderStatus.class);
         for (OrderStatus status : OrderStatus.values()) {
             if (workflow.isFinal(status)) {
@@ -79,10 +80,13 @@ class OrderWorkflowImplTest {
             }
         }
 
-        assertThat(ends).containsExactlyInAnyOrder(REJECTED, CANCELLED, COMPLETED);
+        assertThat(ends).containsExactlyInAnyOrder(REJECTED, COMPLETED);
         for (OrderStatus end : ends) {
             assertThat(workflow.actionsFrom(end)).as("actions from " + end).isEmpty();
         }
+        assertThat(workflow.actionsFrom(CANCELLED)).containsExactly(CLOSE);
+        assertThat(workflow.targetsOf(CANCELLED, CLOSE)).containsExactly(COMPLETED);
+        assertThat(workflow.sourcesOf(CLOSE)).containsExactly(CANCELLED);
     }
 
     // ------------------------------------------------------------------ where each step may be taken
@@ -165,10 +169,11 @@ class OrderWorkflowImplTest {
     }
 
     @Test
-    void shipmentProgressIsComputedAndEverythingElseIsAsked() {
+    void shipmentProgressAndClosingAreComputedAndEverythingElseIsAsked() {
         for (Transition row : workflow.transitions()) {
             assertThat(row.trigger()).as(row.action().name())
-                    .isEqualTo(row.action() == SHIPMENT_PROGRESS ? Trigger.COMPUTED : Trigger.MANUAL);
+                    .isEqualTo(row.action() == SHIPMENT_PROGRESS || row.action() == CLOSE
+                            ? Trigger.COMPUTED : Trigger.MANUAL);
         }
     }
 
@@ -191,7 +196,7 @@ class OrderWorkflowImplTest {
     @Test
     void anAutomaticStepIsOneASweepTakesToo() {
         assertThat(workflow.transitions().stream().filter(Transition::automatic).map(Transition::action)
-                .distinct().toList()).containsExactlyInAnyOrder(ACCEPT, RESERVE, RELEASE);
+                .distinct().toList()).containsExactlyInAnyOrder(ACCEPT, RESERVE, RELEASE, CLOSE);
     }
 
     @ParameterizedTest

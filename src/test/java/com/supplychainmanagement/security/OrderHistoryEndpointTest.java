@@ -154,7 +154,7 @@ class OrderHistoryEndpointTest {
         assertThat(second.get("changedByName")).isEqualTo(DisplayNames.of(actor));
     }
 
-    /** An automatic step has nobody to name: neither key is there, and that is what null means. */
+    /** An automatic step has no user: no id, and the name says it was the system. */
     @Test
     void leavesTheActorOutWhereNobodyActed() throws Exception {
         User manager = testData.userWithRoles(RoleEnum.MANAGER);
@@ -163,7 +163,8 @@ class OrderHistoryEndpointTest {
         Map<String, Object> automatic = read(history(order.getOrderNo(), manager).getContentAsString(), "$[0]");
 
         assertThat(automatic.get("newStatus")).isEqualTo("REVIEW");
-        assertThat(automatic).doesNotContainKeys("changedById", "changedByName");
+        assertThat(automatic).doesNotContainKey("changedById");
+        assertThat(automatic.get("changedByName")).isEqualTo("system");
     }
 
     /**

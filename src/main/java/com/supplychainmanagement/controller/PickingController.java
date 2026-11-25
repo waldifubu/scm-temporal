@@ -7,7 +7,9 @@ import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.ReservationStatus;
 import com.supplychainmanagement.service.OrderHandlingService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,6 +42,15 @@ public class PickingController {
 
     private final OrderHandlingService orderHandlingService;
 
+    /** Reservations share an expiry or a quantity, so the id settles the order between pages. */
+    private static Pageable withIdTieBreak(Pageable pageable) {
+        if (pageable.getSort().getOrderFor("id") != null) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                pageable.getSort().and(Sort.by("id")));
+    }
+
     /**
      * Paged like the order list in {@code OrderController.list}, down to the parameter names, so the
      * two list views are driven the same way. Sorted by {@code expiresAt} by default: the
@@ -48,7 +59,8 @@ public class PickingController {
      * {@code status} says which stage is listed: {@code ACTIVE} (the default) is what is still to be
      * picked, {@code CONSUMED} what has been picked - the reservation behind a line that
      * {@code GET /order-items/packable} offers for packing. Read by the manager as well as by the
-     * warehouse; picking itself stays with ADMIN and WAREHOUSE.
+     * warehouse; picking itself stays with ADMIN and WAREHOUSE. {@code orderNo} narrows the list to one order
+     * (an order nothing is listed for is an empty page).
      */
     @GetMapping(path = "/picking-orders", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
@@ -57,10 +69,11 @@ public class PickingController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "expiresAt") String sort,
             @RequestParam(defaultValue = "ACTIVE") ReservationStatus status,
-            @RequestParam(defaultValue = "ASC") String order) {
-        Pageable pageable = PageRequests.of(page, size, sort, order, PICKING_SORTABLE);
+            @RequestParam(defaultValue = "ASC") String order,
+            @RequestParam(required = false) Long orderNo) {
+        Pageable pageable = withIdTieBreak(PageRequests.of(page, size, sort, order, PICKING_SORTABLE));
 
-        return PageResponse.of(orderHandlingService.pickingOrders(status, pageable));
+        return PageResponse.of(orderHandlingService.pickingOrders(status, orderNo, pageable));
     }
 
     /**

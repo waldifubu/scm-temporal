@@ -65,7 +65,7 @@ public interface OrderWorkflow {
     enum Trigger {
         /** A person asks for it. */
         MANUAL,
-        /** Nobody asks: it follows from something else, here from the shipments of the order. */
+        /** Nobody asks: it follows from the shipments of the order, or a scheduled routine takes it. */
         COMPUTED
     }
 

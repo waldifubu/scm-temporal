@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import com.supplychainmanagement.dto.common.DisplayNames;
 import org.springframework.http.ResponseCookie;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -83,6 +84,10 @@ public class AuthServiceImpl implements AuthService {
 
     @Override
     public User register(RegisterRequest request) {
+        if (DisplayNames.isReserved(request.username())) {
+            throw new APIException(HttpStatus.BAD_REQUEST, "Username is reserved!");
+        }
+
         if (userRepository.existsByUsername(request.username())) {
             throw new APIException(
                     HttpStatus.BAD_REQUEST,

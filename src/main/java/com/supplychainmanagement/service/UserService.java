@@ -70,14 +70,13 @@ public interface UserService {
 
     /**
      * The distributors a shipment can be handed to, active accounts only: the answer to "which
-     * id goes into {@code POST /shipments/assign/{distributorId}}". See {@link #findSuppliers} for the counterpart on the component request side.
+     * id goes into {@code POST /shipments/assign/{distributorId}}". See {@link #findSuppliers} for the suppliers.
      */
     Page<User> findDistributors(Pageable pageable);
 
     /**
-     * The suppliers a component request can be placed with, active accounts only: the answer to "which
-     * id goes into {@code POST /components/request/{supplierId}}". See {@link #findDistributors} for the
-     * counterpart on the shipment side.
+     * The suppliers, active accounts only: the ones a supplier rule can name. See
+     * {@link #findDistributors} for the carriers.
      */
     Page<User> findSuppliers(Pageable pageable);
 

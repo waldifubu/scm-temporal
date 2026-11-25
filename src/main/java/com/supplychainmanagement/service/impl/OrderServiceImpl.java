@@ -355,6 +355,22 @@ public class OrderServiceImpl implements OrderService {
     }
 
     /**
+     * An order can only be ended - cancelled or rejected - while nothing has physically moved. The lines are
+     * named one by one: the caller has to know which goods are already off the shelf, because putting them
+     * back is something only a human can do.
+     */
+    private void requireNothingOffTheShelf(Order order, String outcome) {
+        List<OrderItem> moved = fulfillmentService.linesPastReservation(order);
+        if (!moved.isEmpty()) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo()
+                    + " cannot be " + outcome + ", these lines have left the shelf: "
+                    + moved.stream()
+                    .map(line -> line.getId() + " (" + line.getFulfillmentStatus() + ")")
+                    .collect(Collectors.joining(", ")));
+        }
+    }
+
+    /**
      * Only the status changes, so this does not go through {@link #update} at all - nothing about the
      * lines, the totals or the order number is touched by turning an order down.
      */
@@ -368,6 +384,7 @@ public class OrderServiceImpl implements OrderService {
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
                     + order.getStatus() + " and cannot be rejected");
         }
+        requireNothingOffTheShelf(order, "rejected");
 
         orderProgress.changeStatus(order, OrderStatus.REJECTED, userId);
         return findById(order.getId());
@@ -382,12 +399,6 @@ public class OrderServiceImpl implements OrderService {
     public Order complete(Order order, Long userId) {
         if (order.getStatus() == OrderStatus.COMPLETED) {
             throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is already completed");
-        }
-
-        // advance() would silently skip these two, and the caller would read the 200 as a success.
-        if (order.getStatus() == OrderStatus.REJECTED || order.getStatus() == OrderStatus.CANCELLED) {
-            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
-                    + order.getStatus() + " and cannot be completed");
         }
 
         if (!workflow.allows(order.getStatus(), OrderAction.COMPLETE)) {
@@ -414,6 +425,17 @@ public class OrderServiceImpl implements OrderService {
         return findById(order.getId());
     }
 
+    @Override
+    @Transactional
+    public void completeCancelled(Order order) {
+        if (!workflow.allows(order.getStatus(), OrderAction.CLOSE)) {
+            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo() + " is "
+                    + order.getStatus() + ", not cancelled");
+        }
+        // No acting user: the routine runs on its own, like the other steps of the system.
+        orderProgress.changeStatus(order, OrderStatus.COMPLETED, null);
+    }
+
     /**
      * Only the status and the lines change here; the stock goes back through FulfillmentService,
      * which owns the reservations.
@@ -434,16 +456,7 @@ public class OrderServiceImpl implements OrderService {
                     + order.getStatus() + " and cannot be cancelled");
         }
 
-        List<OrderItem> moved = fulfillmentService.linesPastReservation(order);
-        if (!moved.isEmpty()) {
-            // Named one by one: the caller has to know which goods are already off the shelf, because
-            // putting them back is something only a human can do.
-            throw new APIException(HttpStatus.CONFLICT, "Order " + order.getOrderNo()
-                    + " cannot be cancelled, these lines have left the shelf: "
-                    + moved.stream()
-                    .map(line -> line.getId() + " (" + line.getFulfillmentStatus() + ")")
-                    .collect(Collectors.joining(", ")));
-        }
+        requireNothingOffTheShelf(order, "cancelled");
 
         // Before the release on purpose - see OrderService.cancel.
         orderProgress.changeStatus(order, OrderStatus.CANCELLED, userId);
@@ -638,7 +651,7 @@ public class OrderServiceImpl implements OrderService {
         }
 
         return productRepository.findWithComponentsByArticleNo(product.getArticleNo())
-                .orElseThrow(() -> new ResourceNotFoundException("Product", "externalId", product.getArticleNo()));
+                .orElseThrow(() -> new ResourceNotFoundException("Product", "articleNo", product.getArticleNo()));
     }
 
     private void recalculateOrder(Order order) {

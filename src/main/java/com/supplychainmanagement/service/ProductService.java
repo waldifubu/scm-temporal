@@ -38,12 +38,14 @@ public interface ProductService {
     Product create(ProductRequestDto request);
 
     /**
-     * Changes a product. The id comes from the path, never from the body, and a component line with
-     * an id has to be a line of this product (400 otherwise).
+     * Changes the product with this article number. Which product is meant comes from the path, never from
+     * the body - the body's {@code articleNo} is the one it has afterwards -, and a component line with an
+     * id has to be a line of this product (400 otherwise).
      */
-    Product update(Long id, ProductRequestDto request);
+    Product update(long articleNo, ProductRequestDto request);
 
-    void deleteById(Long id);
+    /** Removes the product with this article number and its bill of materials; 409 while something names it. */
+    void deleteByArticleNo(long articleNo);
 
     Product findBySku(String sku);
 }

@@ -21,7 +21,7 @@ import java.util.Set;
  * What of the table is worth drawing, and nothing else. The rules:
  * <ul>
  *   <li><b>The ends</b> are where {@code REJECT} and {@code CANCEL} lead. They get no arrows - an arrow from every
- *   status that can be turned down would bury the flow - and nothing leads into them on the drawing.</li>
+ *   status that can be turned down would bury the flow - and nothing leads into or out of them on the drawing.</li>
  *   <li><b>Shortcuts</b> - what the table declares as such - are left out.</li>
  *   <li><b>One arrow per pair</b> of statuses, whatever the action; it keeps the first label the table gave.</li>
  *   <li><b>Forward</b> is towards a later status in {@link OrderWorkflow#statuses()}, <b>back</b> towards an earlier
@@ -53,7 +53,7 @@ public class OrderWorkflowDiagramServiceImpl implements OrderWorkflowDiagramServ
         // One step per pair, the first label that is not blank wins.
         Map<String, Step> steps = new LinkedHashMap<>();
         for (OrderWorkflow.Transition row : workflow.transitions()) {
-            if (row.shortcut() || ends.contains(row.to()) || row.from() == row.to()) {
+            if (row.shortcut() || ends.contains(row.to()) || ends.contains(row.from()) || row.from() == row.to()) {
                 continue;
             }
             steps.merge(row.from() + ">" + row.to(),

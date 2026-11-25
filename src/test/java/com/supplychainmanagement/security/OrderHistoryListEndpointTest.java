@@ -81,10 +81,11 @@ class OrderHistoryListEndpointTest {
         assertThat(((Number) second.get("customerId")).longValue()).isEqualTo(customer.getId());
         assertThat(second.get("customerName")).isEqualTo(DisplayNames.of(customer));
         assertThat(second.get("changedByName")).isEqualTo(DisplayNames.of(manager));
-        // An automatic step has nobody to name - the keys stay, as nulls.
+        // An automatic step has no user - the id stays, as a null, and the name says it was the system.
         Map<String, Object> automatic = read(body, "$.content[2]");
         assertThat(automatic).containsKeys("changedById", "changedByName");
         assertThat(automatic.get("changedById")).isNull();
+        assertThat(automatic.get("changedByName")).isEqualTo("system");
     }
 
     /** The default: one row per order, its newest step - and a status filter then means "is in it now". */

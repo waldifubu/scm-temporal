@@ -135,6 +135,30 @@ class OrderServiceCancelTest {
         assertThat(second.getFulfillmentStatus()).isEqualTo(FulfillmentStatus.CANCELLED);
     }
 
+    /** Rejecting ends an order too, so the same boundary: goods off the shelf, no way back. */
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"CREATED", "ACKNOWLEDGED", "IN_FULFILLMENT"})
+    void refusesToRejectOnceALineHasLeftTheShelf(OrderStatus status) {
+        OrderItem picked = line(11L, FulfillmentStatus.PICKED);
+        Order order = order(status, picked);
+        when(fulfillmentService.linesPastReservation(order)).thenReturn(List.of(picked));
+
+        Throwable thrown = catchThrowable(() -> service.reject(order, 99L));
+
+        assertStatus(thrown, HttpStatus.CONFLICT);
+        assertThat(thrown).hasMessageContaining("cannot be rejected").hasMessageContaining("11 (PICKED)");
+        verify(orderProgress, never()).changeStatus(any(), any(), any());
+    }
+
+    @Test
+    void rejectsAnOrderThatOnlyHoldsReservations() {
+        Order order = order(OrderStatus.IN_FULFILLMENT, line(11L, FulfillmentStatus.RESERVED));
+
+        service.reject(order, 99L);
+
+        verify(orderProgress).changeStatus(order, OrderStatus.REJECTED, 99L);
+    }
+
     /** Nothing reserved at all is the easy case - an order nobody has started on. */
     @Test
     void cancelsAnOrderThatHoldsNothing() {

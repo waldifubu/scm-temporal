@@ -38,7 +38,7 @@ import static org.mockito.Mockito.when;
  * {@code create} handed the bound object to {@code save()}, which with an id present is a merge over
  * whichever component already had it. The DTO has no id field, so that is closed by construction;
  * what is held here is that the service really builds its own entity, and that the product now
- * arrives as an {@code externalId} rather than as a nested object of which one field was read.
+ * arrives as an {@code articleNo} rather than as a nested object of which one field was read.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -72,7 +72,7 @@ class ComponentServiceRequestDtoTest {
     }
 
     private static ComponentRequestDto request(UUID sku) {
-        return new ComponentRequestDto(ARTICLE_NO, "Blech", "ACME", "A-11", "ein Blech",
+        return new ComponentRequestDto(ARTICLE_NO, "Blech", "ACME", "ein Blech",
                 new BigDecimal("2.5"), "EXT-11", sku, 4);
     }
 
@@ -92,7 +92,6 @@ class ComponentServiceRequestDtoTest {
         assertThat(created.getProduct()).isSameAs(product);
         assertThat(created.getName()).isEqualTo("Blech");
         assertThat(created.getManufacturer()).isEqualTo("ACME");
-        assertThat(created.getArticleNo()).isEqualTo("A-11");
         assertThat(created.getDescription()).isEqualTo("ein Blech");
         assertThat(created.getExternalId()).isEqualTo("EXT-11");
         assertThat(created.getWeight()).isEqualByComparingTo("2.5");
@@ -100,7 +99,7 @@ class ComponentServiceRequestDtoTest {
         assertThat(created.getQty()).isEqualTo(4);
     }
 
-    /** The product is named by externalId and looked up - an unknown one is a 404. */
+    /** The product is named by articleNo and looked up - an unknown one is a 404. */
     @Test
     void answersAnUnknownProductWith404() {
         when(productRepository.findByArticleNo(ARTICLE_NO)).thenReturn(Optional.empty());

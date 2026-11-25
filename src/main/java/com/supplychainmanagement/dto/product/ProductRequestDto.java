@@ -27,6 +27,7 @@ import java.util.UUID;
  * objects, which have a {@code Set<Product>} of their own - a product inside a category inside a
  * product, all of it bound and most of it ignored.
  *
+ * @param weight     accepted and ignored: a product's weight is not set by a client
  * @param components the bill of materials. Optional: left out, the product keeps the lines it has.
  *                   A line without an {@code id} is new; a line with one must be a line of
  *                   <strong>this</strong> product (400 otherwise), and on create an id is refused
@@ -58,7 +59,6 @@ public record ProductRequestDto(
             @NotBlank(message = "component name is required")
             @Size(max = 255, message = "component name is at most 255 characters") String name,
             @Size(max = 255, message = "manufacturer is at most 255 characters") String manufacturer,
-            @Size(max = 255, message = "articleNo is at most 255 characters") String articleNo,
             @Size(max = 255, message = "description is at most 255 characters") String description,
             @PositiveOrZero(message = "weight cannot be negative") BigDecimal weight,
             @Size(max = 255, message = "externalId is at most 255 characters") String externalId,

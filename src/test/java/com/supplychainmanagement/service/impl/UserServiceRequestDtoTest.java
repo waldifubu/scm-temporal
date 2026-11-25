@@ -100,6 +100,20 @@ class UserServiceRequestDtoTest {
         assertThat(existing.getIsActive()).isTrue();
     }
 
+    /** The administrator's ways in are closed to the reserved name too, renaming included. */
+    @Test
+    void refusesTheNameSystemOnCreateAndOnRename() {
+        disabledUser();
+        UserRequestDto system = new UserRequestDto("Ada", "Lovelace", "System", "ada@example.com",
+                "secret1", null, null, null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.create(system, actor(RoleEnum.ADMIN)))
+                .hasMessageContaining("reserved");
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.update(7L, system))
+                .hasMessageContaining("reserved");
+        org.mockito.Mockito.verify(userRepository, org.mockito.Mockito.never()).save(any(User.class));
+    }
+
     private void savesWhatItIsGiven() {
         when(passwordEncoder.encode(anyString())).thenAnswer(call -> "hashed:" + call.getArgument(0));
         when(userRepository.save(any(User.class))).thenAnswer(call -> call.getArgument(0));

@@ -18,11 +18,11 @@ import java.util.UUID;
  * component already carried that id. Nothing in the endpoint said so and nothing failed. Same reason
  * {@code UserController} stopped taking the {@code User} entity, and the same fix.
  * <p>
- * The product is named by its <strong>{@code externalId}</strong> rather than as a nested object. It
+ * The product is named by its <strong>{@code articleNo}</strong> rather than as a nested object. It
  * used to arrive as {@code {"product": {"id": 3}}} - an entity inside an entity, of which exactly
  * one field was ever read, while everything else a client put in there was silently bound and
- * ignored. {@code externalId} is unique and NOT NULL on {@code Product} and is what the rest of the
- * API already names a product by ({@code GET /products/&#123;externalId&#125;}).
+ * ignored. {@code articleNo} is unique and NOT NULL on {@code Product} and is what the rest of the
+ * API already names a product by ({@code GET /products/&#123;articleNo&#125;}).
  *
  * @param productArticleNo which product this is a bill-of-materials line of - required, because
  *                         {@code Component.product_id} is NOT NULL: a component belongs to exactly
@@ -39,7 +39,6 @@ public record ComponentRequestDto(
         @NotBlank(message = "name is required")
         @Size(max = 255, message = "name is at most 255 characters") String name,
         @Size(max = 255, message = "manufacturer is at most 255 characters") String manufacturer,
-        @Size(max = 255, message = "externalId is at most 255 characters") String articleNo,
         @Size(max = 255, message = "description is at most 255 characters") String description,
         @PositiveOrZero(message = "weight cannot be negative") BigDecimal weight,
         @Size(max = 255, message = "externalId is at most 255 characters") String externalId,

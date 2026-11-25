@@ -139,7 +139,6 @@ public class TestData {
         component.setProduct(product);
         component.setName("Blech");
         component.setManufacturer("ACME");
-        component.setArticleNo(unique("A"));
         component.setSku(UUID.randomUUID());
         component.setQty(1);
         component.setWeight(BigDecimal.ONE);

@@ -38,7 +38,7 @@ public class ComponentCatalogView extends HorizontalLayout {
         grid.addColumn(Component::getId).setHeader("ID").setSortProperty("id").setAutoWidth(true);
         grid.addColumn(Component::getName).setHeader("Name").setSortProperty("name");
         grid.addColumn(Component::getManufacturer).setHeader("Manufacturer").setSortProperty("manufacturer");
-        grid.addColumn(Component::getArticleNo).setHeader("Article No").setTextAlign(ColumnTextAlign.END).setSortProperty("externalId");
+        grid.addColumn(Component::getExternalId).setHeader("External ID").setSortProperty("externalId");
         grid.addColumn(Component::getDescription).setHeader("Description");
         grid.addColumn(Component::getSku).setHeader("SKU").setSortProperty("sku");
         grid.addColumn(Component::getWeight).setHeader("Weight").setTextAlign(ColumnTextAlign.END).setSortProperty("weight");

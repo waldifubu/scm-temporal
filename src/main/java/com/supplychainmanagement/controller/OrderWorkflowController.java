@@ -25,10 +25,10 @@ public class OrderWorkflowController {
 
     /**
      * Statuses and steps, the same for every caller: who may take a step is part of the answer, not a filter on it.
-     * Open to every role that reads orders.
+     * Open to every role that reads orders, and to the carrier, whose start page shows it.
      */
     @GetMapping(path = "/workflow", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER','DISTRIBUTOR')")
     public OrderWorkflowResponse getWorkflow() {
         return OrderWorkflowResponse.of(workflow);
     }
@@ -39,7 +39,7 @@ public class OrderWorkflowController {
      * for everybody; the literal path wins over {@code /{orderNo}/shipments} like its sibling.
      */
     @GetMapping(path = "/workflow/diagram", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER','DISTRIBUTOR')")
     public OrderWorkflowDiagramResponse getDiagram() {
         return diagramService.diagram();
     }

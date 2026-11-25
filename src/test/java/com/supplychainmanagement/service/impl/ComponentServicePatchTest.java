@@ -55,7 +55,6 @@ class ComponentServicePatchTest {
         component.setSku(SKU);
         component.setName("Blech");
         component.setManufacturer("ACME");
-        component.setArticleNo("A-11");
         component.setDescription("ein Blech");
         component.setWeight(new BigDecimal("12.5"));
         component.setQty(2);
@@ -89,7 +88,6 @@ class ComponentServicePatchTest {
         assertThat(component.getName()).isEqualTo("Blech");
         assertThat(component.getManufacturer()).isEqualTo("ACME");
         assertThat(component.getExternalId()).isEqualTo("EXT-1");
-        assertThat(component.getArticleNo()).isEqualTo("A-11");
         assertThat(component.getDescription()).isEqualTo("ein Blech");
         assertThat(component.getWeight()).isEqualByComparingTo("12.5");
         assertThat(component.getSku()).isEqualTo(SKU);

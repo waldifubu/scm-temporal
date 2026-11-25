@@ -5,7 +5,6 @@ import com.supplychainmanagement.dto.component.ComponentRequestDto;
 import com.supplychainmanagement.dto.component.RequestComponentResponse;
 import com.supplychainmanagement.dto.component.RequestComponentsRequest;
 import com.supplychainmanagement.dto.component.SupplierResolution;
-import com.supplychainmanagement.dto.component.SupplierResponse;
 import com.supplychainmanagement.entity.Component;
 import com.supplychainmanagement.model.enums.RequestStatus;
 import org.springframework.data.domain.Page;
@@ -22,15 +21,18 @@ public interface ComponentService {
 
     List<Component> findAll();
 
+    /** One page of the catalogue, each component with its product; the id settles the order between equal rows. */
+    Page<Component> findPage(Pageable pageable);
+
     Component findById(Long id);
 
     Component findBySku(UUID sku);
 
-    Component findByArticleNo(String articleNo);
+    Component findByExternalId(String externalId);
 
     /**
      * Creates a component from what a client may send - see {@link ComponentRequestDto}. The product
-     * is resolved by {@code externalId} (404 when there is none), and a duplicate SKU or externalId is
+     * is resolved by {@code articleNo} (404 when there is none), and a duplicate SKU or externalId is
      * a 409.
      * <p>
      * It used to take the {@code Component} entity, which meant a client could send an {@code id} and
@@ -93,16 +95,6 @@ public interface ComponentService {
      * @param status the status to narrow to, or null for every request
      */
     Page<RequestComponentResponse> findRequests(RequestStatus status, Pageable pageable);
-
-    /**
-     * The suppliers a request can be placed with - the answer to "which id goes into
-     * {@code POST /components/request/{supplierId}}".
-     * <p>
-     * The warehouse may order components but cannot read {@code /users}, so until this existed it had
-     * no way to learn a supplier's id. Active suppliers only, and id and name only: nothing about them
-     * that the ordering side has no business with.
-     */
-    Page<SupplierResponse> findSuppliers(Pageable pageable);
 
     /**
      * The supplier accepts the request: OPEN to APPROVED. Any other status is a 409.

@@ -95,6 +95,18 @@ public class OrderController {
                 .anyMatch(authority -> RoleEnum.ADMIN.name().equals(authority.getAuthority()));
     }
 
+    /**
+     * Orders share values - a status, a due date, a total - and a database may order such ties differently on the
+     * next page, so a row shows twice and another never. The id settles them.
+     */
+    private static Pageable withIdTieBreak(Pageable pageable) {
+        if (pageable.getSort().getOrderFor("id") != null) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                pageable.getSort().and(Sort.by("id")));
+    }
+
     // CUSTOMER may see their own order list; ADMIN/MANAGER/WAREHOUSE are included because
     // OrderService.findAllByUserAndStatus deliberately branches to all orders for the roles that may read any order.
     @GetMapping(path = "", version = "1.0")
@@ -106,7 +118,7 @@ public class OrderController {
             @RequestParam(defaultValue = "id") String sort,
             @RequestParam(defaultValue = "ASC") String order,
             @AuthenticationPrincipal User authUser) {
-        Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_SORTABLE);
+        Pageable pageable = withIdTieBreak(PageRequests.of(page, size, sort, order, ORDER_SORTABLE));
 
         Set<OrderStatus> group = statusGroup(status);
         if (ALL.equals(status.trim().toUpperCase()) && !isAdmin(authUser)) {

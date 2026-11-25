@@ -14,7 +14,6 @@ public record ProductComponentDto(
         Long id,
         @Nullable String manufacturer,
         @Nullable String name,
-        @Nullable String articleNo,
         @Nullable String description,
         @Nullable Double weight,
         UUID sku,

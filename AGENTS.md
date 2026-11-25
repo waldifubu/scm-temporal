@@ -291,6 +291,29 @@ new endpoint, follow the existing pattern: `@RequestMapping({"/api/{version}/...
 This is the most involved part of the codebase, spread across several services with distinct
 responsibilities — read all of them together before changing reservation/fulfillment logic:
 
+**Design record and source of truth.** [`docs/order-workflow-design.md`](docs/order-workflow-design.md)
+captures the original discovery brief for this refactoring. It is useful context, but it describes
+the state *before* the current `OrderWorkflow` module was introduced. For a workflow change, treat
+the running implementation and its tests as the inventory to verify; do not turn an assumption in
+the brief into a transition. Keep the two kinds of rule separate:
+
+- **Manual commands** need an authorised actor and their data-dependent preconditions.
+- **Computed shipment progress** is derived from shipment states and delivered quantities; it may
+  recompute an order or move it back, so it is not a list of user-command transitions.
+
+The design record names this complete status vocabulary: `CREATED`, `ACKNOWLEDGED`, `REVIEW`,
+`REJECTED`, `WAIT_SUPPLY`, `IN_FULFILLMENT`, `READY_FOR_DISPATCH`, `IN_TRANSIT`,
+`PARTIALLY_DELIVERED`, `DELIVERED`, `CANCELLED` and `COMPLETED`. Its shipment-dependent portion is
+`IN_FULFILLMENT` through `DELIVERED`; do not infer that every status in either list is reachable
+from every other one.
+
+Before changing the table or a caller, trace every status writer (controllers, order and fulfillment
+services, and shipment recomputation), record trigger, actor and preconditions, and label any
+unclear or conflicting rule. Keep the policy pure, send writes through the common status path, and
+derive client workflow data from the same catalogue. The design brief's "no files before the
+inventory" rule applied to the initial refactoring; for later changes, the equivalent safeguard is
+to update only confirmed rules and their tests.
+
 - **`Order`** has a coarse-grained `OrderStatus` (`CREATED → [REVIEW →] ACKNOWLEDGED →
   IN_FULFILLMENT → READY_FOR_DISPATCH → IN_TRANSIT → DELIVERED → COMPLETED`, plus
   `REJECTED`/`CANCELLED`). Driven by code up to `IN_FULFILLMENT`, and from there on by the shipment
@@ -648,7 +671,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   package number twice (`uk_shipment_package_number` only bites once `shipment_id` is set - 409 up
   front). What may still change depends on the status: **packages** only while `CREATED` (409 from
   `READY` on - `findChangeableShipmentForUpdate`), the shipment's **own data** up to `ACCEPTED`
-  (`DATA_CHANGEABLE_IN`, 409 from `IN_TRANSIT` on). Shipment first, then its packages in ascending id
+  and in `DECLINED` (`DATA_CHANGEABLE_IN`, 409 from `IN_TRANSIT` on and in `CANCELLED`). Shipment first, then its packages in ascending id
   order, both `FOR UPDATE`. The status starts as `CREATED` in `Shipment`'s
   `@PrePersist`. `shippingAddress` is optional when creating (blank is stored as `null` and left out
   of the JSON) but required for `PUT /shipments/{id}/ready` (`checkShipmentReady`, `CREATED → READY`,
@@ -836,10 +859,11 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   the next one is not shown it as if it were about them. The planner's `comment` and the packages are not touched. The
   first carrier then gets a 403 for the shipment. `ShipmentServiceImplTest` and `ShipmentDeclineTest` hold it. The page
   offers the button in `DECLINED` (see `ASSIGNABLE_STATES` in the frontend), marking the carrier who said no as
-  "rejected" and not selectable again.
-  <br>**Still not decided, so not done:** `cancel` (`CANCELLABLE_IN`) and the data change (`DATA_CHANGEABLE_IN`) do not
-  list `DECLINED`, so a declined shipment can be handed on but not called off or edited before that, and its packages
-  stay in it until it is. Because no recompute runs on a rejection, its orders keep the status they had until the next
+  "declined"; that carrier can be chosen again.
+  <br>**A declined shipment's own data can be edited** (`DATA_CHANGEABLE_IN` lists `DECLINED`; the status stays
+  `DECLINED`), its packages cannot (those only in `CREATED`).
+  <br>**Still not decided, so not done:** `cancel` (`CANCELLABLE_IN`) does not list `DECLINED`, so a declined
+  shipment can be edited and handed on but not called off before that, and its packages stay in it until it is. Because no recompute runs on a rejection, its orders keep the status they had until the next
   shipment event touches them; `OrderProgressServiceImpl` ignores `DECLINED` (not in its coverage sets), so the next
   recompute sees the shipment as not covering anything. `assignTrackingNumber` refuses a declined shipment (positive
   list: `DISPATCH_REQUESTED` and `ACCEPTED` only).
@@ -1109,7 +1133,7 @@ weakness and have none now (18 endpoints are walked by `ListParametersTest`); ea
 `ShipmentController.SHIPMENT_SORTABLE` - shared with `OutboundController` -, `PackageController.PACKAGE_ITEM_SORTABLE` /
 `SHIPMENT_PACKAGE_SORTABLE`, `UserController.USER_SORTABLE`, `StockController.STOCK_SORTABLE`,
 `ComponentController.REQUEST_SORTABLE`, `ProductController.PRODUCT_SORTABLE`).
-<br>**`GET /products` is paged** (`ProductService.findPage`, `{content, total, page, size}`; it answered a bare list of every product before, and the frontend's order form and stock page asked for `size=1000` to keep seeing them all). A page is two queries: the products alone, then - for ADMIN and MANAGER, whose rows carry components and categories - `findWithComponentsByIdIn` for the whole page, because a collection fetch in a paged query pages in memory. The id is the tie-break (`ProductServicePageTest`, mutation red); `ProductListEndpointTest` runs it against real rows.
+<br>**`GET /products` is paged** (`ProductService.findPage`, `{content, total, page, size}`; it answered a bare list of every product before, and the frontend's order form and stock page asked for `size=1000` to keep seeing them all). A page is two queries: the products alone, then - for ADMIN and MANAGER, whose rows carry components and categories, and for WAREHOUSE, whose rows carry the categories only - `findWithComponentsByIdIn` for the whole page, because a collection fetch in a paged query pages in memory. The id is the tie-break (`ProductServicePageTest`, mutation red); `ProductListEndpointTest` runs it against real rows.
 <br>**A whitelist entry has to be something the query can resolve**: the entity's property name (`created`,
 not `createdAt`, on an order) or, on a projection, a column of the root alias. A `@Transient` field is not
 one - `Order.amountOfItems` was on the first draft of the order list and ended in a 500 for every sort by it.
@@ -1200,7 +1224,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   rows, `GET /components/requests`, does name them - that one answers `RequestComponentResponse`,
   which every write endpoint answers too.
 - **Reading the component catalogue** (`GET /components`, `/components/{sku}`,
-  `/components/article/{articleNo}`) is ADMIN, MANAGER and **WAREHOUSE** - the warehouse may order
+  `/components/external/{externalId}`) is ADMIN, MANAGER and **WAREHOUSE** - the warehouse may order
   components, and without the catalogue it would have to get the SKU from somewhere else. Creating and
   changing a component stays ADMIN/MANAGER.
 - **The supplier of a request comes from rules, not from the caller** (`supplier_rule`, `SupplierRule`,
@@ -1219,7 +1243,7 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 - **`PATCH /components/{sku}`** (ADMIN, MANAGER, WAREHOUSE; `ComponentPatchRequest`): name, manufacturer, description,
   externalId, weight, qty - only keys that are sent change; a blank name, a negative weight or a qty below 1 is a 400.
   `GET /components/{sku}` and the PATCH answer `ComponentDetailDto` (incl. `createdAt`, `updatedAt`, product).
-- **Ordering components from a supplier** (formerly `POST /components/request/{supplierId}`, now see above; ADMIN, MANAGER
+- **Ordering components from a supplier** (`POST /components/request`, for the supplier see above; ADMIN, MANAGER
   and WAREHOUSE - a method-level `@PreAuthorize` widening the controller's ADMIN/MANAGER, because the
   warehouse owns the stock and already consumes components through `POST /produce`;
   `ComponentServiceImpl.requestComponents`): every entry of the body becomes its own
@@ -1359,18 +1383,11 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
 - `@NoCheck` (`annotation/NoCheck.java`) + `NoCheckAspect` — a marker annotation logged via AOP
   `@After` advice; check existing usages before assuming it changes authorization/validation
   behavior (currently logging-only).
-- **The suppliers a request can be placed with** (`GET /components/suppliers`, ADMIN, MANAGER and
-  WAREHOUSE - the roles that may place one; `SupplierResponse`, `SupplierRepository`): the warehouse
-  may order components but cannot read `/users`, so it had no way to learn a supplier's id. **Id and
-  name only** - the e-mail address, the login and the roles are the business of whoever reads
-  `/users`. **Active suppliers only**: a disabled account cannot log in, so it could never approve,
-  send or deliver, and a request placed with it would sit in `OPEN` for good. The repository is typed
-  `Supplier`, so the `user_type` discriminator is added by Hibernate and cannot be forgotten; the name
-  is the one `RequestComponentResponse` uses for the same person (first and last name, the login only
-  when there is neither). Paged, sorted by `lastName` by default. `POST /components/request/...` refuses a
-  disabled supplier too (409 `Supplier N is deactivated ...`, checked right after the "is a supplier" test and
-  before the components are looked up, nothing saved): the list hid them, but an id noted earlier still worked.
-  A missing flag counts as not active.
+- **A deactivated supplier gets no request.** The supplier rules skip them, and `POST /components/request` refuses
+  one anyway (409 `Supplier N is deactivated ...`, nothing saved). A missing flag counts as not active.
+  <br>`GET /components/suppliers` (`SupplierResponse`, id and name) is **gone** (2026-11-25): it filled a drop-down
+  for the time the caller named the supplier; the rules pick one now, and a form shows it through
+  `GET /components/suppliers/resolve`.
 - **What the warehouse holds in all is `GET /stock/inventory`** (ADMIN and WAREHOUSE, `StockController.inventory`, `InventoryRow`): one row per SKU with `onHand` and `reserved` **summed over every storehouse**, `available` as their difference, the latest `updatedAt`, and the product's `name` (left join on the SKU, `null` for stock no product carries - the client shows it as a tooltip). Paged (`{content, total, page, size}`), sorted by `sku` unless asked, `sort` one of `sku`, `name`, `onHand`, `reserved`, `available`, `updatedAt`. It is `StockInventoryRepository`, an `EntityManager` query and not a Spring Data interface: the page is sorted by *sums*, and a derived sort (`order by s.onHand`) names a column that is not in the `group by`; the key is mapped to its expression from a fixed map and nothing the caller sent reaches the query text. The SKU is the last sort key (tie-break), and `total` counts articles (`count(distinct sku)`), not stock rows. `StockInventoryEndpointTest` runs it with real rows (two and three storehouses of one article added up, an article counted once, sort by sum against SKU order, by available and by name, an orphan SKU); putting `max` for `sum` in the sort turns it red. The literal segment wins over `GET /stock/{sku}`.
 - **What one article holds is `GET /stock/{sku}`** (ADMIN and WAREHOUSE, `StockController`): a list of
   `StockResponse`, one row per storehouse, **by storehouse name** (then id - the finder gives no order, and a table
@@ -1384,18 +1401,17 @@ nothing once done. Note that `@SpringBootTest` runs them as well, against the sa
   the sort removed - turn it red.
 - **The two people lists for picking from: `GET /users/distributors` and `GET /users/suppliers`**
   (`UserController`, `UserService.findDistributors` / `findSuppliers`, answered as `UserDto`, paged like `/users`
-  with the same `USER_SORTABLE`). They exist because the roles that *assign* a carrier or *place* a request may not
-  read the rest of `/users`: LOGISTICS hands a shipment over (`PUT /shipments/{id}/distributor/{distributorId}`)
-  and WAREHOUSE orders components, and neither could learn an id. **The roles differ on purpose, each is the set
-  that may do the thing the list is for**: distributors ADMIN, MANAGER, LOGISTICS; suppliers ADMIN, MANAGER,
-  WAREHOUSE - WAREHOUSE gets a 403 on the carriers and LOGISTICS one on the suppliers, and neither opens the rest of
-  `/users`. **Active accounts only** on both (a disabled account cannot log in, so it could never accept a
+  with the same `USER_SORTABLE`). **The roles differ on purpose, each is the set
+  that may do the thing the list is for**: distributors ADMIN, MANAGER, LOGISTICS (LOGISTICS hands a shipment over,
+  `PUT /shipments/{id}/distributor/{distributorId}`, and may not read the rest of `/users`); suppliers **ADMIN only**
+  (they are named in supplier rules, which are the admin's; the list was open to MANAGER and WAREHOUSE while the
+  caller of a component request chose the supplier). **Active accounts only** on both (a disabled account cannot log in, so it could never accept a
   shipment or approve a request - it would sit in `DISPATCH_REQUESTED` / `OPEN` for good). Both go through a
   repository typed on the subclass (`DistributorRepository`, `SupplierRepository`), so the `user_type`
   discriminator is Hibernate's and cannot be forgotten. The literal segments win over `GET /users/{id}`.
   `DistributorsEndpointTest` and `SuppliersEndpointTest` run them against the real chain and rows; mutations -
   a role added or dropped, the active filter removed - turn them red.
-  <br>Unlike `GET /components/suppliers` (id and name only, WAREHOUSE-safe) these carry the full `UserDto`:
+  <br>Both carry the full `UserDto`:
   user name, e-mail address and roles. That is the design chosen for the planning side; note it when widening a role.
   <br>`PUT /shipments/{id}/distributor/{id}` **refuses a deactivated distributor** (409 `Distributor N is deactivated ...`,
   after the "is a distributor" test, nothing written; a missing flag counts as not active) - the same rule

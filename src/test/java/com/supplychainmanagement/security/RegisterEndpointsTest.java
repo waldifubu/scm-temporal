@@ -97,6 +97,24 @@ class RegisterEndpointsTest {
         }
     }
 
+    /** "system" is who the history names for an automatic step - no account may pose as it. */
+    @Test
+    void refusesTheNameSystemOnBothWaysIn() throws Exception {
+        User admin = testData.userWithRoles(RoleEnum.ADMIN);
+        for (String name : List.of("system", "System", " SYSTEM ", "systém")) {
+            String json = body("CUSTOMER").replaceFirst("\"username\":\"[^\"]*\"", "\"username\":\"" + name + "\"");
+
+            MockHttpServletResponse open = post("userregister", null, json);
+
+            assertThat(open.getStatus()).as(name).isEqualTo(400);
+            assertThat(open.getContentAsString()).contains("reserved");
+            assertThat(post("register", admin, json).getStatus()).as(name).isEqualTo(400);
+        }
+        // Only the name itself: one that merely contains it is anybody's.
+        String near = body("CUSTOMER").replaceFirst("\"username\":\"", "\"username\":\"system-");
+        assertThat(post("userregister", null, near).getStatus()).isEqualTo(201);
+    }
+
     @Test
     void refusesAnUnknownRoleAndATakenUsername() throws Exception {
         assertThat(post("userregister", null, body("EMPEROR")).getStatus()).isEqualTo(400);

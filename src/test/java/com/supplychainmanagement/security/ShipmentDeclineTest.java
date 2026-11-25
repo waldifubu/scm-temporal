@@ -212,6 +212,23 @@ class ShipmentDeclineTest {
                 .andReturn().getResponse();
     }
 
+    /** The planner may ask the carrier who declined once more; they can then decline again or take it on. */
+    @Test
+    void aDeclinedShipmentCanBeHandedToTheSameCarrierAgain() throws Exception {
+        Distributor owner = carrier();
+        Shipment shipment = shipmentOf(owner, ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(decline(shipment.getId(), owner, "{\"reason\":\"no truck free\"}").getStatus()).isEqualTo(200);
+
+        MockHttpServletResponse response = assign(shipment.getId(), owner.getId(), testData.userWithRoles(RoleEnum.LOGISTICS));
+
+        assertThat(response.getStatus()).as(response.getContentAsString()).isEqualTo(200);
+        Shipment stored = reload(shipment);
+        assertThat(stored.getStatus()).isEqualTo(ShipmentStatus.DISPATCH_REQUESTED);
+        assertThat(stored.getDistributor().getId()).isEqualTo(owner.getId());
+        assertThat(stored.getDistributorComment()).isNull();
+        assertThat(decline(shipment.getId(), owner, "{\"reason\":\"still none\"}").getStatus()).isEqualTo(200);
+    }
+
     /** The way out: the planner hands a declined shipment to another carrier, who can then take it on. */
     @Test
     void aDeclinedShipmentCanBeHandedToAnotherCarrier() throws Exception {

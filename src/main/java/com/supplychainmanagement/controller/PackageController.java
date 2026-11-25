@@ -47,8 +47,12 @@ public class PackageController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "ASC") String order,
-            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus) {
-        return PageResponse.of(packageQueryService.findPackageItems(itemPageRequest(page, size, sort, order), fulfillmentStatus));
+            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus,
+            @RequestParam(required = false) Long orderNo) {
+        Pageable pageable = itemPageRequest(page, size, sort, order);
+        return PageResponse.of(orderNo == null
+                ? packageQueryService.findPackageItems(pageable, fulfillmentStatus)
+                : packageQueryService.findPackageItemsOfOrder(orderNo, pageable, fulfillmentStatus));
     }
 
     /**
@@ -83,8 +87,12 @@ public class PackageController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(required = false) String sort,
             @RequestParam(defaultValue = "ASC") String order,
-            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus) {
-        return PageResponse.of(packageQueryService.findLoosePackageItems(itemPageRequest(page, size, sort, order), fulfillmentStatus));
+            @RequestParam(required = false) FulfillmentStatus fulfillmentStatus,
+            @RequestParam(required = false) Long orderNo) {
+        Pageable pageable = itemPageRequest(page, size, sort, order);
+        return PageResponse.of(orderNo == null
+                ? packageQueryService.findLoosePackageItems(pageable, fulfillmentStatus)
+                : packageQueryService.findLoosePackageItemsOfOrder(orderNo, pageable, fulfillmentStatus));
     }
 
     /** One package item, in the same shape as the /packages list. Unknown id: 404. */

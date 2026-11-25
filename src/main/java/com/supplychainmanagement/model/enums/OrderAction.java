@@ -23,5 +23,7 @@ public enum OrderAction {
     /** The shipments the order's packages travel in moved on; where the order stands follows from them. */
     SHIPMENT_PROGRESS,
     /** The customer or a manager confirms that everything arrived. */
-    COMPLETE
+    COMPLETE,
+    /** A cancelled order is filed away as completed - a scheduled routine does it, nobody asks for it. */
+    CLOSE
 }

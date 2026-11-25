@@ -1,5 +1,9 @@
 package com.supplychainmanagement.service.impl;
 
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.springframework.http.HttpStatus;
+import com.supplychainmanagement.exception.APIException;
 import com.supplychainmanagement.service.StockService;
 import com.supplychainmanagement.dto.fullfillment.AvailableOrderItemDto;
 import com.supplychainmanagement.dto.reservation.ReservationDto;
@@ -188,6 +192,54 @@ class FulfillmentServiceReserveItemsTest {
                 .hasMessageNotContaining("Stock not found");
 
         verifyNoInteractions(inventoryService, orderItemRepository, orderRepository, orderProgress);
+    }
+
+    /** Over and done with, or never accepted: a waiting line must not take stock. */
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"REJECTED", "CANCELLED", "DELIVERED", "COMPLETED"})
+    void refusesToReserveForAnOrderThatHasEnded(OrderStatus status) {
+        Order order = orderRequesting(5);
+        order.setStatus(status);
+        checkItemsReturns(order, covered(firstItem(order), 1001L));
+
+        assertThatThrownBy(() -> service.reserveItems(order, USERNAME))
+                .isInstanceOfSatisfying(APIException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT))
+                .hasMessageContaining("Order 1042 is " + status);
+
+        verifyNoInteractions(productionService, inventoryService, orderItemRepository, orderProgress);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = OrderStatus.class, names = {"CREATED", "REVIEW", "ACKNOWLEDGED", "WAIT_SUPPLY",
+            "IN_FULFILLMENT", "READY_FOR_DISPATCH", "IN_TRANSIT", "PARTIALLY_DELIVERED"})
+    void reservesForAnOrderThatIsOpen(OrderStatus status) {
+        Order order = orderRequesting(5);
+        order.setStatus(status);
+        firstItem(order).setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH);
+        checkItemsReturns(order);
+        when(inventoryService.reserveWithRetry(ORDER_ID, List.of()))
+                .thenReturn(new ReservationResult(List.of(), List.of()));
+
+        assertThat(service.reserveItems(order, USERNAME).outcome()).isEqualTo(ReservationOutcome.COMPLETE);
+    }
+
+    /** Every line picked or further: checkItems names none, which is not a shortage. */
+    @Test
+    void answersCompleteForAnOrderWithNoWaitingLine() {
+        Order order = orderRequesting(5);
+        order.setStatus(OrderStatus.PARTIALLY_DELIVERED);
+        firstItem(order).setFulfillmentStatus(FulfillmentStatus.READY_FOR_DISPATCH);
+        checkItemsReturns(order);
+        when(inventoryService.reserveWithRetry(ORDER_ID, List.of()))
+                .thenReturn(new ReservationResult(List.of(), List.of()));
+
+        var summary = service.reserveItems(order, USERNAME);
+
+        assertThat(summary.outcome()).isEqualTo(ReservationOutcome.COMPLETE);
+        assertThat(summary.created()).isEmpty();
+        assertThat(firstItem(order).getFulfillmentStatus()).isEqualTo(FulfillmentStatus.READY_FOR_DISPATCH);
+        verifyNoInteractions(orderProgress);
     }
 
     @Test

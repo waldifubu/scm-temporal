@@ -15,6 +15,7 @@ import com.supplychainmanagement.entity.PackageItem;
 import com.supplychainmanagement.entity.ShipmentPackage;
 import com.supplychainmanagement.model.common.PageRequests;
 import com.supplychainmanagement.model.enums.FulfillmentStatus;
+import com.supplychainmanagement.model.enums.RoleEnum;
 import com.supplychainmanagement.service.OrderHandlingService;
 import com.supplychainmanagement.service.PackageItemResponseAssembler;
 import com.supplychainmanagement.service.PackingService;
@@ -22,6 +23,11 @@ import jakarta.validation.Valid;
 import jakarta.validation.groups.Default;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.core.userdetails.User;
+import java.util.EnumSet;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -54,41 +60,73 @@ public class PackingController {
     private final PackageItemResponseAssembler packageItemResponseAssembler;
     private final OrderHandlingService orderHandlingService;
 
-    /**
-     * {@code ALL} (any case) means every status, as {@code null}; anything else has to be a fulfillment status - an
-     * unknown one is a 400 naming the valid ones, not the 500 of {@code valueOf}.
-     */
+    /** {@code status=ALL}: every order line, whatever its status - the administrator's alone. */
+    private static final String ALL = "ALL";
+
+    /** {@code status=NOT_COMPLETED}: every line that still has work ahead of it. */
+    private static final String NOT_COMPLETED = "NOT_COMPLETED";
+
+    /** What a line is done with: handed on to the shipment, or called off. */
+    private static final Set<FulfillmentStatus> COMPLETED_ITEM_STATUSES =
+            Set.of(FulfillmentStatus.READY_FOR_DISPATCH, FulfillmentStatus.CANCELLED);
+
+    /** One status as it arrives as text; an unknown one is a 400 naming the valid ones, not the 500 of {@code valueOf}. */
     private static FulfillmentStatus parseItemStatus(String status) {
-        String text = status.trim();
-        if (text.equalsIgnoreCase("ALL")) {
-            return null;
-        }
         try {
-            return FulfillmentStatus.valueOf(text.toUpperCase());
+            return FulfillmentStatus.valueOf(status.trim().toUpperCase());
         } catch (IllegalArgumentException unknown) {
-            throw new APIException(HttpStatus.BAD_REQUEST, "Unknown status '" + status + "' - ALL or one of "
-                    + java.util.Arrays.toString(FulfillmentStatus.values()));
+            throw new APIException(HttpStatus.BAD_REQUEST, "Unknown status '" + status + "' - " + ALL + ", "
+                    + NOT_COMPLETED + " or one of " + java.util.Arrays.toString(FulfillmentStatus.values()));
         }
+    }
+
+    private static boolean isAdmin(User user) {
+        return user != null && user.getAuthorities().stream()
+                .anyMatch(authority -> RoleEnum.ADMIN.name().equals(authority.getAuthority()));
+    }
+
+    /** Lines share values - a status, a quantity, a moment - so the id settles the order between pages. */
+    private static Pageable withIdTieBreak(Pageable pageable) {
+        if (pageable.getSort().getOrderFor("id") != null) {
+            return pageable;
+        }
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(),
+                pageable.getSort().and(Sort.by("id")));
     }
 
     /**
      * Order lines in one fulfillment status across all orders - PICKED by default, the lines waiting
-     * to be packed; {@code status=ALL} lists every line whatever its status. Paged like the order list in {@code OrderController.list}, down to the parameter
+     * to be packed; {@code status=ALL} lists every line whatever its status (ADMIN only, 403 for others),
+     * {@code status=NOT_COMPLETED} every line but the {@code READY_FOR_DISPATCH} and {@code CANCELLED} ones. Paged like the order list in {@code OrderController.list}, down to the parameter
      * names. Sorted by {@code updatedAt} by default, so the line that reached its status first comes
      * first. {@code sort} accepts the columns of the order line itself; a joined one such as the
      * product name fails, see {@code OrderItemRepository.findAllByFulfillmentStatus}.
+     * {@code orderNo} narrows the list to the lines of one order, within the status asked for.
      */
     @GetMapping(path = "/order-items", version = "1.0")
     @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE')")
     public PageResponse<OrderItemListDto> getOrderItems(
+            @RequestParam(required = false) Long orderNo,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "updatedAt") String sort,
             @RequestParam(defaultValue = "PICKED") String status,
-            @RequestParam(defaultValue = "ASC") String order) {
-        Pageable pageable = PageRequests.of(page, size, sort, order, ORDER_ITEM_SORTABLE);
+            @RequestParam(defaultValue = "ASC") String order,
+            @AuthenticationPrincipal User authUser) {
+        Pageable pageable = withIdTieBreak(PageRequests.of(page, size, sort, order, ORDER_ITEM_SORTABLE));
 
-        return PageResponse.of(orderHandlingService.getOrderItems(parseItemStatus(status), pageable));
+        String word = status.trim().toUpperCase();
+        if (ALL.equals(word)) {
+            if (!isAdmin(authUser)) {
+                throw new APIException(HttpStatus.FORBIDDEN, "Only administrators may list ALL order items");
+            }
+            return PageResponse.of(orderHandlingService.getOrderItems(null, orderNo, pageable));
+        }
+        if (NOT_COMPLETED.equals(word)) {
+            return PageResponse.of(orderHandlingService.getOrderItemsIn(
+                    EnumSet.complementOf(EnumSet.copyOf(COMPLETED_ITEM_STATUSES)), orderNo, pageable));
+        }
+        return PageResponse.of(orderHandlingService.getOrderItems(parseItemStatus(status), orderNo, pageable));
     }
 
     /**

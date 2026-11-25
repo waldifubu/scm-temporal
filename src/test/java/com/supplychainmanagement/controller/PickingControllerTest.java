@@ -9,7 +9,8 @@ import com.supplychainmanagement.service.OrderHandlingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.PageImpl;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -152,14 +153,42 @@ class PickingControllerTest {
     /** The work list, paged like every other list, sorted by expiry so the most urgent comes first. */
     @Test
     void listsThePickingOrdersByExpiryFirst() throws Exception {
-        when(orderHandlingService.pickingOrders(any(), any()))
-                .thenAnswer(call -> new PageImpl<>(List.of(picked(7L)), call.getArgument(1), 1));
+        when(orderHandlingService.pickingOrders(any(), any(), any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(picked(7L)), call.getArgument(2), 1));
 
         mockMvc.perform(get("/api/1.0/picking-orders"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.total").value(1))
                 .andExpect(jsonPath("$.content[0].reservationId").value(7));
 
-        verify(orderHandlingService).pickingOrders(eq(ReservationStatus.ACTIVE), any(Pageable.class));
+        verify(orderHandlingService).pickingOrders(ReservationStatus.ACTIVE, null,
+                PageRequest.of(0, 25, Sort.by("expiresAt").and(Sort.by("id"))));
+    }
+
+    /** The search field of the page: one order's rows only. */
+    @Test
+    void narrowsTheListToOneOrder() throws Exception {
+        when(orderHandlingService.pickingOrders(any(), any(), any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(picked(7L)), call.getArgument(2), 1));
+
+        mockMvc.perform(get("/api/1.0/picking-orders?status=CONSUMED&orderNo=91234")).andExpect(status().isOk());
+
+        verify(orderHandlingService).pickingOrders(ReservationStatus.CONSUMED, 91234L,
+                PageRequest.of(0, 25, Sort.by("expiresAt").and(Sort.by("id"))));
+    }
+
+    /** The asked sort first, the id behind it; a sort by id is not repeated. */
+    @Test
+    void settlesTiesByTheId() throws Exception {
+        when(orderHandlingService.pickingOrders(any(), any(), any()))
+                .thenAnswer(call -> new PageImpl<>(List.of(picked(7L)), call.getArgument(2), 1));
+
+        mockMvc.perform(get("/api/1.0/picking-orders?sort=quantity&order=DESC")).andExpect(status().isOk());
+        mockMvc.perform(get("/api/1.0/picking-orders?sort=id&order=DESC")).andExpect(status().isOk());
+
+        verify(orderHandlingService).pickingOrders(ReservationStatus.ACTIVE, null,
+                PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "quantity").and(Sort.by("id"))));
+        verify(orderHandlingService).pickingOrders(ReservationStatus.ACTIVE, null,
+                PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "id")));
     }
 }

@@ -87,6 +87,8 @@ class PackingServicePackageContentsTest {
     private static PackageItem item(Long id, Long orderItemId, Long orderId, UUID runNo) {
         Order order = new Order();
         order.setId(orderId);
+        // Apart from the id, so a message naming the wrong one shows.
+        order.setOrderNo(100_000 + orderId);
 
         OrderItem line = new OrderItem();
         line.setId(orderItemId);
@@ -194,7 +196,7 @@ class PackingServicePackageContentsTest {
         assertThatThrownBy(() -> service.addPackageItems(PACKAGE_ID, ids(102L)))
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
-                .hasMessageContaining("can only hold items of one order, got items of orders [42, 43]");
+                .hasMessageContaining("can only hold items of one order, got items of orders [100042, 100043]");
 
         assertThat(foreign.getShipmentPackage()).isNull();
     }
@@ -471,7 +473,7 @@ class PackingServicePackageContentsTest {
         assertThatThrownBy(() -> service.completePackage(PACKAGE_ID))
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
-                .hasMessageContaining("ShipmentPackage 5 can only hold items of one order, got items of orders [42, 43]");
+                .hasMessageContaining("ShipmentPackage 5 can only hold items of one order, got items of orders [100042, 100043]");
         assertThat(shipmentPackage.getShipmentPackageStatus()).isEqualTo(ShipmentPackageStatus.OPEN);
         verify(shipmentPackageRepository, never()).save(any());
     }

@@ -99,11 +99,11 @@ public class DeliveryServiceImpl implements DeliveryService {
     }
 
     /**
-     * While the carrier may still set or change the tracking number: from the moment the shipment is handed
-     * to them until they report it on its way. From IN_TRANSIT on it is fixed.
+     * While the carrier may set or change the tracking number: from the moment the shipment is handed to them
+     * until they report it delivered.
      */
     private static final Set<ShipmentStatus> TRACKING_NUMBER_CHANGEABLE_IN = EnumSet.of(
-            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED);
+            ShipmentStatus.DISPATCH_REQUESTED, ShipmentStatus.ACCEPTED, ShipmentStatus.IN_TRANSIT);
 
     @Override
     @Transactional

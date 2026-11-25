@@ -38,6 +38,6 @@ public interface OrderHistoryEntryMapper {
                 row.getNewStatus(),
                 row.getChangedAt(),
                 actor,
-                actor == null ? null : names.get(actor));
+                actor == null ? DisplayNames.SYSTEM : names.get(actor));
     }
 }

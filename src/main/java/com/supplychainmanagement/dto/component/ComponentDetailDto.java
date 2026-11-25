@@ -18,7 +18,6 @@ public record ComponentDetailDto(
         @Nullable String name,
         @Nullable String description,
         String sku,
-        @Nullable String articleNo,
         @Nullable String externalId,
         @Nullable BigDecimal weight,
         Integer qty,

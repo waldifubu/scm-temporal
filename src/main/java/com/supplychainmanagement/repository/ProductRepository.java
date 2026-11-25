@@ -33,6 +33,9 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     boolean existsByArticleNo(long articleNo);
 
+    /** How many products are filed under a category. */
+    long countByCategoriesId(Long categoryId);
+
     @EntityGraph(attributePaths = {"components", "categories"})
     List<Product> findByNameContainingIgnoreCase(String name);
 

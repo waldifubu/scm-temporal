@@ -38,8 +38,8 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
      */
     @Override
     @Transactional(readOnly = true)
-    public Page<PickingOrderDto> pickingOrders(ReservationStatus reservationStatus, Pageable pageable) {
-        return reservationRepository.findPickingOrders(reservationStatus, pageable);
+    public Page<PickingOrderDto> pickingOrders(ReservationStatus reservationStatus, Long orderNo, Pageable pageable) {
+        return reservationRepository.findPickingOrders(reservationStatus, orderNo, pageable);
     }
 
     /**
@@ -95,11 +95,18 @@ public class OrderHandlingServiceImpl implements OrderHandlingService {
      */
     @Override
     @Transactional(readOnly = true)
-    public Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Pageable pageable) {
+    public Page<OrderItemListDto> getOrderItems(FulfillmentStatus status, Long orderNo, Pageable pageable) {
         // No status: every line, whatever it is doing.
         return status == null
-                ? orderItemRepository.findAllOrderItems(pageable)
-                : orderItemRepository.findAllByFulfillmentStatus(status, pageable);
+                ? orderItemRepository.findAllOrderItems(orderNo, pageable)
+                : orderItemRepository.findAllByFulfillmentStatus(status, orderNo, pageable);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Page<OrderItemListDto> getOrderItemsIn(java.util.Collection<FulfillmentStatus> statuses, Long orderNo,
+                                                  Pageable pageable) {
+        return orderItemRepository.findAllByFulfillmentStatusIn(statuses, orderNo, pageable);
     }
 
     /**

@@ -176,14 +176,16 @@ class PackingServiceCreatePackageTest {
         line = line(10, FulfillmentStatus.PICKED);
         OrderItem other = line(12L, 5, FulfillmentStatus.PICKED);
         line.getOrder().setId(1L);
+        line.getOrder().setOrderNo(106324L);
         other.getOrder().setId(2L);
+        other.getOrder().setOrderNo(182392L);
         when(shipmentPackageRepository.sumQuantityByOrderItemId(anyLong())).thenReturn(0);
 
         assertThatThrownBy(() -> service.createCustomShipment(
                 request(new PackItem(LINE_ID, 2), new PackItem(other.getId(), 2))))
                 .isInstanceOfSatisfying(APIException.class,
                         e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST))
-                .hasMessageContaining("A package can only hold items of one order, got items of orders [1, 2]");
+                .hasMessageContaining("A package can only hold items of one order, got items of orders [106324, 182392]");
         verify(shipmentPackageRepository, never()).save(any());
     }
 

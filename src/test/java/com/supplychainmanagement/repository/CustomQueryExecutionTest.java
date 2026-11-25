@@ -45,6 +45,12 @@ class CustomQueryExecutionTest {
     private static final Long UNKNOWN_ID = -1L;
 
     @Autowired
+    private com.supplychainmanagement.repository.ProductCategoryRepository categoryRepository;
+    @Autowired
+    private com.supplychainmanagement.repository.ProductRepository categoryProductRepository;
+    @Autowired
+    private com.supplychainmanagement.repository.ProductDetailsRepository productDetailsRepository;
+    @Autowired
     private StockRepository stockRepository;
     @Autowired
     private ReservationRepository reservationRepository;
@@ -97,10 +103,19 @@ class CustomQueryExecutionTest {
     @Test
     void findAllByFulfillmentStatusRunsWithItsCountQuery() {
         var page = orderItemRepository.findAllByFulfillmentStatus(
-                FulfillmentStatus.PICKED,
+                FulfillmentStatus.PICKED, null,
                 PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "updatedAt")));
 
         assertThat(page).isNotNull();
+        assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    @Test
+    void findAllByFulfillmentStatusInRunsWithItsCountQuery() {
+        var page = orderItemRepository.findAllByFulfillmentStatusIn(
+                java.util.List.of(FulfillmentStatus.WAITING, FulfillmentStatus.PICKED), null,
+                PageRequest.of(0, 5, Sort.by("updatedAt").and(Sort.by("id"))));
+
         assertThat(page.getTotalElements()).isNotNegative();
     }
 
@@ -113,7 +128,7 @@ class CustomQueryExecutionTest {
     @Test
     void findAllByFulfillmentStatusKeepsLinesWithoutAReservation() {
         var page = orderItemRepository.findAllByFulfillmentStatus(
-                FulfillmentStatus.WAITING, PageRequest.of(0, 5));
+                FulfillmentStatus.WAITING, null, PageRequest.of(0, 5));
 
         assertThat((long) page.getNumberOfElements()).isEqualTo(Math.min(page.getTotalElements(), 5));
     }
@@ -146,11 +161,21 @@ class CustomQueryExecutionTest {
     @Test
     void findPickingOrdersRunsWithItsCountQuery() {
         var page = reservationRepository.findPickingOrders(
-                ReservationStatus.RELEASED,
+                ReservationStatus.RELEASED, null,
                 PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "expiresAt")));
 
         assertThat(page).isNotNull();
         assertThat(page.getTotalElements()).isNotNegative();
+    }
+
+    /** Narrowed to an order number nothing carries: both queries run and find nothing. */
+    @Test
+    void findPickingOrdersOfOneOrderRuns() {
+        var page = reservationRepository.findPickingOrders(ReservationStatus.ACTIVE, UNKNOWN_ID,
+                PageRequest.of(0, 5, Sort.by("expiresAt").and(Sort.by("id"))));
+
+        assertThat(page.getContent()).isEmpty();
+        assertThat(page.getTotalElements()).isZero();
     }
 
     /**
@@ -161,7 +186,7 @@ class CustomQueryExecutionTest {
     @Test
     void findPickingOrdersCannotSortOverAJoinedColumn() {
         assertThatCode(() -> reservationRepository.findPickingOrders(
-                ReservationStatus.ACTIVE,
+                ReservationStatus.ACTIVE, null,
                 PageRequest.of(0, 5, Sort.by(Sort.Direction.ASC, "productName"))).getContent())
                 .isInstanceOf(Exception.class);
     }
@@ -328,6 +353,12 @@ class CustomQueryExecutionTest {
         assertThat(reservationRepository.findByIdAndStatus(UNKNOWN_ID, ReservationStatus.ACTIVE)).isEmpty();
         assertThat(reservationRepository.findByStatusAndExpiresAtBefore(ReservationStatus.ACTIVE,
                 java.time.LocalDateTime.of(2000, 1, 1, 0, 0))).isEmpty();
+        assertThatCode(() -> reservationRepository.findByStatusAndOrderItemOrderStatus(ReservationStatus.ACTIVE,
+                com.supplychainmanagement.model.enums.OrderStatus.REJECTED)).doesNotThrowAnyException();
+        assertThatCode(() -> orderRepository.findIdsByStatusAndLineStatusIn(
+                com.supplychainmanagement.model.enums.OrderStatus.REJECTED,
+                java.util.List.of(com.supplychainmanagement.model.enums.FulfillmentStatus.WAITING)))
+                .doesNotThrowAnyException();
     }
 
     // ------------------------------------------------------------------ shipments
@@ -405,4 +436,40 @@ class CustomQueryExecutionTest {
                 .isEqualTo(com.supplychainmanagement.model.enums.FulfillmentStatus.PACKED));
         assertThat(loose.getContent()).allSatisfy(item -> assertThat(item.getShipmentPackage()).isNull());
     }
+
+    /** The Vaadin drawer reads the categories outside a session: the entity graph of this call has to run. */
+    @Test
+    void findProductDetailsByIdRuns() {
+        assertThat(productDetailsRepository.findById(UNKNOWN_ID)).isEmpty();
+    }
+
+    /** The checks behind creating, renaming and deleting a category. */
+    @Test
+    void categoryChecksRun() {
+        assertThat(categoryRepository.existsByName("no such category")).isFalse();
+        assertThat(categoryRepository.existsByNameAndIdNot("no such category", UNKNOWN_ID)).isFalse();
+        assertThat(categoryProductRepository.countByCategoriesId(UNKNOWN_ID)).isZero();
+    }
+
+    /** The order number narrows all three lists of order lines; an unknown one finds nothing. */
+    @Test
+    void orderItemListsNarrowToAnOrderNumber() {
+        var page = org.springframework.data.domain.PageRequest.of(0, 5);
+        var status = com.supplychainmanagement.model.enums.FulfillmentStatus.PICKED;
+        assertThat(orderItemRepository.findAllByFulfillmentStatus(status, UNKNOWN_ID, page).getTotalElements()).isZero();
+        assertThat(orderItemRepository.findAllByFulfillmentStatusIn(java.util.List.of(status), UNKNOWN_ID, page)
+                .getTotalElements()).isZero();
+        assertThat(orderItemRepository.findAllOrderItems(UNKNOWN_ID, page).getTotalElements()).isZero();
+    }
+    /** The Packages page narrowed to one order: both queries run, with their derived counts and a sort. */
+    @Test
+    void packageItemsOfAnOrderRun() {
+        var statuses = java.util.EnumSet.allOf(com.supplychainmanagement.model.enums.FulfillmentStatus.class);
+        var page = PageRequest.of(0, 5, org.springframework.data.domain.Sort.by("created", "orderItem.order.orderNo"));
+        assertThat(packageItemRepository.findAllWithProductOfOrder(UNKNOWN_ID, statuses, page).getTotalElements())
+                .isZero();
+        assertThat(packageItemRepository.findAllLooseWithProductOfOrder(UNKNOWN_ID, statuses, page).getTotalElements())
+                .isZero();
+    }
+
 }
