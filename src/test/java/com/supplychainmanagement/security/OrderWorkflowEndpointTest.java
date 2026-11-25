@@ -81,7 +81,7 @@ class OrderWorkflowEndpointTest {
                 RoleEnum.CUSTOMER)) {
             assertThat(get("/api/1.0/orders/workflow/diagram", role).getStatus()).as(role.name()).isEqualTo(200);
         }
-        assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.SUPPLIER).getStatus()).isEqualTo(403);
+        assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.SUPPLIER).getStatus()).isEqualTo(200);
         assertThat(get("/api/1.0/orders/workflow/diagram", RoleEnum.DISTRIBUTOR).getStatus()).isEqualTo(200);
     }
 

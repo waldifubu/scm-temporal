@@ -174,7 +174,7 @@ class ApiAuthorizationTest {
                 get("/api/1.0/orders/workflow", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
                         RoleEnum.CUSTOMER, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
                 get("/api/1.0/orders/workflow/diagram", RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.WAREHOUSE,
-                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR),
+                        RoleEnum.CUSTOMER, RoleEnum.LOGISTICS, RoleEnum.DISTRIBUTOR, RoleEnum.SUPPLIER),
                 // The storehouses a client can name - what the goods receipt and stock booking take.
                 get("/api/1.0/storehouses", RoleEnum.ADMIN, RoleEnum.WAREHOUSE),
                 // The picked stage, as the warehouse packs from it and the manager watches it: the lists of

@@ -326,8 +326,8 @@ responsibilities — read all of them together before changing reservation/fulfi
   reflection) - because workflow code has to replay deterministically. A status is the workflow's state, an `OrderAction` the
   name of a signal or an update, `transitions()` what it validates them against; reserving, picking and shipping stay activities
   (the existing services). Do not inject anything into `OrderWorkflowImpl`.
-  <br>**`GET /orders/workflow`** (`OrderWorkflowController`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER and DISTRIBUTOR - every role that reads
-  orders; same answer for all) hands the table to a client as `OrderWorkflowResponse` `{initialStatus, statuses, transitions[]}`,
+  <br>**`GET /orders/workflow`** (`OrderWorkflowController`, ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER and DISTRIBUTOR - every role but SUPPLIER; same
+  answer for all) hands the table to a client as `OrderWorkflowResponse` `{initialStatus, statuses, transitions[]}`,
   a step being `{from, to, action, trigger (MANUAL|COMPUTED), actors, automatic, condition?}`. A controller of its own because it
   needs none of `OrderController`'s collaborators; the literal segment wins over `GET /orders/{orderNo}`. `COMPUTED` rows
   (`SHIPMENT_PROGRESS`) are the ten forward steps from `IN_FULFILLMENT` on plus `READY_FOR_DISPATCH → IN_FULFILLMENT` (a shipment
@@ -338,7 +338,7 @@ responsibilities — read all of them together before changing reservation/fulfi
   Held by `OrderWorkflowImplTest` (every status once and reachable, the ends, the sources of every action as the services used
   them, no step twice, pure), `OrderProgressServiceImplTest.changeStatusRefusesAMoveTheWorkflowDoesNotList` and
   `OrderWorkflowEndpointTest` (roles, 401/403, the JSON).
-  <br>**`GET /orders/workflow/diagram`** (same controller, same roles; `OrderWorkflowDiagramService` / `...Impl`, `OrderWorkflowDiagramResponse`)
+  <br>**`GET /orders/workflow/diagram`** (same controller, every role - SUPPLIER too, who is refused the table; `OrderWorkflowDiagramService` / `...Impl`, `OrderWorkflowDiagramResponse`)
   is the workflow **prepared for drawing**, so a client keeps no copy of the flow: `nodes` (`id`, `label` as words - `WAIT SUPPLY` -,
   and `description`, what the status means - the text that used to be the frontend's `statusDescriptions.ts`, now
   `OrderWorkflowImpl.describe`), `edges` (`from`, `to`, `kind` `FORWARD|BACK`, `label?`) and `ends` (where `REJECT`/`CANCEL` lead).
@@ -349,8 +349,9 @@ responsibilities — read all of them together before changing reservation/fulfi
   transitive reduction, which would hide `CREATED -> ACKNOWLEDGED` behind the optional `REVIEW` and `IN_TRANSIT -> DELIVERED` behind
   `PARTIALLY_DELIVERED`. A shortcut is still an allowed step (`changeStatus` lets it through). `Transition.label` ("all released",
   "shipment cancelled") and `shortcut` are also in `GET /orders/workflow`. Nothing in the answer is Mermaid-specific; the frontend
-  (`features/orders/workflowDiagram.ts`, `flowFrom`) turns it into Mermaid text and keeps a built-in copy only as the fallback for a
-  403 (SUPPLIER) or until the answer arrives; its test holds that copy against the backend's arrows.
+  (`features/orders/workflowDiagram.ts`, `flowFrom`) turns it into Mermaid text and keeps **no copy of the flow or of
+  the descriptions** (the built-in fallback was removed on 2026-11-25): for a 403 it shows no workflow card,
+  while loading a loading bar, on any other failure the message.
   Held by `OrderWorkflowDiagramServiceImplTest` (the exact arrows, the shortcuts, the ends, every back arrow labelled, every drawn
   arrow allowed by the table), `OrderWorkflowImplTest` (every status explained, the shortcut list, the labels) and
   `OrderWorkflowEndpointTest`.
@@ -358,8 +359,8 @@ responsibilities — read all of them together before changing reservation/fulfi
   asked once) offers a decision (`decisionsFor`: review, accept, release, reject, cancel) or "Complete Order" (`mayCompleteOrder`) when the table
   holds a **manual** step (`trigger MANUAL`) from the order's status whose `actors` include one of the user's roles - the lists of statuses
   and roles it used to keep for them are gone, so a change in `OrderWorkflowImpl` moves the buttons without a frontend change. Computed steps
-  and the system's own (`RESERVE`) never get a button, and **nothing is offered until the table has arrived** (or where it is refused: SUPPLIER,
-  DISTRIBUTOR). Consequence worth knowing: `COMPLETE` is listed from `PARTIALLY_DELIVERED` as well (a shortcut for the drawing, but an allowed
+  and the system's own (`RESERVE`) never get a button, and **nothing is offered until the table has arrived** (or where it is refused:
+  SUPPLIER). Consequence worth knowing: `COMPLETE` is listed from `PARTIALLY_DELIVERED` as well (a shortcut for the drawing, but an allowed
   step), so "Complete Order" shows there too and the backend answers 409 while a line is still short; to hide it, the table would have to drop
   that row, not the frontend. Held by the frontend's `orderDecisions.test.ts` and `completeOrder.test.ts` (a fixture shaped like the table).
 - **From `IN_FULFILLMENT` on, the order status is computed, never pushed**
@@ -814,7 +815,7 @@ therefore read `POST /supplier/{requestId}/approve` and no longer sit beneath `/
   goods could be rejected. Reject writes the status only; `AutomaticOrderHandlingService.releaseRejectedOrders()`
   (every 150 s) hands the active reservations of rejected orders back (`findRejectedOrdersToClose`, then
   `releaseRejectedOrder` per order, a failure logged and skipped). The order stays `REJECTED`, its lines end
-  `CANCELLED` (those not past `RESERVED`), an order holding nothing any more included. The same class holds `completeOrder()`: orders `DELIVERED` (`complete`) or `CANCELLED`
+  `CANCELLED` (those not past `RESERVED`), an order holding nothing any more included. Held by `RejectedOrderReservationsTest` (real rows). The same class holds `completeOrder()`: orders `DELIVERED` (`complete`) or `CANCELLED`
   (`completeCancelled`, no delivery check, no endpoint) and unchanged for two days become `COMPLETED`, each on its own
   (a failure logged and skipped).
 - **Cancelling an order** (`POST /orders/{orderNo}/cancel`, ADMIN and MANAGER - deliberately not the
@@ -1222,7 +1223,7 @@ refuses a table with rows and logs the statements instead. `RequestComponentIdTe
 and holds it.
 
 Data migrations that cannot wait for a real migration tool run as
-an `ApplicationReadyEvent` listener in `config` (`OrderDateToCreatedMigration`), guarded so they do
+an `ApplicationReadyEvent` listener in `config/migration` (`OrderDateToCreatedMigration`), guarded so they do
 nothing once done. Note that `@SpringBootTest` runs them as well, against the same database.
 
 ### Business/aspect utilities

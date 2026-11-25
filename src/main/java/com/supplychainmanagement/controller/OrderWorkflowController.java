@@ -35,11 +35,12 @@ public class OrderWorkflowController {
 
     /**
      * The same workflow prepared for drawing: nodes with their names and what each status means, the arrows worth
-     * drawing (shortcuts left out, back steps labelled) and the statuses the flow ends in. Same roles, same answer
-     * for everybody; the literal path wins over {@code /{orderNo}/shipments} like its sibling.
+     * drawing (shortcuts left out, back steps labelled) and the statuses the flow ends in. The same answer for
+     * everybody, and open to every role - the supplier too, whose start page shows it, although they read no orders and
+     * therefore not the table above. The literal path wins over {@code /{orderNo}/shipments} like its sibling.
      */
     @GetMapping(path = "/workflow/diagram", version = "1.0")
-    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER','DISTRIBUTOR')")
+    @PreAuthorize("hasAnyAuthority('ADMIN','MANAGER','WAREHOUSE','LOGISTICS','CUSTOMER','DISTRIBUTOR','SUPPLIER')")
     public OrderWorkflowDiagramResponse getDiagram() {
         return diagramService.diagram();
     }

@@ -63,7 +63,9 @@ stateDiagram-v2
     PARTIALLY_DELIVERED --> DELIVERED : POST /shipments/{id}/delivered - the rest arrives
     DELIVERED --> COMPLETED : POST /orders/{orderNo}/complete
 
-    pre --> CANCELLED
+    IN_FULFILLMENT --> REJECTED : POST /orders/{orderNo}/reject - no line picked
+    pre --> CANCELLED : POST /orders/{orderNo}/cancel
+    IN_FULFILLMENT --> CANCELLED : POST /orders/{orderNo}/cancel - no line picked
 
     REJECTED --> [*]
     COMPLETED --> [*]
@@ -86,9 +88,10 @@ Notes on how this actually behaves in the code (`OrderController`, `InventoryCon
   state and let anyone opening the detail view, warehouse staff included, commit the company to the
   order.
 - **`REVIEW`** is set by `POST /orders/{orderNo}/review` (from `CREATED`; a repeat on `REVIEW` is a no-op) and by the fallback below: a manager has picked the order up, or an order that held reservations lost all of them again. `accept` or `reject` takes it from there. There is no `APPROVED` any more — it was reached only by that fallback, and `ACKNOWLEDGED` already says "accepted, date confirmed"; `ApprovedOrderStatusMigration` moves old rows to `REVIEW`.
-- **`REJECTED`** can be set from any pre-fulfillment status via `POST /orders/{orderNo}/reject`
-  (a repeat is a **400**), as long as no line has left the shelf — a picked or packed line is a **409** naming it, as
-  when cancelling. It is
+- **`REJECTED`** can be set from any pre-fulfillment status and from `IN_FULFILLMENT` via
+  `POST /orders/{orderNo}/reject` (a repeat is a **400**), as long as no line has left the shelf — a picked or packed
+  line is a **409** naming it, as when cancelling. The call writes the status only; the stock still reserved goes back
+  through a [scheduled routine](#scheduled-routines). It is
   `OrderService.reject()`, not a status the controller sets: an entity changed before a service
   reloads it looks unchanged to that service, which cost this transition its audit row until
   2026-09-23. See [Timestamps and audit](#order-status-flow) — the rule is that no caller writes
@@ -965,7 +968,7 @@ All endpoints are under `/api/{version}/...` (version can be omitted; see
 | | `GET /me` — who is logged in, **every** role (`UserDto`, role names as the enum: `WAREHOUSE`, ...). Works with the `HttpOnly` session cookie alone, which is what a browser has after a reload | any authenticated role |
 | Orders | `GET /orders` *(paged)*, `GET /orders/new` *(paged, by status)*, `GET /orders/{orderNo}`, `GET /orders/history` *(paged, every status change; not for CUSTOMER)*, `GET /orders/history/{orderNo}` *(the status changes newest first, not paged; staff also see who made each change, `system` for an automatic step)*, `GET /orders/{orderNo}/shipments` *(the shipments the order travels in; the carrier's name for staff only)*, `POST /orders`, `POST /orders/{orderNo}/review`, `POST /orders/{orderNo}/accept`, `POST /orders/{orderNo}/reject`, `POST /orders/{orderNo}/complete`, `POST /orders/{orderNo}/cancel` | ADMIN, MANAGER, WAREHOUSE, CUSTOMER for `GET /orders` (a customer sees only their own orders, the other three all of them); `/new` ADMIN, MANAGER and WAREHOUSE (read-only), `POST /orders` ADMIN, MANAGER and CUSTOMER, `/review`, `/accept`, `/reject` and `/cancel` ADMIN and MANAGER only, `/complete` ADMIN, MANAGER and the order's own CUSTOMER; the lines of an order (`OrderItemDto`) name their product by `articleNo` and `sku`, `GET /{orderNo}`, `GET /history/{orderNo}` and `GET /{orderNo}/shipments` additionally WAREHOUSE and LOGISTICS (read-only; a customer reads only their own order) |
 | | `GET /orders/workflow` — the order workflow as data: `initialStatus`, `statuses` and every step `{from, to, action, trigger, actors, automatic, condition?}` (`trigger` `MANUAL` or `COMPUTED`; `COMPUTED` steps follow from the shipments, or close a cancelled order, and are never asked for). The same for every caller. The frontend reads its manual steps to decide which buttons an order page shows | ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER, DISTRIBUTOR |
-| | `GET /orders/workflow/diagram` — the same workflow prepared for drawing: `nodes` (`id`, `label`, `description` of the status), `edges` (`from`, `to`, `kind` `FORWARD` or `BACK`, `label?`; shortcuts left out) and `ends` (`REJECTED`, `CANCELLED`). Not specific to any renderer | ADMIN, MANAGER, WAREHOUSE, LOGISTICS, CUSTOMER, DISTRIBUTOR |
+| | `GET /orders/workflow/diagram` — the same workflow prepared for drawing: `nodes` (`id`, `label`, `description` of the status), `edges` (`from`, `to`, `kind` `FORWARD` or `BACK`, `label?`; shortcuts left out) and `ends` (`REJECTED`, `CANCELLED`). Not specific to any renderer | every role, SUPPLIER included |
 | Production | `POST /orders/{orderNo}/check` (availability — read-only) | ADMIN, MANAGER |
 | | `POST /produce` *(paged, plus `produced`)* | ADMIN, MANAGER, WAREHOUSE |
 | Inventory | `POST /orders/{orderId}/reserve`, `POST /orders/{orderId}/release` | ADMIN, MANAGER |
@@ -1130,13 +1133,15 @@ part of them.
 | `DeliveryResponseJsonTest`, `RoleServiceHasAnyRoleTest`, `PricingPlanServiceTest` | what the carrier is told, roles by user id, which rate-limit bucket a request draws from |
 | `DeliveryServiceImplTest` | the carrier's steps: status guards, the stamps, packages to `DISPATCHED`, the orders handed to `OrderProgressService`, the decline and the notes, the tracking number rule, and the distributor's work list in two queries |
 | `OutboundControllerTest` | the carrier's endpoints, the work list's paging and filter, and that `/shipments/distributor` beats `/shipments/{id}` — both controllers registered together |
-| `OrderStatusHistoryTest` | that acknowledging and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
+| `OrderStatusHistoryTest` | that accepting and rejecting really reach the audit trail — one transaction, one persistence context, the controllers' own sequence (needs a database) |
 | `OrderProgressServiceImplTest` | the computed order status: every step from `IN_FULFILLMENT` to `DELIVERED` out of the shipped quantities, `PARTIALLY_DELIVERED` reserved for the delivery, the fallback when a cancellation takes the coverage away, statuses outside the shipment range left alone (`WAIT_SUPPLY` among them), and `changeStatus`/`recordCreated` |
 | `OrderShipmentsEndpointTest` | `GET /orders/{orderNo}/shipments` against real rows: only this order's shipments and packages, the carrier's name for staff and not for a customer, the order's access rule (needs a database) |
 | `AutomaticReservationServiceReserveTest` | which order statuses `tryToReserve` looks at, `PARTIALLY_DELIVERED` among them |
 | `DistributorQueryEndpointTest` | `QUERY /users/distributors/query` through the real chain, including that the firewall lets the method through (needs a database) |
 | `OrderServiceCompleteTest` | closing an order: the quantity check, the four refusals (already closed, ended, no lines, still short — with the short lines named) and the routine's step for a cancelled order |
 | `AutomaticOrderHandlingServiceCompleteTest`, `...ReleaseTest` | the two routines: which orders they take, the two days, one failing order not stopping the rest |
+| `RejectedOrderReservationsTest` | which rejected orders still need closing, and the lines of one that holds nothing (needs a database) |
+| `SplitLineShipmentTest` | a line spread over several shipments is `READY_FOR_DISPATCH` only once all of it is reported ready, and its loose part can still be packaged (needs a database) |
 | `OrderServiceCancelTest` | cancelling an order: the stock handed back, every line on `CANCELLED`, the status written before the release, and the refusals (goods off the shelf, already in a shipment, ended) |
 | `ComponentServiceReceiveTest` | the goods receipt: the quantity booked onto `(sku, storehouse)`, the recipe quantity left alone, only from `DELIVERED`, unknown storehouse as 404 |
 | `ComponentServiceSupplierStepsTest`, `InboundControllerTest` | what the supplier reports: one status at a time, only on their own request, ADMIN exempt, the status not leaking to a stranger, and the two ways a request ends without goods |
